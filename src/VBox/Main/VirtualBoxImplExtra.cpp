@@ -8,7 +8,7 @@
  */
 
 /*
- * Copyright (C) 2006-2007 Sun Microsystems, Inc.
+ * Copyright (C) 2006-2009 Sun Microsystems, Inc.
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -71,7 +71,7 @@ static const unsigned g_cb_xml_VirtualBox_settings_root_xsd =
  *              a wrong URI/ID pair.
  */
 xml::Input *
-SettingsTreeHelper::resolveEntity (const char *aURI, const char *aID)
+SettingsTreeHelper::resolveEntity (const char *aURI, const char * /* aID */)
 {
     if (strcmp (aURI, VBOX_XML_SCHEMA_COMMON) == 0)
     {
@@ -184,7 +184,7 @@ namespace settings
 {
 
 template<> stdx::char_auto_ptr
-ToString <com::Bstr> (const com::Bstr &aValue, unsigned int aExtra)
+ToString <com::Bstr> (const com::Bstr &aValue, unsigned int /* aExtra */)
 {
     stdx::char_auto_ptr result;
 
@@ -247,7 +247,7 @@ template<> com::Guid FromString <com::Guid> (const char *aValue)
 }
 
 template<> stdx::char_auto_ptr
-ToString <com::Guid> (const com::Guid &aValue, unsigned int aExtra)
+ToString <com::Guid> (const com::Guid &aValue, unsigned int /* aExtra */)
 {
     /* For settings, the format is always {XXX...XXX} */
     stdx::char_auto_ptr result (new char [RTUUID_STR_LENGTH + 2]);
@@ -266,3 +266,5 @@ ToString <com::Guid> (const com::Guid &aValue, unsigned int aExtra)
 #endif // VBOX_MAIN_SETTINGS_ADDONS
 
 } /* namespace settings */
+
+/* vi: set tabstop=4 shiftwidth=4 expandtab: */

@@ -135,6 +135,7 @@ static void     supdrvLdrUnsetVMMR0EPs(PSUPDRVDEVEXT pDevExt);
 static int      supdrvLdrAddUsage(PSUPDRVSESSION pSession, PSUPDRVLDRIMAGE pImage);
 static void     supdrvLdrFree(PSUPDRVDEVEXT pDevExt, PSUPDRVLDRIMAGE pImage);
 static int      supdrvIOCtl_CallServiceModule(PSUPDRVDEVEXT pDevExt, PSUPDRVSESSION pSession, PSUPCALLSERVICE pReq);
+static int      supdrvIOCtl_LoggerSettings(PSUPDRVDEVEXT pDevExt, PSUPDRVSESSION pSession, PSUPLOGGERSETTINGS pReq);
 static SUPGIPMODE supdrvGipDeterminTscMode(PSUPDRVDEVEXT pDevExt);
 #ifdef RT_OS_WINDOWS
 static int      supdrvPageGetPhys(PSUPDRVSESSION pSession, RTR3PTR pvR3, uint32_t cPages, PRTHCPHYS paPages);
@@ -489,10 +490,11 @@ int VBOXCALL supdrvInitDevExt(PSUPDRVDEVEXT pDevExt)
                         /*
                          * Fixup the absolute symbols.
                          *
-                         * Because of the table indexing assumptions we'll do #ifdef orgy here rather
-                         * than distributing this to OS specific files. At least for now.
+                         * Because of the table indexing assumptions we'll have a little #ifdef orgy
+                         * here rather than distributing this to OS specific files. At least for now.
                          */
 #ifdef RT_OS_DARWIN
+# if ARCH_BITS == 32
                         if (SUPR0GetPagingMode() >= SUPPAGINGMODE_AMD64)
                         {
                             g_aFunctions[0].pfn = (void *)1;                    /* SUPR0AbsIs64bit */
@@ -506,22 +508,37 @@ int VBOXCALL supdrvInitDevExt(PSUPDRVDEVEXT pDevExt)
                         g_aFunctions[5].pfn = (void *)0x10;                     /* SUPR0AbsKernelSS - KERNEL_DS, seg.h */
                         g_aFunctions[6].pfn = (void *)0x10;                     /* SUPR0AbsKernelDS - KERNEL_DS, seg.h */
                         g_aFunctions[7].pfn = (void *)0x10;                     /* SUPR0AbsKernelES - KERNEL_DS, seg.h */
-#else
+                        g_aFunctions[8].pfn = (void *)0x10;                     /* SUPR0AbsKernelFS - KERNEL_DS, seg.h */
+                        g_aFunctions[9].pfn = (void *)0x48;                     /* SUPR0AbsKernelGS - CPU_DATA_GS, seg.h */
+# else /* 64-bit darwin: */
+                        g_aFunctions[0].pfn = (void *)1;                        /* SUPR0AbsIs64bit */
+                        g_aFunctions[1].pfn = (void *)(uintptr_t)ASMGetCS();    /* SUPR0Abs64bitKernelCS */
+                        g_aFunctions[2].pfn = (void *)(uintptr_t)ASMGetSS();    /* SUPR0Abs64bitKernelSS */
+                        g_aFunctions[3].pfn = (void *)0;                        /* SUPR0Abs64bitKernelDS */
+                        g_aFunctions[4].pfn = (void *)(uintptr_t)ASMGetCS();    /* SUPR0AbsKernelCS */
+                        g_aFunctions[5].pfn = (void *)(uintptr_t)ASMGetSS();    /* SUPR0AbsKernelSS */
+                        g_aFunctions[6].pfn = (void *)0;                        /* SUPR0AbsKernelDS */
+                        g_aFunctions[7].pfn = (void *)0;                        /* SUPR0AbsKernelES */
+                        g_aFunctions[8].pfn = (void *)0;                        /* SUPR0AbsKernelFS */
+                        g_aFunctions[9].pfn = (void *)0;                        /* SUPR0AbsKernelGS */
+
+# endif
+#else  /* !RT_OS_DARWIN */
 # if ARCH_BITS == 64
                         g_aFunctions[0].pfn = (void *)1;                        /* SUPR0AbsIs64bit */
                         g_aFunctions[1].pfn = (void *)(uintptr_t)ASMGetCS();    /* SUPR0Abs64bitKernelCS */
                         g_aFunctions[2].pfn = (void *)(uintptr_t)ASMGetSS();    /* SUPR0Abs64bitKernelSS */
                         g_aFunctions[3].pfn = (void *)(uintptr_t)ASMGetDS();    /* SUPR0Abs64bitKernelDS */
-# elif ARCH_BITS == 32
+# else
                         g_aFunctions[0].pfn = g_aFunctions[1].pfn = g_aFunctions[2].pfn = g_aFunctions[4].pfn = (void *)0;
 # endif
                         g_aFunctions[4].pfn = (void *)(uintptr_t)ASMGetCS();    /* SUPR0AbsKernelCS */
                         g_aFunctions[5].pfn = (void *)(uintptr_t)ASMGetSS();    /* SUPR0AbsKernelSS */
                         g_aFunctions[6].pfn = (void *)(uintptr_t)ASMGetDS();    /* SUPR0AbsKernelDS */
                         g_aFunctions[7].pfn = (void *)(uintptr_t)ASMGetES();    /* SUPR0AbsKernelES */
-#endif
                         g_aFunctions[8].pfn = (void *)(uintptr_t)ASMGetFS();    /* SUPR0AbsKernelFS */
                         g_aFunctions[9].pfn = (void *)(uintptr_t)ASMGetGS();    /* SUPR0AbsKernelGS */
+#endif /* !RT_OS_DARWIN */
                         return VINF_SUCCESS;
                     }
 
@@ -1513,6 +1530,28 @@ int VBOXCALL supdrvIOCtl(uintptr_t uIOCtl, PSUPDRVDEVEXT pDevExt, PSUPDRVSESSION
             return 0;
         }
 
+        case SUP_CTL_CODE_NO_SIZE(SUP_IOCTL_LOGGER_SETTINGS(0)):
+        {
+            /* validate */
+            PSUPLOGGERSETTINGS pReq = (PSUPLOGGERSETTINGS)pReqHdr;
+            size_t cbStrTab;
+            REQ_CHECK_SIZE_OUT(SUP_IOCTL_LOGGER_SETTINGS, SUP_IOCTL_LOGGER_SETTINGS_SIZE_OUT);
+            REQ_CHECK_EXPR(SUP_IOCTL_LOGGER_SETTINGS, pReq->Hdr.cbIn >= SUP_IOCTL_LOGGER_SETTINGS_SIZE_IN(1));
+            cbStrTab = pReq->Hdr.cbIn - SUP_IOCTL_LOGGER_SETTINGS_SIZE_IN(0);
+            REQ_CHECK_EXPR(SUP_IOCTL_LOGGER_SETTINGS, pReq->u.In.offGroups      < cbStrTab);
+            REQ_CHECK_EXPR(SUP_IOCTL_LOGGER_SETTINGS, pReq->u.In.offFlags       < cbStrTab);
+            REQ_CHECK_EXPR(SUP_IOCTL_LOGGER_SETTINGS, pReq->u.In.offDestination < cbStrTab);
+            REQ_CHECK_EXPR_FMT(pReq->u.In.szStrings[cbStrTab - 1] == '\0',
+                               ("SUP_IOCTL_LOGGER_SETTINGS: cbIn=%#x cbStrTab=%#zx LastChar=%d\n",
+                                pReq->Hdr.cbIn, cbStrTab, pReq->u.In.szStrings[cbStrTab - 1]));
+            REQ_CHECK_EXPR(SUP_IOCTL_LOGGER_SETTINGS, pReq->u.In.fWhich <= SUPLOGGERSETTINGS_WHICH_RELEASE);
+            REQ_CHECK_EXPR(SUP_IOCTL_LOGGER_SETTINGS, pReq->u.In.fWhat  <= SUPLOGGERSETTINGS_WHAT_DESTROY);
+
+            /* execute */
+            pReq->Hdr.rc = supdrvIOCtl_LoggerSettings(pDevExt, pSession, pReq);
+            return 0;
+        }
+
         default:
             Log(("Unknown IOCTL %#lx\n", (long)uIOCtl));
             break;
@@ -1578,7 +1617,7 @@ int VBOXCALL supdrvIDC(uintptr_t uReq, PSUPDRVDEVEXT pDevExt, PSUPDRVSESSION pSe
             if (pReq->u.In.u32MagicCookie != SUPDRVIDCREQ_CONNECT_MAGIC_COOKIE)
             {
                 OSDBGPRINT(("SUPDRV_IDC_REQ_CONNECT: u32MagicCookie=%#x expected %#x!\n",
-                            pReq->u.In.u32MagicCookie, SUPDRVIDCREQ_CONNECT_MAGIC_COOKIE));
+                            (unsigned)pReq->u.In.u32MagicCookie, (unsigned)SUPDRVIDCREQ_CONNECT_MAGIC_COOKIE));
                 return pReqHdr->rc = VERR_INVALID_PARAMETER;
             }
             if (    pReq->u.In.uMinVersion > pReq->u.In.uReqVersion
@@ -1597,7 +1636,7 @@ int VBOXCALL supdrvIDC(uintptr_t uReq, PSUPDRVDEVEXT pDevExt, PSUPDRVSESSION pSe
                 ||  (pReq->u.In.uMinVersion & 0xffff0000) != (SUPDRV_IDC_VERSION & 0xffff0000))
             {
                 OSDBGPRINT(("SUPDRV_IDC_REQ_CONNECT: Version mismatch. Requested: %#x  Min: %#x  Current: %#x\n",
-                            pReq->u.In.uReqVersion, pReq->u.In.uMinVersion, SUPDRV_IDC_VERSION));
+                            pReq->u.In.uReqVersion, pReq->u.In.uMinVersion, (unsigned)SUPDRV_IDC_VERSION));
                 pReq->u.Out.pSession        = NULL;
                 pReq->u.Out.uSessionVersion = 0xffffffff;
                 pReq->u.Out.uDriverVersion  = SUPDRV_IDC_VERSION;
@@ -2783,7 +2822,7 @@ SUPR0DECL(int) SUPR0PageFree(PSUPDRVSESSION pSession, RTR3PTR pvR3)
  */
 SUPR0DECL(int) SUPR0GipMap(PSUPDRVSESSION pSession, PRTR3PTR ppGipR3, PRTHCPHYS pHCPhysGip)
 {
-    int             rc = 0;
+    int             rc = VINF_SUCCESS;
     PSUPDRVDEVEXT   pDevExt = pSession->pDevExt;
     RTR3PTR         pGip = NIL_RTR3PTR;
     RTHCPHYS        HCPhys = NIL_RTHCPHYS;
@@ -2911,7 +2950,7 @@ SUPR0DECL(int) SUPR0GipUnmap(PSUPDRVSESSION pSession)
             &&  !--pDevExt->cGipUsers)
         {
             LogFlow(("SUPR0GipUnmap: Suspends GIP updating\n"));
-            rc = RTTimerStop(pDevExt->pGipTimer); AssertRC(rc); rc = 0;
+            rc = RTTimerStop(pDevExt->pGipTimer); AssertRC(rc); rc = VINF_SUCCESS;
         }
     }
 
@@ -3282,6 +3321,7 @@ static int supdrvIOCtl_LdrOpen(PSUPDRVDEVEXT pDevExt, PSUPDRVSESSION pSession, P
     PSUPDRVLDRIMAGE pImage;
     unsigned        cb;
     void           *pv;
+    size_t          cchName = strlen(pReq->u.In.szName); /* (caller checked < 32). */
     LogFlow(("supdrvIOCtl_LdrOpen: szName=%s cbImage=%d\n", pReq->u.In.szName, pReq->u.In.cbImage));
 
     /*
@@ -3290,7 +3330,8 @@ static int supdrvIOCtl_LdrOpen(PSUPDRVDEVEXT pDevExt, PSUPDRVSESSION pSession, P
     RTSemFastMutexRequest(pDevExt->mtxLdr);
     for (pImage = pDevExt->pLdrImages; pImage; pImage = pImage->pNext)
     {
-        if (!strcmp(pImage->szName, pReq->u.In.szName))
+        if (    pImage->szName[cchName] == '\0'
+            &&  !memcmp(pImage->szName, pReq->u.In.szName, cchName))
         {
             pImage->cUsage++;
             pReq->u.Out.pvImageBase   = pImage->pvImage;
@@ -3325,7 +3366,7 @@ static int supdrvIOCtl_LdrOpen(PSUPDRVDEVEXT pDevExt, PSUPDRVSESSION pSession, P
     pImage->pfnServiceReqHandler = NULL;
     pImage->uState          = SUP_IOCTL_LDR_OPEN;
     pImage->cUsage          = 1;
-    strcpy(pImage->szName, pReq->u.In.szName);
+    memcpy(pImage->szName, pReq->u.In.szName, cchName + 1);
 
     pImage->pNext           = pDevExt->pLdrImages;
     pDevExt->pLdrImages     = pImage;
@@ -4030,6 +4071,140 @@ static int supdrvIOCtl_CallServiceModule(PSUPDRVDEVEXT pDevExt, PSUPDRVSESSION p
 #else  /* RT_OS_WINDOWS && !DEBUG */
     return VERR_NOT_IMPLEMENTED;
 #endif /* RT_OS_WINDOWS && !DEBUG */
+}
+
+
+/**
+ * Implements the logger settings request.
+ *
+ * @returns VBox status code.
+ * @param   pDevExt     The device extension.
+ * @param   pSession    The caller's session.
+ * @param   pReq        The request.
+ */
+static int supdrvIOCtl_LoggerSettings(PSUPDRVDEVEXT pDevExt, PSUPDRVSESSION pSession, PSUPLOGGERSETTINGS pReq)
+{
+    const char *pszGroup = &pReq->u.In.szStrings[pReq->u.In.offGroups];
+    const char *pszFlags = &pReq->u.In.szStrings[pReq->u.In.offFlags];
+    const char *pszDest  = &pReq->u.In.szStrings[pReq->u.In.offDestination];
+    PRTLOGGER   pLogger  = NULL;
+    int         rc;
+
+    /*
+     * Some further validation.
+     */
+    switch (pReq->u.In.fWhat)
+    {
+        case SUPLOGGERSETTINGS_WHAT_SETTINGS:
+        case SUPLOGGERSETTINGS_WHAT_CREATE:
+            break;
+
+        case SUPLOGGERSETTINGS_WHAT_DESTROY:
+            if (*pszGroup || *pszFlags || *pszDest)
+                return VERR_INVALID_PARAMETER;
+            if (pReq->u.In.fWhich == SUPLOGGERSETTINGS_WHICH_RELEASE)
+                return VERR_ACCESS_DENIED;
+            break;
+
+        default:
+            return VERR_INTERNAL_ERROR;
+    }
+
+    /*
+     * Get the logger.
+     */
+    switch (pReq->u.In.fWhich)
+    {
+        case SUPLOGGERSETTINGS_WHICH_DEBUG:
+            pLogger = RTLogGetDefaultInstance();
+            break;
+
+        case SUPLOGGERSETTINGS_WHICH_RELEASE:
+            pLogger = RTLogRelDefaultInstance();
+            break;
+
+        default:
+            return VERR_INTERNAL_ERROR;
+    }
+
+    /*
+     * Do the job.
+     */
+    switch (pReq->u.In.fWhat)
+    {
+        case SUPLOGGERSETTINGS_WHAT_SETTINGS:
+            if (pLogger)
+            {
+                rc = RTLogFlags(pLogger, pszFlags);
+                if (RT_SUCCESS(rc))
+                    rc = RTLogGroupSettings(pLogger, pszGroup);
+                NOREF(pszDest);
+            }
+            else
+                rc = VERR_NOT_FOUND;
+            break;
+
+        case SUPLOGGERSETTINGS_WHAT_CREATE:
+        {
+            if (pLogger)
+                rc = VERR_ALREADY_EXISTS;
+            else
+            {
+                static const char * const s_apszGroups[] = VBOX_LOGGROUP_NAMES;
+
+                rc = RTLogCreate(&pLogger,
+                                 0 /* fFlags */,
+                                 pszGroup,
+                                 pReq->u.In.fWhich == SUPLOGGERSETTINGS_WHICH_DEBUG
+                                 ? "VBOX_LOG"
+                                 : "VBOX_RELEASE_LOG",
+                                 RT_ELEMENTS(s_apszGroups),
+                                 s_apszGroups,
+                                 RTLOGDEST_STDOUT | RTLOGDEST_DEBUGGER,
+                                 NULL);
+                if (RT_SUCCESS(rc))
+                {
+                    rc = RTLogFlags(pLogger, pszFlags);
+                    NOREF(pszDest);
+                    if (RT_SUCCESS(rc))
+                    {
+                        switch (pReq->u.In.fWhich)
+                        {
+                            case SUPLOGGERSETTINGS_WHICH_DEBUG:
+                                pLogger = RTLogSetDefaultInstance(pLogger);
+                                break;
+                            case SUPLOGGERSETTINGS_WHICH_RELEASE:
+                                pLogger = RTLogRelSetDefaultInstance(pLogger);
+                                break;
+                        }
+                    }
+                    RTLogDestroy(pLogger);
+                }
+            }
+            break;
+        }
+
+        case SUPLOGGERSETTINGS_WHAT_DESTROY:
+            switch (pReq->u.In.fWhich)
+            {
+                case SUPLOGGERSETTINGS_WHICH_DEBUG:
+                    pLogger = RTLogSetDefaultInstance(NULL);
+                    break;
+                case SUPLOGGERSETTINGS_WHICH_RELEASE:
+                    pLogger = RTLogRelSetDefaultInstance(NULL);
+                    break;
+            }
+            rc = RTLogDestroy(pLogger);
+            break;
+
+        default:
+        {
+            rc = VERR_INTERNAL_ERROR;
+            break;
+        }
+    }
+
+    return rc;
 }
 
 

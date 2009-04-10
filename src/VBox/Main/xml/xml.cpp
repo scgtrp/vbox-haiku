@@ -183,8 +183,11 @@ File::File(Mode aMode, const char *aFileName)
         case Mode_Read:
             flags = RTFILE_O_READ;
             break;
-        case Mode_Write:
+        case Mode_WriteCreate:      // fail if file exists
             flags = RTFILE_O_WRITE | RTFILE_O_CREATE;
+            break;
+        case Mode_Overwrite:        // overwrite if file exists
+            flags = RTFILE_O_WRITE | RTFILE_O_CREATE_REPLACE;
             break;
         case Mode_ReadWrite:
             flags = RTFILE_O_READ | RTFILE_O_WRITE;
@@ -265,7 +268,7 @@ int File::read (char *aBuf, int aLen)
     size_t len = aLen;
     int vrc = RTFileRead (m->handle, aBuf, len, &len);
     if (RT_SUCCESS (vrc))
-        return len;
+        return (int)len;
 
     throw EIPRTFailure (vrc);
 }
@@ -275,7 +278,7 @@ int File::write (const char *aBuf, int aLen)
     size_t len = aLen;
     int vrc = RTFileWrite (m->handle, aBuf, len, &len);
     if (RT_SUCCESS (vrc))
-        return len;
+        return (int)len;
 
     throw EIPRTFailure (vrc);
 
@@ -356,7 +359,7 @@ int MemoryBuf::read (char *aBuf, int aLen)
     memcpy (aBuf, m->buf + m->pos, len);
     m->pos += len;
 
-    return len;
+    return (int)len;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -386,6 +389,8 @@ GlobalLock::~GlobalLock()
 {
     if (m->pOldLoader)
         xmlSetExternalEntityLoader(m->pOldLoader);
+    delete m;
+    m = NULL;
 }
 
 void GlobalLock::setExternalEntityLoader(PFNEXTERNALENTITYLOADER pLoader)
@@ -1098,6 +1103,8 @@ XmlFileParser::XmlFileParser()
 
 XmlFileParser::~XmlFileParser()
 {
+    delete m;
+    m = NULL;
 }
 
 struct IOContext
@@ -1132,7 +1139,7 @@ struct ReadContext : IOContext
 struct WriteContext : IOContext
 {
     WriteContext(const char *pcszFilename)
-        : IOContext(pcszFilename, File::Mode_Write)
+        : IOContext(pcszFilename, File::Mode_Overwrite)
     {
     }
 };
@@ -1149,7 +1156,7 @@ struct WriteContext : IOContext
 void XmlFileParser::read(const char *pcszFilename,
                          Document &doc)
 {
-    GlobalLock lock();
+    GlobalLock lock;
 //     global.setExternalEntityLoader(ExternalEntityLoader);
 
     m->strXmlFilename = pcszFilename;
@@ -1221,7 +1228,7 @@ void XmlFileWriter::write(const char *pcszFilename)
 {
     WriteContext context(pcszFilename);
 
-    GlobalLock lock();
+    GlobalLock lock;
 
     /* serialize to the stream */
     xmlIndentTreeOutput = 1;

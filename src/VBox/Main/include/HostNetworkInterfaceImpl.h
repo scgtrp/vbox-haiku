@@ -6,7 +6,7 @@
  */
 
 /*
- * Copyright (C) 2006-2008 Sun Microsystems, Inc.
+ * Copyright (C) 2006-2009 Sun Microsystems, Inc.
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -25,7 +25,6 @@
 #define ____H_HOSTNETWORKINTERFACEIMPL
 
 #include "VirtualBoxBase.h"
-#include "Collection.h"
 #include "VirtualBoxImpl.h"
 
 #ifdef VBOX_WITH_HOSTNETIF_API
@@ -70,8 +69,9 @@ public:
     // IHostNetworkInterface properties
     STDMETHOD(COMGETTER(Name)) (BSTR *aInterfaceName);
     STDMETHOD(COMGETTER(Id)) (OUT_GUID aGuid);
-    STDMETHOD(COMGETTER(IPAddress)) (ULONG *aIPAddress);
-    STDMETHOD(COMGETTER(NetworkMask)) (ULONG *aNetworkMask);
+    STDMETHOD(COMGETTER(DhcpEnabled)) (BOOL *aDhcpEnabled);
+    STDMETHOD(COMGETTER(IPAddress)) (BSTR *aIPAddress);
+    STDMETHOD(COMGETTER(NetworkMask)) (BSTR *aNetworkMask);
     STDMETHOD(COMGETTER(IPV6Supported)) (BOOL *aIPV6Supported);
     STDMETHOD(COMGETTER(IPV6Address)) (BSTR *aIPV6Address);
     STDMETHOD(COMGETTER(IPV6NetworkMaskPrefixLength)) (ULONG *aIPV6NetworkMaskPrefixLength);
@@ -79,16 +79,17 @@ public:
     STDMETHOD(COMGETTER(MediumType)) (HostNetworkInterfaceMediumType_T *aType);
     STDMETHOD(COMGETTER(Status)) (HostNetworkInterfaceStatus_T *aStatus);
     STDMETHOD(COMGETTER(InterfaceType)) (HostNetworkInterfaceType_T *aType);
+    STDMETHOD(COMGETTER(NetworkName)) (BSTR *aNetworkName);
 
-    STDMETHOD(EnableStaticIpConfig) (ULONG aIPAddress, ULONG aNetworkMask);
+    STDMETHOD(EnableStaticIpConfig) (IN_BSTR aIPAddress, IN_BSTR aNetworkMask);
     STDMETHOD(EnableStaticIpConfigV6) (IN_BSTR aIPV6Address, ULONG aIPV6MaskPrefixLength);
     STDMETHOD(EnableDynamicIpConfig) ();
+    STDMETHOD(DhcpRediscover) ();
 
     // for VirtualBoxSupportErrorInfoImpl
     static const wchar_t *getComponentName() { return L"HostNetworkInterface"; }
 
     HRESULT setVirtualBox(VirtualBox *pVBox);
-    HRESULT getVirtualBox(VirtualBox **ppVBox);
 private:
     const Bstr mInterfaceName;
     const Guid mGuid;
@@ -98,7 +99,7 @@ private:
 
     struct Data
     {
-        Data() : IPAddress (0), networkMask (0),
+        Data() : IPAddress (0), networkMask (0), dhcpEnabled(FALSE),
             mediumType (HostNetworkInterfaceMediumType_Unknown),
             status(HostNetworkInterfaceStatus_Down){}
 
@@ -106,6 +107,11 @@ private:
         ULONG networkMask;
         Bstr IPV6Address;
         ULONG IPV6NetworkMaskPrefixLength;
+        ULONG realIPAddress;
+        ULONG realNetworkMask;
+        Bstr  realIPV6Address;
+        ULONG realIPV6PrefixLength;
+        BOOL dhcpEnabled;
         Bstr hardwareAddress;
         HostNetworkInterfaceMediumType_T mediumType;
         HostNetworkInterfaceStatus_T status;

@@ -345,7 +345,6 @@ VMMDECL(int)        PGMHandlerPhysicalJoin(PVM pVM, RTGCPHYS GCPhys1, RTGCPHYS G
 VMMDECL(int)        PGMHandlerPhysicalPageTempOff(PVM pVM, RTGCPHYS GCPhys, RTGCPHYS GCPhysPage);
 VMMDECL(int)        PGMHandlerPhysicalPageAlias(PVM pVM, RTGCPHYS GCPhys, RTGCPHYS GCPhysPage, RTGCPHYS GCPhysPageRemap);
 VMMDECL(int)        PGMHandlerPhysicalReset(PVM pVM, RTGCPHYS GCPhys);
-VMMDECL(int)        PGMHandlerPhysicalPageReset(PVM pVM, RTGCPHYS GCPhys, RTGCPHYS GCPhysPage);
 VMMDECL(bool)       PGMHandlerPhysicalIsRegistered(PVM pVM, RTGCPHYS GCPhys);
 VMMDECL(bool)       PGMHandlerVirtualIsRegistered(PVM pVM, RTGCPTR GCPtr);
 VMMDECL(bool)       PGMPhysIsA20Enabled(PVM pVM);
@@ -357,28 +356,6 @@ VMMDECL(int)        PGMPhysGCPtr2HCPhys(PVM pVM, RTGCPTR GCPtr, PRTHCPHYS pHCPhy
 VMMDECL(void)       PGMPhysInvalidatePageGCMapTLB(PVM pVM);
 VMMDECL(void)       PGMPhysInvalidatePageR0MapTLB(PVM pVM);
 VMMDECL(void)       PGMPhysInvalidatePageR3MapTLB(PVM pVM);
-
-/**
- * Page mapping lock.
- *
- * @remarks This doesn't work in structures shared between
- *          ring-3, ring-0 and/or GC.
- */
-typedef struct PGMPAGEMAPLOCK
-{
-    /** @todo see PGMPhysIsPageMappingLockValid for possibly incorrect assumptions */
-#if defined(IN_RC) || defined(VBOX_WITH_2X_4GB_ADDR_SPACE_IN_R0)
-    /** Just a dummy for the time being. */
-    uint32_t    u32Dummy;
-#else
-    /** Pointer to the PGMPAGE. */
-    void       *pvPage;
-    /** Pointer to the PGMCHUNKR3MAP. */
-    void       *pvMap;
-#endif
-} PGMPAGEMAPLOCK;
-/** Pointer to a page mapping lock. */
-typedef PGMPAGEMAPLOCK *PPGMPAGEMAPLOCK;
 
 VMMDECL(int)        PGMPhysGCPhys2CCPtr(PVM pVM, RTGCPHYS GCPhys, void **ppv, PPGMPAGEMAPLOCK pLock);
 VMMDECL(int)        PGMPhysGCPhys2CCPtrReadOnly(PVM pVM, RTGCPHYS GCPhys, void const **ppv, PPGMPAGEMAPLOCK pLock);
@@ -407,13 +384,8 @@ VMMDECL(int)        PGMPhysGCPhys2R3Ptr(PVM pVM, RTGCPHYS GCPhys, RTUINT cbRange
 VMMDECL(RTR3PTR)    PGMPhysGCPhys2R3PtrAssert(PVM pVM, RTGCPHYS GCPhys, RTUINT cbRange);
 #endif
 VMMDECL(int)        PGMPhysGCPtr2R3Ptr(PVM pVM, RTGCPTR GCPtr, PRTR3PTR pR3Ptr);
-#ifdef VBOX_WITH_NEW_PHYS_CODE
 VMMDECL(int)        PGMPhysRead(PVM pVM, RTGCPHYS GCPhys, void *pvBuf, size_t cbRead);
 VMMDECL(int)        PGMPhysWrite(PVM pVM, RTGCPHYS GCPhys, const void *pvBuf, size_t cbWrite);
-#else
-VMMDECL(void)       PGMPhysRead(PVM pVM, RTGCPHYS GCPhys, void *pvBuf, size_t cbRead);
-VMMDECL(void)       PGMPhysWrite(PVM pVM, RTGCPHYS GCPhys, const void *pvBuf, size_t cbWrite);
-#endif
 VMMDECL(int)        PGMPhysSimpleReadGCPhys(PVM pVM, void *pvDst, RTGCPHYS GCPhysSrc, size_t cb);
 #ifndef IN_RC /* Only ring 0 & 3. */
 VMMDECL(int)        PGMPhysSimpleWriteGCPhys(PVM pVM, RTGCPHYS GCPhysDst, const void *pvSrc, size_t cb);
@@ -496,9 +468,6 @@ VMMR3DECL(int)      PGMR3TermCPU(PVM pVM);
 VMMR3DECL(int)      PGMR3LockCall(PVM pVM);
 VMMR3DECL(int)      PGMR3ChangeMode(PVM pVM, PGMMODE enmGuestMode);
 
-#ifndef VBOX_WITH_NEW_PHYS_CODE
-VMMR3DECL(int)      PGM3PhysGrowRange(PVM pVM, PCRTGCPHYS GCPhys);
-#endif /* !VBOX_WITH_NEW_PHYS_CODE */
 VMMR3DECL(int)      PGMR3PhysRegisterRam(PVM pVM, RTGCPHYS GCPhys, RTGCPHYS cb, const char *pszDesc);
 VMMR3DECL(int)      PGMR3PhysMMIORegister(PVM pVM, RTGCPHYS GCPhys, RTGCPHYS cb,
                                           R3PTRTYPE(PFNPGMR3PHYSHANDLER) pfnHandlerR3, RTR3PTR pvUserR3,
@@ -517,22 +486,23 @@ VMMR3DECL(int)      PGMR3PhysMMIO2MapKernel(PVM pVM, PPDMDEVINS pDevIns, uint32_
 /** @group PGMR3PhysRegisterRom flags.
  * @{ */
 /** Inidicates that ROM shadowing should be enabled. */
-#define PGMPHYS_ROM_FLAG_SHADOWED           RT_BIT_32(0)
+#define PGMPHYS_ROM_FLAGS_SHADOWED          RT_BIT_32(0)
 /** Indicates that what pvBinary points to won't go away
  * and can be used for strictness checks. */
-#define PGMPHYS_ROM_FLAG_PERMANENT_BINARY   RT_BIT_32(1)
+#define PGMPHYS_ROM_FLAGS_PERMANENT_BINARY  RT_BIT_32(1)
 /** @} */
 
 VMMR3DECL(int)      PGMR3PhysRomRegister(PVM pVM, PPDMDEVINS pDevIns, RTGCPHYS GCPhys, RTGCPHYS cb,
                                          const void *pvBinary, uint32_t fFlags, const char *pszDesc);
 VMMR3DECL(int)      PGMR3PhysRomProtect(PVM pVM, RTGCPHYS GCPhys, RTGCPHYS cb, PGMROMPROT enmProt);
 VMMR3DECL(int)      PGMR3PhysRegister(PVM pVM, void *pvRam, RTGCPHYS GCPhys, size_t cb, unsigned fFlags, const SUPPAGE *paPages, const char *pszDesc);
-#ifndef VBOX_WITH_NEW_PHYS_CODE
-VMMR3DECL(int)      PGMR3PhysRegisterChunk(PVM pVM, void *pvRam, RTGCPHYS GCPhys, size_t cb, unsigned fFlags, const SUPPAGE *paPages, const char *pszDesc);
-VMMR3DECL(int)      PGMR3PhysSetFlags(PVM pVM, RTGCPHYS GCPhys, size_t cb, unsigned fFlags, unsigned fMask);
-#endif /* !VBOX_WITH_NEW_PHYS_CODE */
 VMMDECL(void)       PGMR3PhysSetA20(PVM pVM, bool fEnable);
-VMMR3DECL(int)      PGMR3MapPT(PVM pVM, RTGCPTR GCPtr, uint32_t cb, PFNPGMRELOCATE pfnRelocate, void *pvUser, const char *pszDesc);
+/** @name PGMR3MapPT flags.
+ * @{ */
+/** The mapping may be unmapped later. The default is permanent mappings. */
+#define PGMR3MAPPT_FLAGS_UNMAPPABLE     RT_BIT(0)
+/** @} */
+VMMR3DECL(int)      PGMR3MapPT(PVM pVM, RTGCPTR GCPtr, uint32_t cb, uint32_t fFlags, PFNPGMRELOCATE pfnRelocate, void *pvUser, const char *pszDesc);
 VMMR3DECL(int)      PGMR3UnmapPT(PVM pVM, RTGCPTR GCPtr);
 VMMR3DECL(int)      PGMR3FinalizeMappings(PVM pVM);
 VMMR3DECL(int)      PGMR3MappingsSize(PVM pVM, uint32_t *pcb);
@@ -574,6 +544,8 @@ VMMR3DECL(void)     PGMR3PhysWriteU32(PVM pVM, RTGCPHYS GCPhys, uint32_t Value);
 VMMR3DECL(void)     PGMR3PhysWriteU64(PVM pVM, RTGCPHYS GCPhys, uint64_t Value);
 VMMR3DECL(int)      PGMR3PhysReadExternal(PVM pVM, RTGCPHYS GCPhys, void *pvBuf, size_t cbRead);
 VMMR3DECL(int)      PGMR3PhysWriteExternal(PVM pVM, RTGCPHYS GCPhys, const void *pvBuf, size_t cbWrite);
+VMMR3DECL(int)      PGMR3PhysGCPhys2CCPtrExternal(PVM pVM, RTGCPHYS GCPhys, void **ppv, PPGMPAGEMAPLOCK pLock);
+VMMR3DECL(int)      PGMR3PhysGCPhys2CCPtrReadOnlyExternal(PVM pVM, RTGCPHYS GCPhys, void const **ppv, PPGMPAGEMAPLOCK pLock);
 VMMR3DECL(int)      PGMR3PhysChunkMap(PVM pVM, uint32_t idChunk);
 VMMR3DECL(void)     PGMR3PhysChunkInvalidateTLB(PVM pVM);
 VMMR3DECL(int)      PGMR3PhysAllocateHandyPages(PVM pVM);

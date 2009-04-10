@@ -40,10 +40,6 @@
 
 #include "../Builtins.h"
 
-#if defined(RT_OS_WINDOWS) && defined(VBOX_WITH_NETFLT)
-# include "win/DrvIntNet-win.h"
-#endif
-
 
 /*******************************************************************************
 *   Structures and Typedefs                                                    *
@@ -291,7 +287,7 @@ static DECLCALLBACK(int) drvIntNetSend(PPDMINETWORKCONNECTOR pInterface, const v
     /*
      * Add the frame to the send buffer and push it onto the network.
      */
-    int rc = drvIntNetRingWriteFrame(pThis->pBuf, &pThis->pBuf->Send, pvBuf, cb);
+    int rc = drvIntNetRingWriteFrame(pThis->pBuf, &pThis->pBuf->Send, pvBuf, (uint32_t)cb);
     if (    rc == VERR_BUFFER_OVERFLOW
         &&  pThis->pBuf->cbSend < cb)
     {
@@ -302,7 +298,7 @@ static DECLCALLBACK(int) drvIntNetSend(PPDMINETWORKCONNECTOR pInterface, const v
         SendReq.hIf = pThis->hIf;
         pThis->pDrvIns->pDrvHlp->pfnSUPCallVMMR0Ex(pThis->pDrvIns, VMMR0_DO_INTNET_IF_SEND, &SendReq, sizeof(SendReq));
 
-        rc = drvIntNetRingWriteFrame(pThis->pBuf, &pThis->pBuf->Send, pvBuf, cb);
+        rc = drvIntNetRingWriteFrame(pThis->pBuf, &pThis->pBuf->Send, pvBuf, (uint32_t)cb);
     }
 
     if (RT_SUCCESS(rc))
@@ -1023,29 +1019,7 @@ static DECLCALLBACK(int) drvIntNetConstruct(PPDMDRVINS pDrvIns, PCFGMNODE pCfgHa
         OpenReq.fFlags |= INTNET_OPEN_FLAGS_SHARED_MAC_ON_WIRE;
         strcpy(OpenReq.szTrunk, &pThis->szNetwork[sizeof("wif=") - 1]);
     }
-
-#elif defined(RT_OS_WINDOWS) && defined(VBOX_WITH_NETFLT)
-    if (OpenReq.enmTrunkType == kIntNetTrunkType_NetFlt
-            || OpenReq.enmTrunkType == kIntNetTrunkType_NetAdp)
-    {
-# ifndef VBOX_NETFLT_ONDEMAND_BIND
-        /*
-         * We have a ndis filter driver started on system boot before the VBoxDrv,
-         * tell the filter driver to init VBoxNetFlt functionality.
-         */
-        rc = drvIntNetWinConstruct(pDrvIns, pCfgHandle, OpenReq.enmTrunkType);
-        AssertLogRelMsgRCReturn(rc, ("drvIntNetWinConstruct failed, rc=%Rrc", rc), rc);
-# endif
-
-        /*
-         * <Describe what this does here or/and in the function docs of drvIntNetWinIfGuidToBindName>.
-         */
-        char szBindName[INTNET_MAX_TRUNK_NAME];
-        rc = drvIntNetWinIfGuidToBindName(OpenReq.szTrunk, szBindName, INTNET_MAX_TRUNK_NAME);
-        AssertLogRelMsgRCReturn(rc, ("drvIntNetWinIfGuidToBindName failed, rc=%Rrc", rc), rc);
-        strcpy(OpenReq.szTrunk, szBindName);
-    }
-#endif /* WINDOWS && NETFLT */
+#endif /* DARWIN */
 
     /*
      * Create the event semaphores
@@ -1115,7 +1089,7 @@ static DECLCALLBACK(int) drvIntNetConstruct(PPDMDRVINS pDrvIns, PCFGMNODE pCfgHa
         drvIntNetSetActive(pThis, true /* fActive */);
     }
 
-    return rc;
+   return rc;
 }
 
 

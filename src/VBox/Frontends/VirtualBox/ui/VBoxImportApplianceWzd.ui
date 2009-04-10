@@ -1,13 +1,30 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <ui version="4.0">
+ <comment>
+ VBox frontends: Qt4 GUI (&quot;VirtualBox&quot;):
+
+ Copyright (C) 2009 Sun Microsystems, Inc.
+
+ This file is part of VirtualBox Open Source Edition (OSE), as
+ available from http://www.virtualbox.org. This file is free software;
+ you can redistribute it and/or modify it under the terms of the GNU
+ General Public License (GPL) as published by the Free Software
+ Foundation, in version 2 as it comes in the "COPYING" file of the
+ VirtualBox OSE distribution. VirtualBox OSE is distributed in the
+ hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
+
+ Please contact Sun Microsystems, Inc., 4150 Network Circle, Santa
+ Clara, CA 95054 USA or visit http://www.sun.com if you need
+ additional information or have any questions.
+ </comment>
  <class>VBoxImportApplianceWzd</class>
  <widget class="QDialog" name="VBoxImportApplianceWzd">
   <property name="geometry">
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>550</width>
-    <height>380</height>
+    <width>547</width>
+    <height>430</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -89,14 +106,17 @@
 &lt;html&gt;&lt;head&gt;&lt;meta name=&quot;qrichtext&quot; content=&quot;1&quot; /&gt;&lt;style type=&quot;text/css&quot;&gt;
 p, li { white-space: pre-wrap; }
 &lt;/style&gt;&lt;/head&gt;&lt;body&gt;
-&lt;p style=&quot; margin-top:12px; margin-bottom:12px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px;&quot;&gt;This wizard will you guide to the process of importing an Appliance. &lt;/p&gt;
+&lt;p style=&quot; margin-top:12px; margin-bottom:12px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px;&quot;&gt;This wizard will guide you through importing an appliance. &lt;/p&gt;
 &lt;p style=&quot; margin-top:12px; margin-bottom:12px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px;&quot;&gt;Use the &lt;span style=&quot; font-weight:600;&quot;&gt;Next&lt;/span&gt; button to go the next page of the wizard and the &lt;span style=&quot; font-weight:600;&quot;&gt;Back&lt;/span&gt; button to return to the previous page.&lt;/p&gt;
-&lt;p style=&quot; margin-top:12px; margin-bottom:12px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px;&quot;&gt;In order to import an Appliance you have to select a file describing the Appliance first. Currently VirtualBox supports the Open Virtualization Format (OVF). To continue select the file to import below:&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+&lt;p style=&quot; margin-top:12px; margin-bottom:12px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px;&quot;&gt;In order to import an appliance, you have to select a file describing the appliance first. Currently VirtualBox supports the Open Virtualization Format (OVF). To continue, select the file to import below:&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
            </property>
            <property name="wordWrap">
             <bool>true</bool>
            </property>
           </widget>
+         </item>
+         <item row="1" column="1">
+          <widget class="VBoxEmptyFileSelector" name="mFileSelector" native="true"/>
          </item>
          <item row="2" column="1">
           <spacer name="spacer">
@@ -105,14 +125,11 @@ p, li { white-space: pre-wrap; }
            </property>
            <property name="sizeHint" stdset="0">
             <size>
-             <width>408</width>
-             <height>258</height>
+             <width>406</width>
+             <height>68</height>
             </size>
            </property>
           </spacer>
-         </item>
-         <item row="1" column="1">
-          <widget class="VBoxFilePathSelectorWidget" name="mFileSelector"/>
          </item>
         </layout>
        </item>
@@ -245,7 +262,7 @@ p, li { white-space: pre-wrap; }
             </size>
            </property>
            <property name="text">
-            <string>These are the Virtual Machines as described in the Appliance. VirtualBox has done some initial mapping of the various values. You can change most of the shown properties by double clicking on the items. To disable some of them use the check box near the values.</string>
+               <string>These are the virtual machines as described in the appliance with their suggested mappings for importing into VirtualBox. You can change many of the shown properties by double-clicking on the items and disable others by using the check boxes below.</string>
            </property>
            <property name="wordWrap">
             <bool>true</bool>
@@ -366,9 +383,10 @@ p, li { white-space: pre-wrap; }
    <container>1</container>
   </customwidget>
   <customwidget>
-   <class>VBoxFilePathSelectorWidget</class>
-   <extends>QComboBox</extends>
+   <class>VBoxEmptyFileSelector</class>
+   <extends>QWidget</extends>
    <header>VBoxFilePathSelectorWidget.h</header>
+   <container>1</container>
   </customwidget>
  </customwidgets>
  <resources>

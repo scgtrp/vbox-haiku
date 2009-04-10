@@ -28,7 +28,6 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
-#include <sys/stat.h>
 
 static char *nsIDToString(nsID *guid);
 static void listVMs(IVirtualBox *virtualBox, ISession *session);
@@ -75,7 +74,7 @@ static void listVMs(IVirtualBox *virtualBox, ISession *session)
      * Get the list of all registered VMs.
      */
 
-    rc = virtualBox->vtbl->GetMachines2(virtualBox, &machineCnt, &machines);
+    rc = virtualBox->vtbl->GetMachines(virtualBox, &machineCnt, &machines);
     if (NS_FAILED(rc))
     {
         fprintf(stderr, "could not get list of machines, rc=%08x\n",
@@ -308,7 +307,6 @@ int main(int argc, char **argv)
     PRUint32    revision         = 0;
     PRUnichar  *versionUtf16     = NULL;
     PRUnichar  *homefolderUtf16  = NULL;
-    struct stat stIgnored;
     nsresult    rc;     /* Result code of various function (method) calls. */
 
     printf("Starting Main\n");
@@ -320,7 +318,7 @@ int main(int argc, char **argv)
      * when done.
      */
 
-    if (VBoxCGlueInit(NULL) != 0)
+    if (VBoxCGlueInit() != 0)
     {
         fprintf(stderr, "%s: FATAL: VBoxCGlueInit failed: %s\n",
                 argv[0], g_szVBoxErrMsg);

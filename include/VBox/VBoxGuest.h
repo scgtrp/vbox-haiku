@@ -64,20 +64,28 @@ typedef RTGCPHYS64 VMMDEVHYPPHYS64;
 #if defined(RT_OS_LINUX)
 /** The support device name. */
 # define VBOXGUEST_DEVICE_NAME        "/dev/vboxadd"
+/** The support device name of the user accessible device node. */
+# define VBOXGUEST_USER_DEVICE_NAME   "/dev/vboxuser"
 
 #elif defined(RT_OS_OS2)
 /** The support device name. */
 # define VBOXGUEST_DEVICE_NAME        "\\Dev\\VBoxGst$"
+/** The support device name of the user accessible device node. */
+# define VBOXGUEST_USER_DEVICE_NAME   "\\Dev\\VBoxGst$"
 
 #elif defined(RT_OS_SOLARIS)
 /** The support device name. */
 # define VBOXGUEST_DEVICE_NAME        "/dev/vboxguest"
+/** The support device name of the user accessible device node. */
+# define VBOXGUEST_USER_DEVICE_NAME   "/dev/vboxguest"
 
 #elif defined(RT_OS_WINDOWS)
 /** The support service name. */
 # define VBOXGUEST_SERVICE_NAME       "VBoxGuest"
-/** Win32 Device name. */
+/** Win32 device name. */
 # define VBOXGUEST_DEVICE_NAME        "\\\\.\\VBoxGuest"
+/** The support device name of the user accessible device node. */
+# define VBOXGUEST_USER_DEVICE_NAME   "\\\\.\\VBoxGuest"
 /** Global name for Win2k+ */
 # define VBOXGUEST_DEVICE_NAME_GLOBAL "\\\\.\\Global\\VBoxGuest"
 /** Win32 driver name */
@@ -88,6 +96,8 @@ typedef RTGCPHYS64 VMMDEVHYPPHYS64;
 #elif defined(RT_OS_FREEBSD)
 /** The support device name. */
 # define VBOXGUEST_DEVICE_NAME        "/dev/vboxguest"
+/** The support device name of the user accessible device node. */
+# define VBOXGUEST_USER_DEVICE_NAME   "/dev/vboxguest"
 
 #else
 /* PORTME */
@@ -1231,7 +1241,7 @@ typedef struct VBGLBIGREQ
     RTR3PTR     pvDataR3;
 #if HC_ARCH_BITS == 32
     uint32_t    u32Padding;
-#endif    
+#endif
 } VBGLBIGREQ;
 /** Pointer to a request wrapper for solaris guests. */
 typedef VBGLBIGREQ *PVBGLBIGREQ;
@@ -1292,7 +1302,7 @@ typedef const VBGLBIGREQ *PCVBGLBIGREQ;
 # define VBOXGUEST_IOCTL_CODE_FAST_32(Function)  VBOXGUEST_IOCTL_CODE_FAST_(Function)
 #endif /* RT_ARCH_AMD64 */
 
-/** IOCTL to VBoxGuest to query the VMMDev IO port region start. 
+/** IOCTL to VBoxGuest to query the VMMDev IO port region start.
  * @remarks Ring-0 only. */
 #define VBOXGUEST_IOCTL_GETVMMDEVPORT   VBOXGUEST_IOCTL_CODE(1, sizeof(VBoxGuestPortInfo))
 
@@ -1369,7 +1379,7 @@ AssertCompileSize(VBoxGuestFilterMaskInfo, 8);
 # pragma pack(1)
 typedef struct _VBoxGuestHGCMConnectInfo
 {
-    uint32_t result;          /**< OUT */
+    int32_t result;           /**< OUT */
     HGCMServiceLocation Loc;  /**< IN */
     uint32_t u32ClientID;     /**< OUT */
 } VBoxGuestHGCMConnectInfo;
@@ -1377,14 +1387,14 @@ AssertCompileSize(VBoxGuestHGCMConnectInfo, 4+4+128+4);
 
 typedef struct _VBoxGuestHGCMDisconnectInfo
 {
-    uint32_t result;          /**< OUT */
+    int32_t result;           /**< OUT */
     uint32_t u32ClientID;     /**< IN */
 } VBoxGuestHGCMDisconnectInfo;
 AssertCompileSize(VBoxGuestHGCMDisconnectInfo, 8);
 
 typedef struct _VBoxGuestHGCMCallInfo
 {
-    uint32_t result;          /**< OUT Host HGCM return code.*/
+    int32_t result;           /**< OUT Host HGCM return code.*/
     uint32_t u32ClientID;     /**< IN  The id of the caller. */
     uint32_t u32Function;     /**< IN  Function number. */
     uint32_t cParms;          /**< IN  How many parms. */
@@ -1655,6 +1665,7 @@ typedef VBOXGUESTOS2IDCCONNECT *PVBOXGUESTOS2IDCCONNECT;
 
 __BEGIN_DECLS
 VBGLR3DECL(int)     VbglR3Init(void);
+VBGLR3DECL(int)     VbglR3InitUser(void);
 VBGLR3DECL(void)    VbglR3Term(void);
 # ifdef ___iprt_time_h
 VBGLR3DECL(int)     VbglR3GetHostTime(PRTTIMESPEC pTime);
@@ -1662,7 +1673,9 @@ VBGLR3DECL(int)     VbglR3GetHostTime(PRTTIMESPEC pTime);
 VBGLR3DECL(int)     VbglR3InterruptEventWaits(void);
 VBGLR3DECL(int)     VbglR3WriteLog(const char *pch, size_t cb);
 VBGLR3DECL(int)     VbglR3CtlFilterMask(uint32_t fOr, uint32_t fNot);
-VBGLR3DECL(int)     VbglR3Daemonize(bool fNoChDir, bool fNoClose, char const *pszPidfile);
+VBGLR3DECL(int)     VbglR3Daemonize(bool fNoChDir, bool fNoClose);
+VBGLR3DECL(int)     VbglR3PidFile(const char *pszPath, PRTFILE phFile);
+VBGLR3DECL(void)    VbglR3ClosePidFile(const char *pszPath, RTFILE hFile);
 VBGLR3DECL(int)     VbglR3SetGuestCaps(uint32_t fOr, uint32_t fNot);
 
 /** @name Shared clipboard

@@ -34,9 +34,11 @@
 #  define _InterlockedExchangeAdd        _InterlockedExchangeAdd_StupidDDKVsCompilerCrap
 #  define _InterlockedCompareExchange    _InterlockedCompareExchange_StupidDDKVsCompilerCrap
 #  define _InterlockedAddLargeStatistic  _InterlockedAddLargeStatistic_StupidDDKVsCompilerCrap
+#  pragma warning(disable : 4163)
 __BEGIN_DECLS
 #  include <ntddk.h>
 __END_DECLS
+#  pragma warning(default : 4163)
 #  undef  _InterlockedExchange
 #  undef  _InterlockedExchangeAdd
 #  undef  _InterlockedCompareExchange
@@ -215,9 +217,10 @@ typedef struct VBOXGUESTDEVEXT
     /* Preallocated generic request for shutdown. */
     VMMDevPowerStateRequest *powerStateRequest;
 
-    /* Record for bugcheck callback routine. */
+    /** Is the bugcheck callback registered? */
+    BOOLEAN bBugcheckCallbackRegistered;
+    /** The bugcheck registration record. */
     KBUGCHECK_CALLBACK_RECORD bugcheckRecord;
-    CHAR* pcBugcheckBuffer;
 
 } VBOXGUESTDEVEXT, *PVBOXGUESTDEVEXT;
 
@@ -241,7 +244,7 @@ extern winVersion_t winVersion;
 typedef struct VBOXGUESTSESSION
 {
     /** Array containing HGCM client IDs associated with this session.
-     * This will be automatically disconnected when the session is closed. 
+     * This will be automatically disconnected when the session is closed.
      * Note that array size also affects/is maximum number of supported opengl threads per guest process.
      */
     uint32_t volatile           aHGCMClientIds[8];

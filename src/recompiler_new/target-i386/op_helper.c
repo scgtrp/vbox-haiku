@@ -1031,9 +1031,9 @@ static void do_interrupt_protected(int intno, int is_int, int error_code,
 #ifndef VBOX
     env->eflags &= ~(TF_MASK | VM_MASK | RF_MASK | NT_MASK);
 #else
-     /* 
+     /*
      * We must clear VIP/VIF too on interrupt entry, as otherwise FreeBSD
-     * gets confused by seeingingly changed EFLAGS. See #3491 and 
+     * gets confused by seeingingly changed EFLAGS. See #3491 and
      * public bug #2341.
      */
     env->eflags &= ~(TF_MASK | VM_MASK | RF_MASK | NT_MASK | VIF_MASK | VIP_MASK);
@@ -1307,9 +1307,9 @@ static void do_interrupt64(int intno, int is_int, int error_code,
 #ifndef VBOX
     env->eflags &= ~(TF_MASK | VM_MASK | RF_MASK | NT_MASK);
 #else
-    /* 
+    /*
      * We must clear VIP/VIF too on interrupt entry, as otherwise FreeBSD
-     * gets confused by seeingingly changed EFLAGS. See #3491 and 
+     * gets confused by seeingingly changed EFLAGS. See #3491 and
      * public bug #2341.
      */
     env->eflags &= ~(TF_MASK | VM_MASK | RF_MASK | NT_MASK | VIF_MASK | VIP_MASK);
@@ -3699,6 +3699,15 @@ void helper_rdtscp(void)
 
 void helper_rdpmc(void)
 {
+#ifdef VBOX
+    /* If X86_CR4_PCE is *not* set, then CPL must be zero. */
+    if (!(env->cr[4] & CR4_PCE_MASK) && ((env->hflags & HF_CPL_MASK) != 0)) {
+        raise_exception(EXCP0D_GPF);
+    }
+    /* Just return zero here; rather tricky to properly emulate this, especially as the specs are a mess. */
+    EAX = 0;
+    EDX = 0;
+#else
     if ((env->cr[4] & CR4_PCE_MASK) && ((env->hflags & HF_CPL_MASK) != 0)) {
         raise_exception(EXCP0D_GPF);
     }
@@ -3706,6 +3715,7 @@ void helper_rdpmc(void)
 
     /* currently unimplemented */
     raise_exception_err(EXCP06_ILLOP, 0);
+#endif
 }
 
 #if defined(CONFIG_USER_ONLY)
@@ -3886,8 +3896,9 @@ void helper_rdmsr(void)
                 val = 0; /** @todo else exception? */
             break;
         }
+        case MSR_IA32_TSC:
         case MSR_K8_TSC_AUX:
-            val = cpu_rdmsr(env, MSR_K8_TSC_AUX);
+            val = cpu_rdmsr(env, (uint32_t)ECX);
             break;
 #endif /* VBOX */
     }
@@ -5688,7 +5699,9 @@ void write_dword(CPUX86State *env1, target_ulong addr, uint32_t val)
 void sync_seg(CPUX86State *env1, int seg_reg, int selector)
 {
     CPUX86State *savedenv = env;
+#ifdef FORCE_SEGMENT_SYNC
     jmp_buf old_buf;
+#endif
 
     env = env1;
 

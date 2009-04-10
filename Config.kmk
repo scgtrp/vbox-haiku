@@ -1,4 +1,4 @@
-: Config.kmk 43241 2009-02-23 16:18:14Z bird $
+# $Id$
 ## @file
 # The global build configuration file for VBox.
 #
@@ -146,7 +146,7 @@ endif
 # Major version.
 VBOX_VERSION_MAJOR = 2
 # Minor version.
-VBOX_VERSION_MINOR = 1
+VBOX_VERSION_MINOR = 2
 # This is the current build number. It should be increased every time we publish a
 # new build. The define is available in every source file. Only even build numbers
 # will be published, odd numbers are set during development.
@@ -154,6 +154,7 @@ VBOX_VERSION_BUILD = 51
 # Full version string (may include more than just x.y.z, but no spaces or other problematic chars).
 VBOX_VERSION_STRING = $(VBOX_VERSION_MAJOR).$(VBOX_VERSION_MINOR).$(VBOX_VERSION_BUILD)
 # Force the additions.sh script to get an exact additions build when we're doing the release.
+
 ifeq ($(int-mod $(VBOX_VERSION_BUILD),2),0)
  export VBOX_ADDITIONS_SH_MODE = release
  export VBOX_DOCUMENTATION_SH_MODE = release
@@ -305,29 +306,32 @@ VBOX_WITH_HEADLESS = 1
 VBOX_WITH_DEBUGGER = 1
 # Enable the debugger GUI.
 VBOX_WITH_DEBUGGER_GUI = 1
-# build the Host Guest Communication Manager component
+# Build the Host Guest Communication Manager component.
 VBOX_WITH_HGCM = 1
+## Build the bugcheck detection code.
+#VBOX_WITH_GUEST_BUGCHECK_DETECTION =
 # Enable the USB feature.
 VBOX_WITH_USB = 1
-# Enable the USB 2.0 controller
+# Enable the USB 2.0 controller.
 VBOX_WITH_EHCI = 1
-# Enable the ISCSI feature.
+# Enable the ISCSI feature, with INIP support.
 VBOX_WITH_ISCSI = 1
-# Enable the E1000 feature
+VBOX_WITH_INIP = 1
+# Enable the E1000 feature.
 VBOX_WITH_E1000 = 1
-# Enable ALSA support for Linux
+# Enable ALSA support for Linux.
 VBOX_WITH_ALSA = 1
-# Enable Pulse support for Linux
+# Enable Pulse support for Linux.
 VBOX_WITH_PULSE = 1
-# Enable statically linked dbus support for Linux
+# Enable statically linked dbus support for Linux.
 ifeq ($(KBUILD_TARGET),linux)
  VBOX_WITH_DBUS = 1
 endif
-# Disable WINMM support for Windows (not implemented)
+# Disable WINMM support for Windows (not implemented).
 VBOX_WITH_WINMM =
-# Disable VMI BIOS (not yet ready)
+# Disable VMI BIOS (not yet ready).
 VBOX_WITH_VMI =
-# Enable the kchmviewer
+# Enable the kchmviewer.
 VBOX_WITH_KCHMVIEWER = 1
 # Build the testsuite.
 VBOX_WITH_TESTSUITE = 1
@@ -353,8 +357,6 @@ endif
 if1of ($(KBUILD_TARGET),win linux solaris darwin)
  VBOX_WITH_CROGL = 1
 endif
-# Enable OpenGL service
-VBOX_WITH_OGL = 1
 # Enable shared folders
 VBOX_WITH_SHARED_FOLDERS = 1
 # Enable shared clipboard
@@ -484,7 +486,9 @@ endif
 if1of ($(KBUILD_TARGET), darwin linux solaris win)
  VBOX_WITH_NETFLT = 1
  VBOX_SOLARIS_NSL_RESOLVED = 1
-# VBOX_WITH_NETADP = 1
+ if1of ($(KBUILD_TARGET), darwin solaris)
+  VBOX_WITH_NETADP = 1
+ endif
 endif
 ## Use the new version of liblzf. Remove with the old liblzf.
 #VBOX_WITH_NEW_LIBLZF = 1
@@ -569,6 +573,7 @@ ifeq ($(KBUILD_TARGET),l4)
  VBOX_WITH_MAIN=
  VBOX_WITH_DOCS=
  VBOX_WITH_ISCSI=
+ VBOX_WITH_INIP=
  VBOX_WITH_INTERNAL_NETWORKING=
  VBOX_WITH_PDM_ASYNC_COMPLETION=
  VBOX_WITH_KCHMVIEWER=
@@ -636,13 +641,19 @@ ifdef VBOX_BRANDING_CFG
 endif
 
 #
+# Bitch about old settings.
+#
+ifdef VBOX_WITHOUT_LINUX_COMPILER_H
+ $(warning VBOX_WITHOUT_LINUX_COMPILER_H was renamed to VBOX_WITH_LINUX_COMPILER_H, the meaning is inverted.)
+endif
+
+#
 # Disable components that are not open sourced.
 #
 ifdef VBOX_OSE
  VBOX_WITH_VRDP=
  VBOX_WITH_USB=
  VBOX_WITH_EHCI=
- VBOX_WITH_ISCSI=
  VBOX_WITH_VMI=
  ifn1of ($(KBUILD_TARGET), darwin linux solaris)
   VBOX_WITH_NETFLT=
@@ -1062,9 +1073,6 @@ ifdef LOG_ENABLED
 endif
 ifdef VBOX_OSE
  DEFS += VBOX_OSE
-endif
-ifdef VBOX_WITH_NEW_PHYS_CODE
- DEFS += VBOX_WITH_NEW_PHYS_CODE
 endif
 ifdef VBOX_WITH_64_BITS_GUESTS
  DEFS += VBOX_WITH_64_BITS_GUESTS
@@ -1931,10 +1939,10 @@ TEMPLATE_VBOXGC_BLD_TRG_ARCH        = x86
 ifeq ($(VBOX_LDR_FMT32),pe)
 ifdef VBOX_USE_VCC80
  TEMPLATE_VBOXGC_TOOL               = VCC80X86
- TEMPLATE_VBOXGC_CXXFLAGS           = -Zi -Zl -GR- -GS- -EHs-c- -GF- -W3 -wd4244 -wd4996 -Zc:wchar_t- -Gs8192 $(VBOX_VCC_GC_OPT) $(VBOX_VCC_GC_FP)
+ TEMPLATE_VBOXGC_CXXFLAGS           = -Zi -Zl -GR- -EHs- -GF -W3 -wd4244 -GS- -wd4996 -Zc:wchar_t- -Gs8192 $(VBOX_VCC_GC_OPT) $(VBOX_VCC_GC_FP)
 else
  TEMPLATE_VBOXGC_TOOL               = VCC70
- TEMPLATE_VBOXGC_CXXFLAGS           = -Zi -Zl -GR- -GX- -GF- -W3 -wd4244 $(VBOX_VCC_GC_OPT) $(VBOX_VCC_GC_FP)
+ TEMPLATE_VBOXGC_CXXFLAGS           = -Zi -Zl -GR- -EHs- -GF -W3 -wd4244 $(VBOX_VCC_GC_OPT) $(VBOX_VCC_GC_FP)
 endif
 TEMPLATE_VBOXGC_CFLAGS              = $(TEMPLATE_VBOXGC_CXXFLAGS)
 TEMPLATE_VBOXGC_LDFLAGS             = -Driver -Subsystem:NATIVE -Incremental:NO -Align:64 -MapInfo:Lines -MapInfo:Exports -NoD
@@ -2052,9 +2060,9 @@ TEMPLATE_VBOXR0_SYSSUFF             = .r0
 ifeq ($(VBOX_LDR_FMT),pe)
 TEMPLATE_VBOXR0_TOOL                = $(VBOX_VCC_TOOL)
 ifdef VBOX_USE_VCC80
- TEMPLATE_VBOXR0_CXXFLAGS           = -Zi -Zl -GR- -GS- -EHs-c- -GF- -W3 -wd4244 -wd4996 -Zc:wchar_t- $(VBOX_VCC_OPT) $(VBOX_VCC_FP)
+ TEMPLATE_VBOXR0_CXXFLAGS           = -Zi -Zl -GR- -EHs- -GF -W3 -wd4244 -GS- -wd4996 -Zc:wchar_t- $(VBOX_VCC_OPT) $(VBOX_VCC_FP)
 else
- TEMPLATE_VBOXR0_CXXFLAGS           = -Zi -Zl -GR- -GX- -GF- -W3 -wd4244 $(VBOX_VCC_OPT) $(VBOX_VCC_FP)
+ TEMPLATE_VBOXR0_CXXFLAGS           = -Zi -Zl -GR- -EHs- -GF -W3 -wd4244 $(VBOX_VCC_OPT) $(VBOX_VCC_FP)
 endif
 TEMPLATE_VBOXR0_CFLAGS              = $(TEMPLATE_VBOXR0_CXXFLAGS)
 TEMPLATE_VBOXR0_LDFLAGS             = -Driver -Subsystem:NATIVE -Incremental:NO -Align:64 -MapInfo:Exports -NoD
@@ -2135,9 +2143,9 @@ ifeq ($(KBUILD_TARGET),win)
  TEMPLATE_VBOXR0DRV_DEFS.x86           = _X86_
  TEMPLATE_VBOXR0DRV_DEFS.amd64         = _AMD64_
  ifdef VBOX_USE_VCC80
-  TEMPLATE_VBOXR0DRV_CXXFLAGS          = -Zi -Zl -GR- -GS- -EHs-c- -GF- -Gz -W3 -wd4996 -Zc:wchar_t- $(VBOX_VCC_OPT) $(VBOX_VCC_FP)
+  TEMPLATE_VBOXR0DRV_CXXFLAGS          = -Zi -Zl -GR- -EHs- -GF -Gz -W3 -GS- -wd4996 -Zc:wchar_t- $(VBOX_VCC_OPT) $(VBOX_VCC_FP)
  else
-  TEMPLATE_VBOXR0DRV_CXXFLAGS          = -Zi -Zl -GR- -GX- -GF- -Gz -W3 $(VBOX_VCC_OPT) $(VBOX_VCC_FP)
+  TEMPLATE_VBOXR0DRV_CXXFLAGS          = -Zi -Zl -GR- -EHs- -GF -Gz -W3 $(VBOX_VCC_OPT) $(VBOX_VCC_FP)
  endif
  TEMPLATE_VBOXR0DRV_CFLAGS             = $(TEMPLATE_VBOXR0DRV_CXXFLAGS)
  TEMPLATE_VBOXR0DRV_LDFLAGS            = -Driver -Subsystem:NATIVE -Incremental:NO -Align:64 -MapInfo:Exports -NoD -Debug
@@ -2367,10 +2375,10 @@ ifeq ($(KBUILD_TARGET),win)
 	VBOX_SVN_REV_NR=$(VBOX_SVN_REV)
  TEMPLATE_VBOXR3EXE_SDKS               = WINPSDK
  ifdef VBOX_USE_VCC80
-  TEMPLATE_VBOXR3EXE_CXXFLAGS          = -Zi -Zl -GR- -EHs-c- -GF- -MD -W3 -wd4065 -wd4244 -wd4996 -Zc:wchar_t- $(VBOX_VCC_OPT) $(VBOX_VCC_FP)
+  TEMPLATE_VBOXR3EXE_CXXFLAGS          = -Zi -Zl -GR- -EHsc -GF -MD -W3 -wd4065 -wd4244 -wd4996 -Zc:wchar_t- $(VBOX_VCC_OPT) $(VBOX_VCC_FP)
   TEMPLATE_VBOXR3EXE_CXXFLAGS.debug    = -RTCsu
  else
-  TEMPLATE_VBOXR3EXE_CXXFLAGS          = -Zi -Zl -GR- -GX- -GF- -MD -W3 -wd4065 -wd4244 $(VBOX_VCC_OPT) $(VBOX_VCC_FP)
+  TEMPLATE_VBOXR3EXE_CXXFLAGS          = -Zi -Zl -GR- -EHsc -GF -MD -W3 -wd4065 -wd4244 $(VBOX_VCC_OPT) $(VBOX_VCC_FP)
   TEMPLATE_VBOXR3EXE_CXXFLAGS.debug    = -GZ
  endif
  TEMPLATE_VBOXR3EXE_CXXFLAGS.kprofile  = -Gh -GH
@@ -2468,19 +2476,19 @@ endif
 #
 # Template for building R3 shared objects / DLLs.
 # This is mostly identical to the VBOXR3EXE template. (Avoid PIC if possible!)
-#
-TEMPLATE_VBOXR3  = VBox Ring 3 SO/DLLs
-TEMPLATE_VBOXR3_EXTENDS = VBOXR3EXE
-TEMPLATE_VBOXR3_LDFLAGS.l4 = $(L4_LIBDIR)/../crt0.s.o -T$(L4_LIBDIR)/../main_rel.ld -nostdlib
-TEMPLATE_VBOXR3_DEFS.l4     = $(TEMPLATE_VBOXR3EXE_DEFS.l4) __PIC__
-TEMPLATE_VBOXR3_DEFS.darwin = $(TEMPLATE_VBOXR3EXE_DEFS.darwin) PIC
-TEMPLATE_VBOXR3_LDFLAGS.darwin = $(TEMPLATE_VBOXR3EXE_LDFLAGS.darwin) -current_version $(VBOX_VERSION_MAJOR).$(VBOX_VERSION_MINOR).$(VBOX_VERSION_BUILD)
+#				       -
+TEMPLATE_VBOXR3                        = VBox Ring 3 SO/DLLs
+TEMPLATE_VBOXR3_EXTENDS                = VBOXR3EXE
+TEMPLATE_VBOXR3_LDFLAGS.l4             = $(L4_LIBDIR)/../crt0.s.o -T$(L4_LIBDIR)/../main_rel.ld -nostdlib
+TEMPLATE_VBOXR3_DEFS.l4                = $(TEMPLATE_VBOXR3EXE_DEFS.l4) __PIC__
+TEMPLATE_VBOXR3_DEFS.darwin            = $(TEMPLATE_VBOXR3EXE_DEFS.darwin) PIC
+TEMPLATE_VBOXR3_LDFLAGS.darwin         = $(TEMPLATE_VBOXR3EXE_LDFLAGS.darwin) -current_version $(VBOX_VERSION_MAJOR).$(VBOX_VERSION_MINOR).$(VBOX_VERSION_BUILD)
 ifeq ($(filter-out solaris.x86 %.amd64,$(KBUILD_TARGET).$(KBUILD_TARGET_ARCH)),)
  ifn1of ($(KBUILD_TARGET), darwin win)
-  TEMPLATE_VBOXR3_DEFS = $(TEMPLATE_VBOXR3EXE_DEFS) PIC
-  TEMPLATE_VBOXR3_CFLAGS = $(TEMPLATE_VBOXR3EXE_CFLAGS) -fPIC
-  TEMPLATE_VBOXR3_CXXFLAGS = $(TEMPLATE_VBOXR3EXE_CXXFLAGS) -fPIC
-  TEMPLATE_VBOXR3_LDFLAGS = $(TEMPLATE_VBOXR3EXE_LDFLAGS) -fPIC
+  TEMPLATE_VBOXR3_DEFS                 = $(TEMPLATE_VBOXR3EXE_DEFS) PIC
+  TEMPLATE_VBOXR3_CFLAGS               = $(TEMPLATE_VBOXR3EXE_CFLAGS) -fPIC
+  TEMPLATE_VBOXR3_CXXFLAGS             = $(TEMPLATE_VBOXR3EXE_CXXFLAGS) -fPIC
+  TEMPLATE_VBOXR3_LDFLAGS              = $(TEMPLATE_VBOXR3EXE_LDFLAGS) -fPIC
  endif
 endif
 
@@ -2488,24 +2496,52 @@ endif
 # Template for building static R3 executables and any static
 # libraries they link with.
 #
-TEMPLATE_VBOXR3STATIC           = VBox Static Ring 3 EXE
-TEMPLATE_VBOXR3STATIC_EXTENDS   = VBOXR3EXE
+TEMPLATE_VBOXR3STATIC                  = VBox Static Ring 3 EXE
+TEMPLATE_VBOXR3STATIC_EXTENDS          = VBOXR3EXE
 ifeq ($(KBUILD_TARGET),win)
- TEMPLATE_VBOXR3STATIC_CFLAGS   = $(filter-out -MD, $(TEMPLATE_VBOXR3EXE_CFLAGS)) -MT
- TEMPLATE_VBOXR3STATIC_CXXFLAGS = $(filter-out -MD, $(TEMPLATE_VBOXR3EXE_CFLAGS)) -MT
- TEMPLATE_VBOXR3STATIC_LDFLAGS  = $(filter-out /DISALLOWLIB:libcmt.lib, $(TEMPLATE_VBOXR3EXE_LDFLAGS)) \
+ TEMPLATE_VBOXR3STATIC_CFLAGS          = $(filter-out -MD, $(TEMPLATE_VBOXR3EXE_CFLAGS)) -MT
+ TEMPLATE_VBOXR3STATIC_CXXFLAGS        = $(filter-out -MD, $(TEMPLATE_VBOXR3EXE_CFLAGS)) -MT
+ TEMPLATE_VBOXR3STATIC_LDFLAGS         = $(filter-out /DISALLOWLIB:libcmt.lib, $(TEMPLATE_VBOXR3EXE_LDFLAGS)) \
  	/DISALLOWLIB:msvcrt.lib \
  	/DISALLOWLIB:msvcprt.lib
- TEMPLATE_VBOXR3STATIC_LIBS     = \
+ TEMPLATE_VBOXR3STATIC_LIBS            = \
  	$(PATH_TOOL_$(TEMPLATE_VBOXR3STATIC_TOOL)_LIB)/oldnames.lib \
  	$(PATH_TOOL_$(TEMPLATE_VBOXR3STATIC_TOOL)_LIB)/libcmt.lib \
  	$(PATH_TOOL_$(TEMPLATE_VBOXR3STATIC_TOOL)_LIB)/libcpmt.lib
 else ifn1of ($(KBUILD_TARGET), darwin)
  # The gcc guys sans darwin.
- TEMPLATE_VBOXR3STATIC_CFLAGS   = $(TEMPLATE_VBOXR3EXE_CFLAGS) -static
- TEMPLATE_VBOXR3STATIC_CXXFLAGS = $(TEMPLATE_VBOXR3EXE_CXXFLAGS) -static
- TEMPLATE_VBOXR3STATIC_OBJCFLAGS= $(TEMPLATE_VBOXR3EXE_OBJCFLAGS) -static
- TEMPLATE_VBOXR3STATIC_LDFLAGS  = $(TEMPLATE_VBOXR3EXE_LDFLAGS) -static
+ TEMPLATE_VBOXR3STATIC_CFLAGS          = $(TEMPLATE_VBOXR3EXE_CFLAGS) -static
+ TEMPLATE_VBOXR3STATIC_CXXFLAGS        = $(TEMPLATE_VBOXR3EXE_CXXFLAGS) -static
+ TEMPLATE_VBOXR3STATIC_OBJCFLAGS       = $(TEMPLATE_VBOXR3EXE_OBJCFLAGS) -static
+ TEMPLATE_VBOXR3STATIC_LDFLAGS         = $(TEMPLATE_VBOXR3EXE_LDFLAGS) -static
+endif
+
+#
+# Same as VBOXR3EXE but without C++ exceptions.
+#
+# VBOXR3EXE does C++ exceptions and may assumes that extern "C" functions
+# doesn't throw them. Use this template (and VBOXR3DLLNOXCPT) with care
+# and only where the C++ overhead is really unwanted.
+#
+TEMPLATE_VBOXR3EXENOXCPT               = VBox Ring 3 Exe without C++ exception
+TEMPLATE_VBOXR3EXENOXCPT_EXTENDS       = VBOXR3EXE
+ifeq ($(KBUILD_TARGET),win)
+ TEMPLATE_VBOXR3EXENOXCPT_CFLAGS       = $(filter-out -EH%,$(TEMPLATE_VBOXR3EXE_CFLAGS)  ) -EHs-
+ TEMPLATE_VBOXR3EXENOXCPT_CXXFLAGS     = $(filter-out -EH%,$(TEMPLATE_VBOXR3EXE_CXXFLAGS)) -EHs-
+else
+ TEMPLATE_VBOXR3EXENOXCPT_CXXFLAGS     = $(TEMPLATE_VBOXR3EXE_CXXFLAGS) -fno-exceptions
+endif
+
+#
+# Same as VBOXR3 but without C++ exceptions.
+#
+TEMPLATE_VBOXR3DLLNOXCPT               = VBox Ring 3 SO/DLLs without C++ exception
+TEMPLATE_VBOXR3DLLNOXCPT_EXTENDS       = VBOXR3
+ifeq ($(KBUILD_TARGET),win)
+ TEMPLATE_VBOXR3DLLNOXCPT_CFLAGS       = $(filter-out -EH%,$(TEMPLATE_VBOXR3_CFLAGS)  ) -EHs-
+ TEMPLATE_VBOXR3DLLNOXCPT_CXXFLAGS     = $(filter-out -EH%,$(TEMPLATE_VBOXR3_CXXFLAGS)) -EHs-
+else
+ TEMPLATE_VBOXR3DLLNOXCPT_CXXFLAGS     = $(TEMPLATE_VBOXR3_CXXFLAGS) -fno-exceptions
 endif
 
 #
@@ -2728,11 +2764,11 @@ ifeq ($(KBUILD_TARGET),win)
  #       C4996 is about deprected function (CRT only?).
  ifdef VBOX_USE_VCC80
   TEMPLATE_VBOXMAINEXE_TOOL              = $(VBOX_VCC_TOOL)
-  TEMPLATE_VBOXMAINEXE_CXXFLAGS          = -Zi -Zl -GR -GF- -MD -EHsc -W3 -wd4065 -wd4996 -wd4250 -Zc:wchar_t- $(VBOX_VCC_OPT) $(VBOX_VCC_FP)
+  TEMPLATE_VBOXMAINEXE_CXXFLAGS          = -Zi -Zl -GR -EHsc -GF -MD -W3 -wd4065 -wd4996 -wd4250 -Zc:wchar_t- $(VBOX_VCC_OPT) $(VBOX_VCC_FP)
   TEMPLATE_VBOXMAINEXE_CXXFLAGS.debug    = -RTCsu
  else
   TEMPLATE_VBOXMAINEXE_TOOL              = VCC70
-  TEMPLATE_VBOXMAINEXE_CXXFLAGS          = -Zi -Zl -GR -GX- -GF- -MD -EHsc -W3 -wd4065 -wd4250 $(VBOX_VCC_OPT) $(VBOX_VCC_FP)
+  TEMPLATE_VBOXMAINEXE_CXXFLAGS          = -Zi -Zl -GR -EHsc -GF -MD -W3 -wd4065 -wd4250 $(VBOX_VCC_OPT) $(VBOX_VCC_FP)
   TEMPLATE_VBOXMAINEXE_CXXFLAGS.debug    = -GZ
  endif
  TEMPLATE_VBOXMAINEXE_CXXFLAGS.kprofile  = -Gh -GH
@@ -3014,13 +3050,10 @@ ifdef VBOX_WITH_QTGUI
  TEMPLATE_VBOXQT4GUIEXE_LRCTOOL = QT4
  TEMPLATE_VBOXQT4GUIEXE_SDKS = QT4
  ifdef VBOX_WITH_QT4_SUN
-  if1of ($(KBUILD_TARGET).$(KBUILD_TARGET_ARCH), darwin.amd64 darwin.x86 linux.amd64 linux.x86)
-   TEMPLATE_VBOXQT4GUIEXE_QT_INFIX = VBox
-  else ifneq ($(KBUILD_TARGET),darwin) ## @todo convert all builds to 'VBox' lib infix!
-   TEMPLATE_VBOXQT4GUIEXE_QT_PREFIX = VBox
-  endif
+  TEMPLATE_VBOXQT4GUIEXE_QT_INFIX = VBox
  endif
  TEMPLATE_VBOXQT4GUIEXE_DEFS = IN_RING3 QT_NO_DEBUG QT_THREAD_SUPPORT QT_SHARED HAVE_CONFIG_H $(ARCH_BITS_DEFS)
+ TEMPLATE_VBOXQT4GUIEXE_RCDEFS = $(TEMPLATE_VBOXR3EXE_RCDEFS)
 
  ifeq ($(KBUILD_TARGET),win)
   TEMPLATE_VBOXQT4GUIEXE_TOOL = $(VBOX_VCC_TOOL)
@@ -3192,11 +3225,11 @@ ifeq ($(KBUILD_HOST),win)
   TEMPLATE_VBOXBLDPROG_SDKS              = WIN64SDK
  endif
  ifneq ($(TEMPLATE_VBOXBLDPROG_TOOL),VCC70)
-  TEMPLATE_VBOXBLDPROG_CXXFLAGS          = -Zi -Zl -GR- -EHs-c- -GF- -MT -W3 -wd4996 -Zc:wchar_t-
+  TEMPLATE_VBOXBLDPROG_CXXFLAGS          = -Zi -Zl -GR- -EHs- -GF -MT -W3 -wd4996 -Zc:wchar_t-
   TEMPLATE_VBOXBLDPROG_CXXFLAGS.debug    = -RTCsu
   TEMPLATE_VBOXBLDPROG_CXXFLAGS.release  = -O2 -Oy- -GS-
  else
-  TEMPLATE_VBOXBLDPROG_CXXFLAGS          = -Zi -Zl -GR- -GX- -GF- -MT -W3
+  TEMPLATE_VBOXBLDPROG_CXXFLAGS          = -Zi -Zl -GR- -EHs- -GF -MT -W3
   TEMPLATE_VBOXBLDPROG_CXXFLAGS.debug    = -GZ
   TEMPLATE_VBOXBLDPROG_CXXFLAGS.release  = -Ogitb2 -Oy-
  endif
@@ -3525,9 +3558,9 @@ TEMPLATE_VBOXCROGLR3HOSTDLL_EXTENDS        = VBOXR3NP
 TEMPLATE_VBOXCROGLR3HOSTDLL_EXTENDS_BY     = prepending
 TEMPLATE_VBOXCROGLR3HOSTDLL_DEFS           = CHROMIUM_THREADSAFE VBOX_WITH_HGCM UNPACKS
 TEMPLATE_VBOXCROGLR3HOSTDLL_DEFS.win       = _WIN32_WINNT=0x0500 WINDOWS=1
-TEMPLATE_VBOXCROGLR3HOSTDLL_DEFS.linux     = Linux=1
-TEMPLATE_VBOXCROGLR3HOSTDLL_DEFS.solaris   = SunOS=1 GLEXT_64_TYPES_DEFINED
-TEMPLATE_VBOXCROGLR3HOSTDLL_DEFS.darwin    = DARWIN=1 GL_GLEXT_LEGACY
+TEMPLATE_VBOXCROGLR3HOSTDLL_DEFS.linux     = Linux=1 _GNU_SOURCE
+TEMPLATE_VBOXCROGLR3HOSTDLL_DEFS.solaris   = SunOS=1 _GNU_SOURCE #GLEXT_64_TYPES_DEFINED
+TEMPLATE_VBOXCROGLR3HOSTDLL_DEFS.darwin    = DARWIN=1 GL_GLEXT_LEGACY _GNU_SOURCE
 TEMPLATE_VBOXCROGLR3HOSTDLL_INCS           = $(VBOX_PATH_CROGL_INCLUDE) $(VBOX_PATH_CROGL_GENFILES)
 TEMPLATE_VBOXCROGLR3HOSTDLL_SDKS.darwin    = DARWIN-OPENGL
 TEMPLATE_VBOXCROGLR3HOSTDLL_LDFLAGS.darwin = \
@@ -3556,9 +3589,9 @@ TEMPLATE_VBOXCROGLR3GUESTDLL_EXTENDS        = VBOXGUESTR3NPDLL
 TEMPLATE_VBOXCROGLR3GUESTDLL_EXTENDS_BY     = prepending
 TEMPLATE_VBOXCROGLR3GUESTDLL_DEFS           = CHROMIUM_THREADSAFE VBOX_WITH_HGCM
 TEMPLATE_VBOXCROGLR3GUESTDLL_DEFS.win       = _WIN32_WINNT=0x0500 WINDOWS=1
-TEMPLATE_VBOXCROGLR3GUESTDLL_DEFS.linux     = Linux=1
-TEMPLATE_VBOXCROGLR3GUESTDLL_DEFS.solaris   = SunOS=1 GLEXT_64_TYPES_DEFINED
-TEMPLATE_VBOXCROGLR3GUESTDLL_DEFS.darwin    = DARWIN=1 GL_GLEXT_LEGACY
+TEMPLATE_VBOXCROGLR3GUESTDLL_DEFS.linux     = Linux=1 _GNU_SOURCE
+TEMPLATE_VBOXCROGLR3GUESTDLL_DEFS.solaris   = SunOS=1 _GNU_SOURCE #GLEXT_64_TYPES_DEFINED
+TEMPLATE_VBOXCROGLR3GUESTDLL_DEFS.darwin    = DARWIN=1 GL_GLEXT_LEGACY _GNU_SOURCE
 TEMPLATE_VBOXCROGLR3GUESTDLL_INCS           = $(VBOX_PATH_CROGL_INCLUDE) $(VBOX_PATH_CROGL_GENFILES)
 TEMPLATE_VBOXCROGLR3GUESTDLL_SDKS.darwin    = DARWIN-OPENGL
 TEMPLATE_VBOXCROGLR3GUESTDLL_LDFLAGS.darwin = \
@@ -3576,11 +3609,30 @@ TEMPLATE_VBOXCROGLR3GUESTLIB_INST    = $(INST_ADDITIONS_LIB)
 
 
 #
+# Template for building Mesa guest library, Linux-only so far.
+#
+TEMPLATE_VBOXMESAR3GUESTLIB         = VBox Mesa Guest Library
+TEMPLATE_VBOXMESAR3GUESTLIB_EXTENDS = VBOXCROGLR3GUESTDLL
+TEMPLATE_VBOXMESAR3GUESTLIB_INST    = $(INST_ADDITIONS_LIB)
+TEMPLATE_VBOXMESAR3GUESTLIB_DEFS.linux   = Linux=1
+TEMPLATE_VBOXMESAR3GUESTLIB_DEFS.solaris = SunOS=1
+TEMPLATE_VBOXMESAR3GUESTLIB_DEFS.darwin  = DARWIN=1 GL_GLEXT_LEGACY
+ifeq ($(KBUILD_TARGET),linux)
+ TEMPLATE_VBOXMESAR3GUESTLIB_ASTOOL              = $(TEMPLATE_VBOXCROGLR3GUESTDLL_TOOL)
+ TEMPLATE_VBOXMESAR3GUESTLIB_ASFLAGS             = $(NO_SUCH_VARIABLE)
+ TEMPLATE_VBOXMESAR3GUESTLIB_ASFLAGS.x86         = -m32
+ TEMPLATE_VBOXMESAR3GUESTLIB_ASFLAGS.amd64       = -m64
+ TEMPLATE_VBOXMESAR3GUESTLIB_ASDEFS              = $(NO_SUCH_VARIABLE)
+endif
+
+
+#
 # Guest additions libraries (all static).
 #   The _MINI and _SHARED are both compiled as PIC and intended for linking into a .so/.dll/.dylib.
 #
 VBOX_LIB_IPRT_GUEST_R3           = $(VBOX_PATH_ADDITIONS_LIB)/RuntimeGuestR3$(VBOX_SUFF_LIB)
 VBOX_LIB_IPRT_GUEST_R3_MINI      = $(VBOX_PATH_ADDITIONS_LIB)/RuntimeGuestR3Mini$(VBOX_SUFF_LIB)
+VBOX_LIB_IPRT_GUEST_R3_SHARED    = $(VBOX_PATH_ADDITIONS_LIB)/RuntimeGuestR3Shared$(VBOX_SUFF_LIB)
 VBOX_LIB_IPRT_GUEST_R0           = $(VBOX_PATH_ADDITIONS_LIB)/RuntimeGuestR0$(VBOX_SUFF_LIB)
 ifeq ($(KBUILD_TARGET_ARCH),x86)
  VBOX_LIB_IPRT_GUEST_R0_NT4      = $(VBOX_PATH_ADDITIONS_LIB)/RuntimeGuestR0NT4$(VBOX_SUFF_LIB)

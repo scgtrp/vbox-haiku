@@ -190,8 +190,7 @@ int pgmPoolMonitorChainFlush(PPGMPOOL pPool, PPGMPOOLPAGE pPage)
         if (pPage->idx >= PGMPOOL_IDX_FIRST)
         {
             int rc2 = pgmPoolFlushPage(pPool, pPage);
-            if (rc2 == VERR_PGM_POOL_CLEARED && rc == VINF_SUCCESS)
-                rc = VINF_PGM_SYNC_CR3;
+            AssertRC(rc2);
         }
         /* next */
         if (idx == NIL_PGMPOOL_IDX)
@@ -1232,7 +1231,6 @@ DECLINLINE(void) pgmPoolHashRemove(PPGMPOOL pPool, PPGMPOOLPAGE pPage)
  *
  * @returns VBox status code.
  * @retval  VINF_SUCCESS on success.
- * @retval  VERR_PGM_POOL_CLEARED if the deregistration of a physical handler will cause a light weight pool flush.
  * @param   pPool       The pool.
  * @param   iUser       The user index.
  */
@@ -1247,39 +1245,43 @@ static int pgmPoolCacheFreeOne(PPGMPOOL pPool, uint16_t iUser)
     /*
      * Select one page from the tail of the age list.
      */
-    uint16_t iToFree = pPool->iAgeTail;
-    if (iToFree == iUser)
-        iToFree = pPool->aPages[iToFree].iAgePrev;
-/* This is the alternative to the SyncCR3 pgmPoolCacheUsed calls.
-    if (pPool->aPages[iToFree].iUserHead != NIL_PGMPOOL_USER_INDEX)
+    PPGMPOOLPAGE    pPage;
+    for (unsigned iLoop = 0; ; iLoop++)
     {
-        uint16_t i = pPool->aPages[iToFree].iAgePrev;
-        for (unsigned j = 0; j < 10 && i != NIL_PGMPOOL_USER_INDEX; j++, i = pPool->aPages[i].iAgePrev)
+        uint16_t iToFree = pPool->iAgeTail;
+        if (iToFree == iUser)
+            iToFree = pPool->aPages[iToFree].iAgePrev;
+/* This is the alternative to the SyncCR3 pgmPoolCacheUsed calls.
+        if (pPool->aPages[iToFree].iUserHead != NIL_PGMPOOL_USER_INDEX)
         {
-            if (pPool->aPages[iToFree].iUserHead == NIL_PGMPOOL_USER_INDEX)
-                continue;
-            iToFree = i;
-            break;
+            uint16_t i = pPool->aPages[iToFree].iAgePrev;
+            for (unsigned j = 0; j < 10 && i != NIL_PGMPOOL_USER_INDEX; j++, i = pPool->aPages[i].iAgePrev)
+            {
+                if (pPool->aPages[iToFree].iUserHead == NIL_PGMPOOL_USER_INDEX)
+                    continue;
+                iToFree = i;
+                break;
+            }
         }
-    }
 */
+        Assert(iToFree != iUser);
+        AssertRelease(iToFree != NIL_PGMPOOL_IDX);
+        pPage = &pPool->aPages[iToFree];
 
-    Assert(iToFree != iUser);
-    AssertRelease(iToFree != NIL_PGMPOOL_IDX);
-
-    PPGMPOOLPAGE pPage = &pPool->aPages[iToFree];
+        /*
+         * Reject any attempts at flushing the currently active shadow CR3 mapping.
+         * Call pgmPoolCacheUsed to move the page to the head of the age list.
+         */
+        if (!pgmPoolIsPageLocked(&pPool->CTX_SUFF(pVM)->pgm.s, pPage))
+            break;
+        LogFlow(("pgmPoolCacheFreeOne: refuse CR3 mapping\n"));
+        pgmPoolCacheUsed(pPool, pPage);
+        AssertLogRelReturn(iLoop < 8192, VERR_INTERNAL_ERROR);
+    }
 
     /*
-     * Reject any attempts at flushing the currently active shadow CR3 mapping
+     * Found a usable page, flush it and return.
      */
-    if (pgmPoolIsPageLocked(&pPool->CTX_SUFF(pVM)->pgm.s, pPage))
-    {
-        /* Refresh the cr3 mapping by putting it at the head of the age list. */
-        LogFlow(("pgmPoolCacheFreeOne refuse CR3 mapping\n"));
-        pgmPoolCacheUsed(pPool, pPage);
-        return pgmPoolCacheFreeOne(pPool, iUser);
-    }
-
     int rc = pgmPoolFlushPage(pPool, pPage);
     if (rc == VINF_SUCCESS)
         PGM_INVL_GUEST_TLBS(); /* see PT handler. */
@@ -1450,7 +1452,7 @@ static int pgmPoolCacheAlloc(PPGMPOOL pPool, RTGCPHYS GCPhys, PGMPOOLKIND enmKin
                 if (pgmPoolCacheReusedByKind((PGMPOOLKIND)pPage->enmKind, enmKind))
                 {
                     STAM_COUNTER_INC(&pPool->StatCacheKindMismatches);
-                    pgmPoolFlushPage(pPool, pPage); /* ASSUMES that VERR_PGM_POOL_CLEARED will be returned by pgmPoolTracInsert. */
+                    pgmPoolFlushPage(pPool, pPage);
                     PGM_INVL_GUEST_TLBS(); /* see PT handler. */
                     break;
                 }
@@ -1631,7 +1633,6 @@ static PPGMPOOLPAGE pgmPoolMonitorGetPageByGCPhys(PPGMPOOL pPool, PPGMPOOLPAGE p
  *
  * @returns VBox status code.
  * @retval  VINF_SUCCESS on success.
- * @retval  VERR_PGM_POOL_CLEARED if the registration of the physical handler will cause a light weight pool flush.
  * @param   pPool       The pool.
  * @param   pPage       The cached page.
  */
@@ -1718,8 +1719,7 @@ static int pgmPoolMonitorInsert(PPGMPOOL pPool, PPGMPOOLPAGE pPage)
         /** @todo we should probably deal with out-of-memory conditions here, but for now increasing
          * the heap size should suffice. */
         AssertFatalRC(rc);
-        if (pVM->pgm.s.fSyncFlags & PGM_SYNC_CLEAR_PGM_POOL)
-            rc = VERR_PGM_POOL_CLEARED;
+        Assert(!(pVM->pgm.s.fSyncFlags & PGM_SYNC_CLEAR_PGM_POOL) || VM_FF_ISSET(pVM, VM_FF_PGM_SYNC_CR3));
     }
     pPage->fMonitored = true;
     return rc;
@@ -1731,7 +1731,6 @@ static int pgmPoolMonitorInsert(PPGMPOOL pPool, PPGMPOOLPAGE pPage)
  *
  * @returns VBox status code.
  * @retval  VINF_SUCCESS on success.
- * @retval  VERR_PGM_POOL_CLEARED if the deregistration of the physical handler will cause a light weight pool flush.
  * @param   pPool       The pool.
  * @param   pPage       The cached page.
  */
@@ -1817,8 +1816,8 @@ static int pgmPoolMonitorFlush(PPGMPOOL pPool, PPGMPOOLPAGE pPage)
     {
         rc = PGMHandlerPhysicalDeregister(pVM, pPage->GCPhys & ~(RTGCPHYS)(PAGE_SIZE - 1));
         AssertFatalRC(rc);
-        if (pVM->pgm.s.fSyncFlags & PGM_SYNC_CLEAR_PGM_POOL)
-            rc = VERR_PGM_POOL_CLEARED;
+        AssertMsg(!(pVM->pgm.s.fSyncFlags & PGM_SYNC_CLEAR_PGM_POOL) || VM_FF_ISSET(pVM, VM_FF_PGM_SYNC_CR3),
+                  ("%#x %#x\n", pVM->pgm.s.fSyncFlags, pVM->fForcedActions));
     }
     pPage->fMonitored = false;
 
@@ -2116,7 +2115,8 @@ static int pgmPoolTrackFreeOneUser(PPGMPOOL pPool, uint16_t iUser)
     /*
      * Lazy approach.
      */
-    /* @todo incompatible with long mode paging (cr3 root will be flushed) */
+    /* @todo This path no longer works (CR3 root pages will be flushed)!! */
+    AssertCompileFailed();
     Assert(!CPUMIsGuestInLongMode(pVM));
     pgmPoolFlushAllInt(pPool);
     return VERR_PGM_POOL_FLUSHED;
@@ -2133,7 +2133,6 @@ static int pgmPoolTrackFreeOneUser(PPGMPOOL pPool, uint16_t iUser)
  * @returns VBox status code.
  * @retval  VINF_SUCCESS if successfully added.
  * @retval  VERR_PGM_POOL_FLUSHED if the pool was flushed.
- * @retval  VERR_PGM_POOL_CLEARED if the deregistration of the physical handler will cause a light weight pool flush.
  * @param   pPool       The pool.
  * @param   pPage       The cached page.
  * @param   GCPhys      The GC physical address of the page we're gonna shadow.
@@ -2212,18 +2211,7 @@ DECLINLINE(int) pgmPoolTrackInsert(PPGMPOOL pPool, PPGMPOOLPAGE pPage, RTGCPHYS 
     {
 # ifdef PGMPOOL_WITH_MONITORING
         rc = pgmPoolMonitorInsert(pPool, pPage);
-        if (rc == VERR_PGM_POOL_CLEARED)
-        {
-            /* 'Failed' - free the usage, and keep it in the cache (if enabled). */
-#  ifndef PGMPOOL_WITH_CACHE
-            pgmPoolMonitorFlush(pPool, pPage);
-            rc = VERR_PGM_POOL_FLUSHED;
-#  endif
-            pPage->iUserHead = NIL_PGMPOOL_USER_INDEX;
-            paUsers[i].iNext = pPool->iUserFreeHead;
-            paUsers[i].iUser = NIL_PGMPOOL_IDX;
-            pPool->iUserFreeHead = i;
-        }
+        AssertRC(rc);
     }
 # endif
 #endif /* PGMPOOL_WITH_MONITORING */
@@ -2645,8 +2633,8 @@ void pgmPoolTrackFlushGCPhysPTs(PVM pVM, PPGMPAGE pPhysPage, uint16_t iPhysExt)
  *
  * @returns VBox status code.
  * @retval  VINF_SUCCESS if all references has been successfully cleared.
- * @retval  VINF_PGM_GCPHYS_ALIASED if we're better off with a CR3 sync and
- *          a page pool cleaning.
+ * @retval  VINF_PGM_SYNC_CR3 if we're better off with a CR3 sync and a page
+ *          pool cleaning. FF and sync flags are set.
  *
  * @param   pVM         The VM handle.
  * @param   pPhysPage   The guest page in question.
@@ -2661,7 +2649,6 @@ int pgmPoolTrackFlushGCPhys(PVM pVM, PPGMPAGE pPhysPage, bool *pfFlushTLBs)
     const uint16_t u16 = PGM_PAGE_GET_TRACKING(pPhysPage);
     if (u16)
     {
-# ifdef VBOX_WITH_NEW_PHYS_CODE
         /*
          * The zero page is currently screwing up the tracking and we'll
          * have to flush the whole shebang. Unless VBOX_WITH_NEW_LAZY_PAGE_ALLOC
@@ -2671,7 +2658,6 @@ int pgmPoolTrackFlushGCPhys(PVM pVM, PPGMPAGE pPhysPage, bool *pfFlushTLBs)
         if (PGM_PAGE_IS_ZERO(pPhysPage))
             rc = VINF_PGM_GCPHYS_ALIASED;
         else
-# endif
         {
 # ifdef VBOX_WITH_2X_4GB_ADDR_SPACE_IN_R0
             /* Start a subset here because pgmPoolTrackFlushGCPhysPTsSlow and
@@ -2698,11 +2684,9 @@ int pgmPoolTrackFlushGCPhys(PVM pVM, PPGMPAGE pPhysPage, bool *pfFlushTLBs)
     }
 
 #elif defined(PGMPOOL_WITH_CACHE)
-# ifdef VBOX_WITH_NEW_PHYS_CODE
     if (PGM_PAGE_IS_ZERO(pPhysPage))
         rc = VINF_PGM_GCPHYS_ALIASED;
     else
-# endif
     {
 # ifdef VBOX_WITH_2X_4GB_ADDR_SPACE_IN_R0
         /* Start a subset here because pgmPoolTrackFlushGCPhysPTsSlow kill the pool otherwise. */
@@ -2721,6 +2705,13 @@ int pgmPoolTrackFlushGCPhys(PVM pVM, PPGMPAGE pPhysPage, bool *pfFlushTLBs)
 #else
     rc = VINF_PGM_GCPHYS_ALIASED;
 #endif
+
+    if (rc == VINF_PGM_GCPHYS_ALIASED)
+    {
+        pVM->pgm.s.fSyncFlags |= PGM_SYNC_CLEAR_PGM_POOL;
+        VM_FF_SET(pVM, VM_FF_PGM_SYNC_CR3);
+        rc = VINF_PGM_SYNC_CR3;
+    }
 
     return rc;
 }
@@ -3774,9 +3765,8 @@ static void pgmPoolTrackDeref(PPGMPOOL pPool, PPGMPOOLPAGE pPage)
 }
 
 #endif /* PGMPOOL_WITH_USER_TRACKING */
-
-
 #ifdef IN_RING3
+
 /**
  * Flushes all the special root pages as part of a pgmPoolFlushAllInt operation.
  *
@@ -3784,12 +3774,6 @@ static void pgmPoolTrackDeref(PPGMPOOL pPool, PPGMPOOLPAGE pPage)
  */
 static void pgmPoolFlushAllSpecialRoots(PPGMPOOL pPool)
 {
-#ifdef VBOX_WITH_2X_4GB_ADDR_SPACE_IN_R0
-    /* Start a subset so we won't run out of mapping space. */
-    PVMCPU pVCpu = VMMGetCpu(pPool->CTX_SUFF(pVM));
-    uint32_t iPrevSubset = PGMDynMapPushAutoSubset(pVCpu);
-#endif
-
     /*
      * These special pages are all mapped into the indexes 1..PGMPOOL_IDX_FIRST.
      */
@@ -3799,11 +3783,6 @@ static void pgmPoolFlushAllSpecialRoots(PPGMPOOL pPool)
      * Paranoia (to be removed), flag a global CR3 sync.
      */
     VM_FF_SET(pPool->CTX_SUFF(pVM), VM_FF_PGM_SYNC_CR3);
-
-#ifdef VBOX_WITH_2X_4GB_ADDR_SPACE_IN_R0
-    /* Pop the subset. */
-    PGMDynMapPopAutoSubset(pVCpu, iPrevSubset);
-#endif
 }
 
 
@@ -3981,10 +3960,12 @@ static void pgmPoolFlushAllInt(PPGMPOOL pPool)
 #endif
     }
 
-    /* Force a shadow mode reinit (necessary for nested paging and ept). */
+    /*
+     * Force a shadow mode reinit (necessary for nested paging and ept).
+     * Reinit the current shadow paging mode as well; nested paging and
+     * EPT use a root CR3 which will get flushed here.
+     */
     pVM->pgm.s.enmShadowMode = PGMMODE_INVALID;
-
-    /* Reinit the current shadow paging mode as well; nested paging and EPT use a root CR3 which will get flushed here. */
     rc = PGMR3ChangeMode(pVM, PGMGetGuestMode(pVM));
     AssertRC(rc);
 
@@ -3995,6 +3976,7 @@ static void pgmPoolFlushAllInt(PPGMPOOL pPool)
 
     STAM_PROFILE_STOP(&pPool->StatFlushAllInt, a);
 }
+
 #endif /* IN_RING3 */
 
 /**
@@ -4005,7 +3987,6 @@ static void pgmPoolFlushAllInt(PPGMPOOL pPool)
  *
  * @returns VBox status code.
  * @retval  VINF_SUCCESS on success.
- * @retval  VERR_PGM_POOL_CLEARED if the deregistration of the physical handler will cause a light weight pool flush.
  * @param   pPool       The pool.
  * @param   HCPhys      The HC physical address of the shadow page.
  */
@@ -4021,6 +4002,7 @@ int pgmPoolFlushPage(PPGMPOOL pPool, PPGMPOOLPAGE pPage)
      */
     if (pPage->idx < PGMPOOL_IDX_FIRST)
     {
+        AssertFailed(); /* can no longer happen */
         Log(("pgmPoolFlushPage: special root page, rejected. enmKind=%s idx=%d\n", pgmPoolPoolKindToStr(pPage->enmKind), pPage->idx));
         return VINF_SUCCESS;
     }
@@ -4124,7 +4106,7 @@ void pgmPoolFreeByPage(PPGMPOOL pPool, PPGMPOOLPAGE pPage, uint16_t iUser, uint3
 #ifdef PGMPOOL_WITH_CACHE
     if (!pPage->fCached)
 #endif
-        pgmPoolFlushPage(pPool, pPage);  /* ASSUMES that VERR_PGM_POOL_CLEARED can be ignored here. */
+        pgmPoolFlushPage(pPool, pPage);
     STAM_PROFILE_STOP(&pPool->StatFree, a);
 }
 
@@ -4180,7 +4162,8 @@ static int pgmPoolMakeMoreFreePages(PPGMPOOL pPool, PGMPOOLKIND enmKind, uint16_
      * If we have tracking enabled, it should be possible to come up with
      * a cheap replacement strategy...
      */
-    /* @todo incompatible with long mode paging (cr3 root will be flushed) */
+    /* @todo This path no longer works (CR3 root pages will be flushed)!! */
+    AssertCompileFailed();
     Assert(!CPUMIsGuestInLongMode(pVM));
     pgmPoolFlushAllInt(pPool);
     return VERR_PGM_POOL_FLUSHED;
@@ -4240,14 +4223,9 @@ int pgmPoolAlloc(PVM pVM, RTGCPHYS GCPhys, PGMPOOLKIND enmKind, uint16_t iUser, 
         rc = pgmPoolMakeMoreFreePages(pPool, enmKind, iUser);
         if (RT_FAILURE(rc))
         {
-            if (rc != VERR_PGM_POOL_CLEARED)
-            {
-                Log(("pgmPoolAlloc: returns %Rrc (Free)\n", rc));
-                STAM_PROFILE_ADV_STOP(&pPool->StatAlloc, a);
-                return rc;
-            }
-            Log(("pgmPoolMakeMoreFreePages failed with %Rrc -> return VERR_PGM_POOL_FLUSHED\n", rc));
-            rc = VERR_PGM_POOL_FLUSHED;
+            Log(("pgmPoolAlloc: returns %Rrc (Free)\n", rc));
+            STAM_PROFILE_ADV_STOP(&pPool->StatAlloc, a);
+            return rc;
         }
         iNew = pPool->iFreeHead;
         AssertReleaseReturn(iNew != NIL_PGMPOOL_IDX, VERR_INTERNAL_ERROR);
@@ -4285,19 +4263,14 @@ int pgmPoolAlloc(PVM pVM, RTGCPHYS GCPhys, PGMPOOLKIND enmKind, uint16_t iUser, 
     int rc3 = pgmPoolTrackInsert(pPool, pPage, GCPhys, iUser, iUserTable);
     if (RT_FAILURE(rc3))
     {
-        if (rc3 != VERR_PGM_POOL_CLEARED)
-        {
-            pPool->cUsedPages--;
-            pPage->enmKind = PGMPOOLKIND_FREE;
-            pPage->GCPhys = NIL_RTGCPHYS;
-            pPage->iNext = pPool->iFreeHead;
-            pPool->iFreeHead = pPage->idx;
-            STAM_PROFILE_ADV_STOP(&pPool->StatAlloc, a);
-            Log(("pgmPoolAlloc: returns %Rrc (Insert)\n", rc3));
-            return rc3;
-        }
-        Log(("pgmPoolTrackInsert failed with %Rrc -> return VERR_PGM_POOL_FLUSHED\n", rc3));
-        rc = VERR_PGM_POOL_FLUSHED;
+        pPool->cUsedPages--;
+        pPage->enmKind = PGMPOOLKIND_FREE;
+        pPage->GCPhys = NIL_RTGCPHYS;
+        pPage->iNext = pPool->iFreeHead;
+        pPool->iFreeHead = pPage->idx;
+        STAM_PROFILE_ADV_STOP(&pPool->StatAlloc, a);
+        Log(("pgmPoolAlloc: returns %Rrc (Insert)\n", rc3));
+        return rc3;
     }
 #endif /* PGMPOOL_WITH_USER_TRACKING */
 
@@ -4354,8 +4327,10 @@ PPGMPOOLPAGE pgmPoolGetPageByHCPhys(PVM pVM, RTHCPHYS HCPhys)
     /** @todo profile this! */
     PPGMPOOL pPool = pVM->pgm.s.CTX_SUFF(pPool);
     PPGMPOOLPAGE pPage = pgmPoolGetPage(pPool, HCPhys);
-    Log4(("pgmPoolGetPageByHCPhys: HCPhys=%RHp -> %p:{.idx=%d .GCPhys=%RGp .enmKind=%s}\n",
+#ifndef DEBUG_bird /* extremely noisy */
+    Log5(("pgmPoolGetPageByHCPhys: HCPhys=%RHp -> %p:{.idx=%d .GCPhys=%RGp .enmKind=%s}\n",
           HCPhys, pPage, pPage->idx, pPage->GCPhys, pgmPoolPoolKindToStr(pPage->enmKind)));
+#endif
     return pPage;
 }
 
@@ -4373,7 +4348,7 @@ void pgmPoolFlushAll(PVM pVM)
     LogFlow(("pgmPoolFlushAll:\n"));
     pgmPoolFlushAllInt(pVM->pgm.s.CTX_SUFF(pPool));
 }
-#endif
+#endif /* IN_RING3 */
 
 #ifdef LOG_ENABLED
 static const char *pgmPoolPoolKindToStr(uint8_t enmKind)
@@ -4443,4 +4418,4 @@ static const char *pgmPoolPoolKindToStr(uint8_t enmKind)
     }
     return "Unknown kind!";
 }
-#endif
+#endif /* LOG_ENABLED*/

@@ -1575,8 +1575,10 @@ void remR3FlushTLB(CPUState *env, bool fGlobal)
  */
 void remR3ChangeCpuMode(CPUState *env)
 {
-    int rc;
-    PVM pVM = env->pVM;
+    PVM         pVM = env->pVM;
+    uint64_t    efer;
+    PCPUMCTX    pCtx;
+    int         rc;
 
     /*
      * When we're replaying loads or restoring a saved
@@ -1590,7 +1592,7 @@ void remR3ChangeCpuMode(CPUState *env)
      * Update the control registers before calling PGMChangeMode()
      * as it may need to map whatever cr3 is pointing to.
      */
-    PCPUMCTX pCtx = (PCPUMCTX)pVM->rem.s.pCtx;
+    pCtx = (PCPUMCTX)pVM->rem.s.pCtx;
     pCtx->cr0 = env->cr[0];
     pCtx->cr3 = env->cr[3];
     if ((env->cr[4] ^ pCtx->cr4) & X86_CR4_VME)
@@ -1598,14 +1600,21 @@ void remR3ChangeCpuMode(CPUState *env)
     pCtx->cr4 = env->cr[4];
 
 #ifdef TARGET_X86_64
-    rc = PGMChangeMode(pVM, env->cr[0], env->cr[4], env->efer);
-    if (rc != VINF_SUCCESS)
-        cpu_abort(env, "PGMChangeMode(, %RX64, %RX64, %RX64) -> %Rrc\n", env->cr[0], env->cr[4], env->efer, rc);
+    efer = env->efer;
 #else
-    rc = PGMChangeMode(pVM, env->cr[0], env->cr[4], 0);
-    if (rc != VINF_SUCCESS)
-        cpu_abort(env, "PGMChangeMode(, %RX64, %RX64, %RX64) -> %Rrc\n", env->cr[0], env->cr[4], 0LL, rc);
+    efer = 0;
 #endif
+    rc = PGMChangeMode(pVM, env->cr[0], env->cr[4], efer);
+    if (rc != VINF_SUCCESS)
+    {
+        if (rc >= VINF_EM_FIRST && rc <= VINF_EM_LAST)
+        {
+            Log(("PGMChangeMode(, %RX64, %RX64, %RX64) -> %Rrc -> remR3RaiseRC\n", env->cr[0], env->cr[4], efer, rc));
+            remR3RaiseRC(env->pVM, rc);
+        }
+        else
+            cpu_abort(env, "PGMChangeMode(, %RX64, %RX64, %RX64) -> %Rrc\n", env->cr[0], env->cr[4], efer, rc);
+    }
 }
 
 
@@ -2795,18 +2804,12 @@ REMR3DECL(void) REMR3NotifyPhysRamRegister(PVM pVM, RTGCPHYS GCPhys, RTGCPHYS cb
     Assert(RT_ALIGN_T(GCPhys, PAGE_SIZE, RTGCPHYS) == GCPhys);
     Assert(cb);
     Assert(RT_ALIGN_Z(cb, PAGE_SIZE) == cb);
-#ifdef VBOX_WITH_NEW_PHYS_CODE
     AssertMsg(fFlags == REM_NOTIFY_PHYS_RAM_FLAGS_RAM || fFlags == REM_NOTIFY_PHYS_RAM_FLAGS_MMIO2, ("#x\n", fFlags));
-#endif
 
     /*
      * Base ram? Update GCPhysLastRam.
      */
-#ifdef VBOX_WITH_NEW_PHYS_CODE
     if (fFlags & REM_NOTIFY_PHYS_RAM_FLAGS_RAM)
-#else
-    if (!GCPhys)
-#endif
     {
         if (GCPhys + (cb - 1) > pVM->rem.s.GCPhysLastRam)
         {
@@ -2821,80 +2824,11 @@ REMR3DECL(void) REMR3NotifyPhysRamRegister(PVM pVM, RTGCPHYS GCPhys, RTGCPHYS cb
     Assert(!pVM->rem.s.fIgnoreAll);
     pVM->rem.s.fIgnoreAll = true;
 
-#ifdef VBOX_WITH_NEW_PHYS_CODE
     cpu_register_physical_memory(GCPhys, cb, GCPhys);
-#else
-    if (!GCPhys)
-        cpu_register_physical_memory(GCPhys, cb, GCPhys | IO_MEM_RAM_MISSING);
-    else
-    {
-        if (fFlags & MM_RAM_FLAGS_RESERVED)
-            cpu_register_physical_memory(GCPhys, cb, IO_MEM_UNASSIGNED);
-        else
-            cpu_register_physical_memory(GCPhys, cb, GCPhys);
-    }
-#endif
     Assert(pVM->rem.s.fIgnoreAll);
     pVM->rem.s.fIgnoreAll = false;
 }
 
-#ifndef VBOX_WITH_NEW_PHYS_CODE
-
-/**
- * Notification about a successful PGMR3PhysRegisterChunk() call.
- *
- * @param   pVM         VM handle.
- * @param   GCPhys      The physical address the RAM.
- * @param   cb          Size of the memory.
- * @param   pvRam       The HC address of the RAM.
- * @param   fFlags      Flags of the MM_RAM_FLAGS_* defines.
- */
-REMR3DECL(void) REMR3NotifyPhysRamChunkRegister(PVM pVM, RTGCPHYS GCPhys, RTUINT cb, RTHCUINTPTR pvRam, unsigned fFlags)
-{
-    Log(("REMR3NotifyPhysRamChunkRegister: GCPhys=%RGp cb=%d pvRam=%p fFlags=%d\n", GCPhys, cb, pvRam, fFlags));
-    VM_ASSERT_EMT(pVM);
-
-    /*
-     * Validate input - we trust the caller.
-     */
-    Assert(pvRam);
-    Assert(RT_ALIGN(pvRam, PAGE_SIZE) == pvRam);
-    Assert(RT_ALIGN_T(GCPhys, PAGE_SIZE, RTGCPHYS) == GCPhys);
-    Assert(cb == PGM_DYNAMIC_CHUNK_SIZE);
-    Assert(fFlags == 0 /* normal RAM */);
-    Assert(!pVM->rem.s.fIgnoreAll);
-    pVM->rem.s.fIgnoreAll = true;
-
-    cpu_register_physical_memory(GCPhys, cb, GCPhys);
-
-    Assert(pVM->rem.s.fIgnoreAll);
-    pVM->rem.s.fIgnoreAll = false;
-}
-
-
-/**
- *  Grows dynamically allocated guest RAM.
- *  Will raise a fatal error if the operation fails.
- *
- * @param   physaddr    The physical address.
- */
-void remR3GrowDynRange(unsigned long physaddr)
-{
-    int rc;
-    PVM pVM = cpu_single_env->pVM;
-
-    LogFlow(("remR3GrowDynRange %RGp\n", (RTGCPHYS)physaddr));
-    const RTGCPHYS GCPhys = physaddr;
-    rc = PGM3PhysGrowRange(pVM, &GCPhys);
-    if (RT_SUCCESS(rc))
-        return;
-
-    LogRel(("\nUnable to allocate guest RAM chunk at %RGp\n", (RTGCPHYS)physaddr));
-    cpu_abort(cpu_single_env, "Unable to allocate guest RAM chunk at %RGp\n", (RTGCPHYS)physaddr);
-    AssertFatalFailed();
-}
-
-#endif /* !VBOX_WITH_NEW_PHYS_CODE */
 
 /**
  * Notification about a successful MMR3PhysRomRegister() call.

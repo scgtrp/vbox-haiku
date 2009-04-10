@@ -327,6 +327,12 @@ class Utf8Str
 {
 public:
 
+    enum CaseSensitivity
+    {
+        CaseSensitive,
+        CaseInsensitive
+    };
+
     typedef char *String;
     typedef const char *ConstString;
 
@@ -408,28 +414,121 @@ public:
         return *this;
     }
 
-    int compare (const char *s) const
+    void append(const Utf8Str &that)
     {
-        if (str == s)
+        size_t cbThis = length();
+        size_t cbThat = that.length();
+
+        if (cbThat)
+        {
+            size_t cbBoth = cbThis + cbThat + 1;
+
+            // @todo optimize with realloc() once the memory management is fixed
+            char *pszTemp;
+#if !defined (VBOX_WITH_XPCOM)
+            pszTemp = (char*)::RTMemTmpAlloc(cbBoth);
+#else
+            pszTemp = (char*)nsMemory::Alloc(cbBoth);
+#endif
+            if (str)
+            {
+                memcpy(pszTemp, str, cbThis);
+                setNull();
+            }
+            if (that.str)
+                memcpy(pszTemp + cbThis, that.str, cbThat);
+            pszTemp[cbThis + cbThat] = '\0';
+
+            str = pszTemp;
+        }
+    }
+
+    int compare (const char *pcsz, CaseSensitivity cs = CaseSensitive) const
+    {
+        if (str == pcsz)
             return 0;
         if (str == NULL)
             return -1;
-        if (s == NULL)
+        if (pcsz == NULL)
             return 1;
 
-        return ::strcmp (str, s);
+        if (cs == CaseSensitive)
+            return ::RTStrCmp(str, pcsz);
+        else
+            return ::RTStrICmp(str, pcsz);
     }
 
-    bool operator == (const Utf8Str &that) const { return !compare (that.str); }
-    bool operator != (const Utf8Str &that) const { return !!compare (that.str); }
+    int compare (const Utf8Str &that, CaseSensitivity cs = CaseSensitive) const
+    {
+        return compare (that.str, cs);
+    }
+
+    bool operator == (const Utf8Str &that) const { return !compare (that); }
+    bool operator != (const Utf8Str &that) const { return !!compare (that); }
     bool operator == (const char *that) const { return !compare (that); }
     bool operator != (const char *that) const { return !!compare (that); }
-    bool operator < (const Utf8Str &that) const { return compare (that.str) < 0; }
+    bool operator < (const Utf8Str &that) const { return compare (that) < 0; }
     bool operator < (const char *that) const { return compare (that) < 0; }
 
-    int compareIgnoreCase(const char *pcsz) const
+    bool endsWith (const Utf8Str &that, CaseSensitivity cs = CaseSensitive) const
     {
-        return ::RTStrICmp(str, pcsz);
+        if (isNull() || that.isNull())
+            return false;
+
+        size_t l1 = length();
+        size_t l2 = that.length();
+        if (l1 < l2)
+            return false;
+
+        size_t l = l1 - l2;
+        if (cs == CaseSensitive)
+            return ::RTStrCmp(&str[l], that.str) == 0;
+        else
+            return ::RTStrICmp(&str[l], that.str) == 0;
+    }
+
+    bool startsWith (const Utf8Str &that, CaseSensitivity cs = CaseSensitive) const
+    {
+        if (isNull() || that.isNull())
+            return false;
+
+        size_t l1 = length();
+        size_t l2 = that.length();
+        if (l1 < l2)
+            return false;
+
+        if (cs == CaseSensitive)
+            return ::RTStrNCmp(str, that.str, l2) == 0;
+        else
+            return ::RTStrNICmp(str, that.str, l2) == 0;
+    }
+
+    bool contains (const Utf8Str &that, CaseSensitivity cs = CaseSensitive) const
+    {
+        if (cs == CaseSensitive)
+            return ::RTStrStr (str, that.str) != NULL;
+        else
+            return ::RTStrIStr (str, that.str) != NULL;
+    }
+
+    Utf8Str& toLower()
+    {
+        if (isEmpty())
+            return *this;
+
+        ::RTStrToLower(str);
+
+        return *this;
+    }
+
+    Utf8Str& toUpper()
+    {
+        if (isEmpty())
+            return *this;
+
+        ::RTStrToUpper(str);
+
+        return *this;
     }
 
     bool isNull() const { return str == NULL; }
@@ -507,6 +606,12 @@ public:
     static const size_t npos;
 
     /**
+     * Looks for pcszFind in "this" starting at "pos" and returns its position,
+     * counting from the beginning of "this" at 0. Returns npos if not found.
+     */
+    size_t find(const char *pcszFind, size_t pos = 0) const;
+
+    /**
      * Returns a substring of "this" as a new Utf8Str. Works exactly like
      * its equivalent in std::string except that this interprets pos and n
      * as UTF-8 codepoints instead of bytes. With the default parameters "0"
@@ -515,6 +620,50 @@ public:
      * @param n Number of codepoints to copy, starting with the one at "pos".
      */
     Utf8Str substr(size_t pos = 0, size_t n = npos) const;
+
+    /**
+     * Attempts to convert the member string into an 32-bit integer.
+     *
+     * @returns 32-bit unsigned number on success.
+     * @returns 0 on failure.
+     */
+    int toInt32() const
+    {
+        return RTStrToInt32(str);
+    }
+
+    /**
+     * Attempts to convert the member string into an unsigned 32-bit integer.
+     *
+     * @returns 32-bit unsigned number on success.
+     * @returns 0 on failure.
+     */
+    int toUInt32() const
+    {
+        return RTStrToUInt32(str);
+    }
+
+    /**
+     * Attempts to convert the member string into an 64-bit integer.
+     *
+     * @returns 64-bit unsigned number on success.
+     * @returns 0 on failure.
+     */
+    int64_t toInt64() const
+    {
+        return RTStrToInt64(str);
+    }
+
+    /**
+     * Attempts to convert the member string into an unsigned 64-bit integer.
+     *
+     * @returns 64-bit unsigned number on success.
+     * @returns 0 on failure.
+     */
+    uint64_t toUInt64() const
+    {
+        return RTStrToUInt64(str);
+    }
 
     /**
      * Attempts to convert the member string into an unsigned 64-bit integer.

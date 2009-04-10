@@ -110,14 +110,15 @@
 #include <SerialPortImpl.h>
 #include <ParallelPortImpl.h>
 #include <USBControllerImpl.h>
+#include "DHCPServerRunner.h"
+#include "DHCPServerImpl.h"
 #ifdef VBOX_WITH_USB
 # include <HostUSBDeviceImpl.h>
 # include <USBDeviceImpl.h>
 #endif
-#include <SATAControllerImpl.h>
+#include <StorageControllerImpl.h>
 #include <AudioAdapterImpl.h>
 #include <SystemPropertiesImpl.h>
-#include <Collection.h>
 
 /* implement nsISupports parts of our objects with support for nsIClassInfo */
 
@@ -194,6 +195,9 @@ NS_IMPL_THREADSAFE_ISUPPORTS1_CI(HostFloppyDrive, IHostFloppyDrive)
 NS_DECL_CLASSINFO(HostNetworkInterface)
 NS_IMPL_THREADSAFE_ISUPPORTS1_CI(HostNetworkInterface, IHostNetworkInterface)
 
+NS_DECL_CLASSINFO(DHCPServer)
+NS_IMPL_THREADSAFE_ISUPPORTS1_CI(DHCPServer, IDHCPServer)
+
 NS_DECL_CLASSINFO(GuestOSType)
 NS_IMPL_THREADSAFE_ISUPPORTS1_CI(GuestOSType, IGuestOSType)
 
@@ -209,8 +213,8 @@ NS_IMPL_THREADSAFE_ISUPPORTS1_CI(ParallelPort, IParallelPort)
 NS_DECL_CLASSINFO(USBController)
 NS_IMPL_THREADSAFE_ISUPPORTS1_CI(USBController, IUSBController)
 
-NS_DECL_CLASSINFO(SATAController)
-NS_IMPL_THREADSAFE_ISUPPORTS1_CI(SATAController, ISATAController)
+NS_DECL_CLASSINFO(StorageController)
+NS_IMPL_THREADSAFE_ISUPPORTS1_CI(StorageController, IStorageController)
 
 #ifdef VBOX_WITH_USB
 NS_DECL_CLASSINFO(USBDeviceFilter)
@@ -238,12 +242,6 @@ NS_IMPL_THREADSAFE_ISUPPORTS1_CI(PerformanceMetric, IPerformanceMetric)
 
 NS_DECL_CLASSINFO(BIOSSettings)
 NS_IMPL_THREADSAFE_ISUPPORTS1_CI(BIOSSettings, IBIOSSettings)
-
-/* collections and enumerators */
-
-#ifdef VBOX_WITH_USB
-COM_IMPL_READONLY_ENUM_AND_COLLECTION(HostUSBDevice)
-#endif
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -776,7 +774,7 @@ class ForceQuitEvent : public MyEvent
     }
 };
 
-static void signal_handler (int sig)
+static void signal_handler (int /* sig */)
 {
     if (gEventQ && gKeepRunning)
     {
@@ -1113,7 +1111,7 @@ int main (int argc, char **argv)
             int  iSize;
 
             iSize = snprintf (szBuf, sizeof(szBuf),
-                              "Sun xVM VirtualBox XPCOM Server Version "
+                              "Sun VirtualBox XPCOM Server Version "
                               VBOX_VERSION_STRING);
             for (int i=iSize; i>0; i--)
                 putchar('*');

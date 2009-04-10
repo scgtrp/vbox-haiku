@@ -114,7 +114,8 @@ typedef enum SCSICMD
     SCSI_READ_16                        = 0x88,
     SCSI_WRITE_16                       = 0x8a,
     SCSI_READ_6                         = 0x08,
-    SCSI_WRITE_6                        = 0x0a
+    SCSI_WRITE_6                        = 0x0a,
+    SCSI_LOG_SENSE                      = 0x4d
 } SCSICMD;
 
 /* Mode page codes for mode sense/select commands. */
@@ -144,6 +145,11 @@ typedef enum SCSICMD
 #define SCSI_STATUS_ACA_ACTIVE                  0x30
 #define SCSI_STATUS_TASK_ABORTED                0x40
 
+/* Sense data response codes - This is the first byte in the sense data */
+#define SCSI_SENSE_RESPONSE_CODE_CURR_FIXED     0x70
+#define SCSI_SENSE_RESPONSE_CODE_DEFERRED_FIXED 0x71
+#define SCSI_SENSE_RESPONSE_CODE_CURR_DESC      0x72
+#define SCSI_SENSE_RESPONSE_CODE_DEFERRED_DESC  0x73
 
 /* Sense keys */
 #define SCSI_SENSE_NONE             0

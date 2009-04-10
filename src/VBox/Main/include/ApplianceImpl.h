@@ -33,6 +33,7 @@ namespace xml
 }
 
 class VirtualBox;
+class Progress;
 
 class ATL_NO_VTABLE Appliance :
     public VirtualBoxBaseWithChildrenNEXT,
@@ -40,9 +41,7 @@ class ATL_NO_VTABLE Appliance :
     public VirtualBoxSupportTranslation <Appliance>,
     public IAppliance
 {
-
 public:
-
     VIRTUALBOXBASE_ADD_ERRORINFO_SUPPORT (Appliance)
 
     DECLARE_NOT_AGGREGATABLE(Appliance)
@@ -77,7 +76,9 @@ public:
     STDMETHOD(Read)(IN_BSTR path);
     STDMETHOD(Interpret)(void);
     STDMETHOD(ImportMachines)(IProgress **aProgress);
-    STDMETHOD(Write)(IN_BSTR path, IProgress **aProgress);
+    STDMETHOD(Write)(IN_BSTR format, IN_BSTR path, IProgress **aProgress);
+    STDMETHOD(GetWarnings)(ComSafeArrayOut(BSTR, aWarnings));
+
     /* public methods only for internal purposes */
 
     /* private instance data */
@@ -95,13 +96,15 @@ private:
 
     HRESULT searchUniqueVMName(Utf8Str& aName) const;
     HRESULT searchUniqueDiskImageFilePath(Utf8Str& aName) const;
-    uint32_t calcMaxProgress();
+    HRESULT setUpProgress(ComObjPtr<Progress> &pProgress, const Bstr &bstrDescription);
+    void waitForAsyncProgress(ComObjPtr<Progress> &pProgressThis, ComPtr<IProgress> &pProgressAsync);
+    void addWarning(const char* aWarning, ...);
 
     struct TaskImportMachines;  /* Worker thread for import */
     static DECLCALLBACK(int) taskThreadImportMachines(RTTHREAD thread, void *pvUser);
 
-    struct TaskExportOVF;       /* Worker thread for export */
-    static DECLCALLBACK(int) taskThreadExportOVF(RTTHREAD thread, void *pvUser);
+    struct TaskWriteOVF;       /* Worker thread for export */
+    static DECLCALLBACK(int) taskThreadWriteOVF(RTTHREAD thread, void *pvUser);
 
     friend class Machine;
 };
@@ -114,6 +117,8 @@ struct VirtualSystemDescriptionEntry
     Utf8Str strOvf;                         // original OVF value (type-dependent)
     Utf8Str strVbox;                        // configuration value (type-dependent)
     Utf8Str strExtraConfig;                 // extra configuration key=value strings (type-dependent)
+
+    uint32_t ulSizeMB;                      // hard disk images only: size of the uncompressed image in MB
 };
 
 class ATL_NO_VTABLE VirtualSystemDescription :
@@ -123,6 +128,7 @@ class ATL_NO_VTABLE VirtualSystemDescription :
     public IVirtualSystemDescription
 {
     friend class Appliance;
+
 public:
     VIRTUALBOXBASE_ADD_ERRORINFO_SUPPORT (VirtualSystemDescription)
 
@@ -159,11 +165,24 @@ public:
                               ComSafeArrayOut(BSTR, aVboxValues),
                               ComSafeArrayOut(BSTR, aExtraConfigValues));
 
+    STDMETHOD(GetDescriptionByType)(VirtualSystemDescriptionType_T aType,
+                                    ComSafeArrayOut(VirtualSystemDescriptionType_T, aTypes),
+                                    ComSafeArrayOut(BSTR, aRefs),
+                                    ComSafeArrayOut(BSTR, aOvfValues),
+                                    ComSafeArrayOut(BSTR, aVboxValues),
+                                    ComSafeArrayOut(BSTR, aExtraConfigValues));
+
+    STDMETHOD(GetValuesByType)(VirtualSystemDescriptionType_T aType,
+                               VirtualSystemDescriptionValueType_T aWhich,
+                               ComSafeArrayOut(BSTR, aValues));
+
     STDMETHOD(SetFinalValues)(ComSafeArrayIn(BOOL, aEnabled),
                               ComSafeArrayIn(IN_BSTR, aVboxValues),
                               ComSafeArrayIn(IN_BSTR, aExtraConfigValues));
 
-    STDMETHOD(GetWarnings)(ComSafeArrayOut(BSTR, aWarnings));
+    STDMETHOD(AddDescription)(VirtualSystemDescriptionType_T aType,
+                              IN_BSTR aVboxValue,
+                              IN_BSTR aExtraConfigValue);
 
     /* public methods only for internal purposes */
 
@@ -171,9 +190,8 @@ public:
                   const Utf8Str &strRef,
                   const Utf8Str &aOrigValue,
                   const Utf8Str &aAutoValue,
+                  uint32_t ulSizeMB = 0,
                   const Utf8Str &strExtraConfig = "");
-
-    void addWarning(const char* aWarning, ...);
 
     std::list<VirtualSystemDescriptionEntry*> findByType(VirtualSystemDescriptionType_T aType);
     const VirtualSystemDescriptionEntry* findControllerFromID(uint32_t id);
@@ -182,6 +200,9 @@ public:
 private:
     struct Data;
     Data *m;
+
+    friend class Machine;
 };
 
 #endif // ____H_APPLIANCEIMPL
+/* vi: set tabstop=4 shiftwidth=4 expandtab: */

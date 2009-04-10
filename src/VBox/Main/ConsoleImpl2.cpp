@@ -39,6 +39,10 @@
 #include <iprt/path.h>
 #include <iprt/dir.h>
 #include <iprt/param.h>
+#if 0 /* enable to play with lots of memory. */
+# include <iprt/env.h>
+# include <iprt/string.h>
+#endif
 
 #include <VBox/vmapi.h>
 #include <VBox/err.h>
@@ -79,21 +83,30 @@
 # include <devguid.h>
 #endif
 
+#if !defined(RT_OS_WINDOWS) && defined(VBOX_WITH_NETFLT)
+# include <HostNetworkInterfaceImpl.h>
+# include <netif.h>
+#endif
+
+#include "DHCPServerRunner.h"
+
 #include <VBox/param.h>
 
+/* Comment out the following line to remove VMWare compatibility hack. */
+#define VMWARE_NET_IN_SLOT_11
 
 /**
- * Translate IDEControllerType_T to string representation.
+ * Translate IDE StorageControllerType_T to string representation.
  */
-const char *controllerString(IDEControllerType_T enmType)
+const char* controllerString(StorageControllerType_T enmType)
 {
     switch (enmType)
     {
-        case IDEControllerType_PIIX3:
+        case StorageControllerType_PIIX3:
             return "PIIX3";
-        case IDEControllerType_PIIX4:
+        case StorageControllerType_PIIX4:
             return "PIIX4";
-        case IDEControllerType_ICH6:
+        case StorageControllerType_ICH6:
             return "ICH6";
         default:
             return "Unknown";
@@ -184,7 +197,8 @@ DECLCALLBACK(int) Console::configConstructor(PVM pVM, void *pvConsole)
     ULONG cRamMBs;
     hrc = pMachine->COMGETTER(MemorySize)(&cRamMBs);                                H();
 #if 0 /* enable to play with lots of memory. */
-    cRamMBs = 8 * 1024;
+    if (RTEnvExist("VBOX_RAM_SIZE"))
+        cRamMBs = RTStrToUInt64(RTEnvGet("VBOX_RAM_SIZE")) * 1024;
 #endif
     uint64_t const cbRam = cRamMBs * (uint64_t)_1M;
     uint32_t const cbRamHole = MM_RAM_HOLE_SIZE_DEFAULT;
@@ -233,7 +247,8 @@ DECLCALLBACK(int) Console::configConstructor(PVM pVM, void *pvConsole)
 #ifdef RT_OS_DARWIN
     rc = CFGMR3InsertInteger(pRoot, "HwVirtExtForced",      fHWVirtExEnabled);      RC_CHECK();
 #else
-    rc = CFGMR3InsertInteger(pRoot, "HwVirtExtForced",      0);                     RC_CHECK();
+    /* With more than 4GB PGM will use different RAMRANGE sizes for raw mode and hv mode to optimize lookup times. */
+    rc = CFGMR3InsertInteger(pRoot, "HwVirtExtForced",      fHWVirtExEnabled && cbRam > (_4G - cbRamHole)); RC_CHECK();
 #endif
 
     PCFGMNODE pHWVirtExt;
@@ -296,12 +311,6 @@ DECLCALLBACK(int) Console::configConstructor(PVM pVM, void *pvConsole)
 
     BOOL fPXEDebug;
     hrc = biosSettings->COMGETTER(PXEDebugEnabled)(&fPXEDebug);                      H();
-
-    /*
-     * Virtual IDE controller type.
-     */
-    IDEControllerType_T controllerType;
-    hrc = biosSettings->COMGETTER(IDEControllerType)(&controllerType);               H();
 
     /*
      * PDM config.
@@ -798,151 +807,262 @@ DECLCALLBACK(int) Console::configConstructor(PVM pVM, void *pvConsole)
     rc = CFGMR3InsertInteger(pCfg,  "Object", (uintptr_t)pDisplay);                 RC_CHECK();
 
     /*
-     * IDE (update this when the main interface changes)
+     * Storage controllers.
      */
-    rc = CFGMR3InsertNode(pDevices, "piix3ide", &pDev); /* piix3 */                 RC_CHECK();
-    rc = CFGMR3InsertNode(pDev,     "0", &pIdeInst);                                RC_CHECK();
-    rc = CFGMR3InsertInteger(pIdeInst, "Trusted",              1);  /* boolean */   RC_CHECK();
-    rc = CFGMR3InsertInteger(pIdeInst, "PCIDeviceNo",          1);                  RC_CHECK();
-    Assert(!afPciDeviceNo[1]);
-    afPciDeviceNo[1] = true;
-    rc = CFGMR3InsertInteger(pIdeInst, "PCIFunctionNo",        1);                  RC_CHECK();
-    rc = CFGMR3InsertNode(pIdeInst,    "Config", &pCfg);                            RC_CHECK();
-    rc = CFGMR3InsertString(pCfg,  "Type", controllerString(controllerType));       RC_CHECK();
+    com::SafeIfaceArray<IStorageController> ctrls;
+    hrc = pMachine->
+        COMGETTER(StorageControllers) (ComSafeArrayAsOutParam (ctrls));             H();
 
-    /* Attach the status driver */
-    rc = CFGMR3InsertNode(pIdeInst,    "LUN#999", &pLunL0);                         RC_CHECK();
-    rc = CFGMR3InsertString(pLunL0, "Driver",               "MainStatus");          RC_CHECK();
-    rc = CFGMR3InsertNode(pLunL0,   "Config", &pCfg);                               RC_CHECK();
-    rc = CFGMR3InsertInteger(pCfg,  "papLeds", (uintptr_t)&pConsole->mapIDELeds[0]);RC_CHECK();
-    rc = CFGMR3InsertInteger(pCfg,  "First",    0);                                 RC_CHECK();
-    rc = CFGMR3InsertInteger(pCfg,  "Last",     3);                                 RC_CHECK();
-
-    /*
-     * SATA controller
-     */
-    ComPtr<ISATAController> sataController;
-    hrc = pMachine->COMGETTER(SATAController)(sataController.asOutParam());
-    BOOL enabled = FALSE;
-
-    if (sataController)
+    for (size_t i = 0; i < ctrls.size(); ++ i)
     {
-        hrc = sataController->COMGETTER(Enabled)(&enabled);                         H();
+        PCFGMNODE pCtlInst = NULL;     /* /Devices/<name>/0/ */
+        StorageControllerType_T enmCtrlType;
+        StorageBus_T enmBus;
+        bool fSCSI = false;
+        BSTR controllerName;
 
-        if (enabled)
+        rc = ctrls[i]->COMGETTER(ControllerType)(&enmCtrlType);                     H();
+        rc = ctrls[i]->COMGETTER(Bus)(&enmBus);                                     H();
+        rc = ctrls[i]->COMGETTER(Name)(&controllerName);                            H();
+
+        switch(enmCtrlType)
         {
-            rc = CFGMR3InsertNode(pDevices, "ahci", &pDev);                         RC_CHECK();
-            rc = CFGMR3InsertNode(pDev,     "0", &pSataInst);                       RC_CHECK();
-            rc = CFGMR3InsertInteger(pSataInst, "Trusted",              1);         RC_CHECK();
-            rc = CFGMR3InsertInteger(pSataInst, "PCIDeviceNo",          13);        RC_CHECK();
-            Assert(!afPciDeviceNo[13]);
-            afPciDeviceNo[13] = true;
-            rc = CFGMR3InsertInteger(pSataInst, "PCIFunctionNo",        0);         RC_CHECK();
-            rc = CFGMR3InsertNode(pSataInst,    "Config", &pCfg);                   RC_CHECK();
-
-            ULONG cPorts = 0;
-            hrc = sataController->COMGETTER(PortCount)(&cPorts);                    H();
-            rc = CFGMR3InsertInteger(pCfg, "PortCount", cPorts);                    RC_CHECK();
-
-            /* Needed configuration values for the bios. */
-            if (pBiosCfg)
+            case StorageControllerType_LsiLogic:
             {
-                rc = CFGMR3InsertString(pBiosCfg, "SataHardDiskDevice", "ahci");        RC_CHECK();
+                rc = CFGMR3InsertNode(pDevices, "lsilogicscsi", &pDev);                RC_CHECK();
+                rc = CFGMR3InsertNode(pDev,     "0", &pCtlInst);                       RC_CHECK();
+                rc = CFGMR3InsertInteger(pCtlInst, "Trusted",              1);         RC_CHECK();
+                rc = CFGMR3InsertInteger(pCtlInst, "PCIDeviceNo",          20);        RC_CHECK();
+                Assert(!afPciDeviceNo[20]);
+                afPciDeviceNo[20] = true;
+                rc = CFGMR3InsertInteger(pCtlInst, "PCIFunctionNo",        0);         RC_CHECK();
+                rc = CFGMR3InsertNode(pCtlInst,    "Config", &pCfg);                   RC_CHECK();
+                fSCSI = true;
+
+                /* Attach the status driver */
+                rc = CFGMR3InsertNode(pCtlInst, "LUN#999", &pLunL0);                              RC_CHECK();
+                rc = CFGMR3InsertString(pLunL0, "Driver",               "MainStatus");            RC_CHECK();
+                rc = CFGMR3InsertNode(pLunL0,   "Config", &pCfg);                                 RC_CHECK();
+                rc = CFGMR3InsertInteger(pCfg,  "papLeds", (uintptr_t)&pConsole->mapSCSILeds[0]); RC_CHECK();
+                rc = CFGMR3InsertInteger(pCfg,  "First",    0);                                   RC_CHECK();
+                rc = CFGMR3InsertInteger(pCfg,  "Last",     15);                                  RC_CHECK();
+                break;
             }
-
-            for (uint32_t i = 0; i < 4; i++)
+            case StorageControllerType_BusLogic:
             {
-                static const char *s_apszConfig[4] =
-                { "PrimaryMaster", "PrimarySlave", "SecondaryMaster", "SecondarySlave" };
-                static const char *s_apszBiosConfig[4] =
-                { "SataPrimaryMasterLUN", "SataPrimarySlaveLUN", "SataSecondaryMasterLUN", "SataSecondarySlaveLUN" };
+                rc = CFGMR3InsertNode(pDevices, "buslogic", &pDev);                    RC_CHECK();
+                rc = CFGMR3InsertNode(pDev,     "0", &pCtlInst);                       RC_CHECK();
+                rc = CFGMR3InsertInteger(pCtlInst, "Trusted",              1);         RC_CHECK();
+                rc = CFGMR3InsertInteger(pCtlInst, "PCIDeviceNo",          21);        RC_CHECK();
+                Assert(!afPciDeviceNo[21]);
+                afPciDeviceNo[21] = true;
+                rc = CFGMR3InsertInteger(pCtlInst, "PCIFunctionNo",        0);         RC_CHECK();
+                rc = CFGMR3InsertNode(pCtlInst,    "Config", &pCfg);                   RC_CHECK();
+                fSCSI = true;
 
-                LONG lPortNumber = -1;
-                hrc = sataController->GetIDEEmulationPort(i, &lPortNumber);             H();
-                rc = CFGMR3InsertInteger(pCfg, s_apszConfig[i], lPortNumber);           RC_CHECK();
+                /* Attach the status driver */
+                rc = CFGMR3InsertNode(pCtlInst, "LUN#999", &pLunL0);                              RC_CHECK();
+                rc = CFGMR3InsertString(pLunL0, "Driver",               "MainStatus");            RC_CHECK();
+                rc = CFGMR3InsertNode(pLunL0,   "Config", &pCfg);                                 RC_CHECK();
+                rc = CFGMR3InsertInteger(pCfg,  "papLeds", (uintptr_t)&pConsole->mapSCSILeds[0]); RC_CHECK();
+                rc = CFGMR3InsertInteger(pCfg,  "First",    0);                                   RC_CHECK();
+                rc = CFGMR3InsertInteger(pCfg,  "Last",     15);                                  RC_CHECK();
+                break;
+            }
+            case StorageControllerType_IntelAhci:
+            {
+                rc = CFGMR3InsertNode(pDevices, "ahci", &pDev);                        RC_CHECK();
+                rc = CFGMR3InsertNode(pDev,     "0", &pCtlInst);                       RC_CHECK();
+                rc = CFGMR3InsertInteger(pCtlInst, "Trusted",              1);         RC_CHECK();
+                rc = CFGMR3InsertInteger(pCtlInst, "PCIDeviceNo",          13);        RC_CHECK();
+                Assert(!afPciDeviceNo[13]);
+                afPciDeviceNo[13] = true;
+                rc = CFGMR3InsertInteger(pCtlInst, "PCIFunctionNo",        0);         RC_CHECK();
+                rc = CFGMR3InsertNode(pCtlInst,    "Config", &pCfg);                   RC_CHECK();
+
+                ULONG cPorts = 0;
+                hrc = ctrls[i]->COMGETTER(PortCount)(&cPorts);                          H();
+                rc = CFGMR3InsertInteger(pCfg, "PortCount", cPorts);                    RC_CHECK();
+
+                /* Needed configuration values for the bios. */
                 if (pBiosCfg)
                 {
-                    rc = CFGMR3InsertInteger(pBiosCfg, s_apszBiosConfig[i], lPortNumber);   RC_CHECK();
+                    rc = CFGMR3InsertString(pBiosCfg, "SataHardDiskDevice", "ahci");        RC_CHECK();
                 }
+
+                for (uint32_t j = 0; j < 4; j++)
+                {
+                    static const char *s_apszConfig[4] =
+                    { "PrimaryMaster", "PrimarySlave", "SecondaryMaster", "SecondarySlave" };
+                    static const char *s_apszBiosConfig[4] =
+                    { "SataPrimaryMasterLUN", "SataPrimarySlaveLUN", "SataSecondaryMasterLUN", "SataSecondarySlaveLUN" };
+
+                    LONG lPortNumber = -1;
+                    hrc = ctrls[i]->GetIDEEmulationPort(j, &lPortNumber);                   H();
+                    rc = CFGMR3InsertInteger(pCfg, s_apszConfig[j], lPortNumber);           RC_CHECK();
+                    if (pBiosCfg)
+                    {
+                        rc = CFGMR3InsertInteger(pBiosCfg, s_apszBiosConfig[j], lPortNumber);   RC_CHECK();
+                    }
+                }
+
+                /* Attach the status driver */
+                rc = CFGMR3InsertNode(pCtlInst, "LUN#999", &pLunL0);                              RC_CHECK();
+                rc = CFGMR3InsertString(pLunL0, "Driver",               "MainStatus");            RC_CHECK();
+                rc = CFGMR3InsertNode(pLunL0,   "Config", &pCfg);                                 RC_CHECK();
+                AssertRelease(cPorts <= RT_ELEMENTS(pConsole->mapSATALeds));
+                rc = CFGMR3InsertInteger(pCfg,  "papLeds", (uintptr_t)&pConsole->mapSATALeds[0]); RC_CHECK();
+                rc = CFGMR3InsertInteger(pCfg,  "First",    0);                                   RC_CHECK();
+                rc = CFGMR3InsertInteger(pCfg,  "Last",     cPorts - 1);                          RC_CHECK();
+                break;
             }
+            case StorageControllerType_PIIX3:
+            case StorageControllerType_PIIX4:
+            case StorageControllerType_ICH6:
+            {
+                /*
+                 * IDE (update this when the main interface changes)
+                 */
+                rc = CFGMR3InsertNode(pDevices, "piix3ide", &pDev); /* piix3 */                 RC_CHECK();
+                rc = CFGMR3InsertNode(pDev,     "0", &pCtlInst);                                RC_CHECK();
+                rc = CFGMR3InsertInteger(pCtlInst, "Trusted",              1);  /* boolean */   RC_CHECK();
+                rc = CFGMR3InsertInteger(pCtlInst, "PCIDeviceNo",          1);                  RC_CHECK();
+                Assert(!afPciDeviceNo[1]);
+                afPciDeviceNo[1] = true;
+                rc = CFGMR3InsertInteger(pCtlInst, "PCIFunctionNo",        1);                  RC_CHECK();
+                rc = CFGMR3InsertNode(pCtlInst,    "Config", &pCfg);                            RC_CHECK();
+                rc = CFGMR3InsertString(pCfg,  "Type", controllerString(enmCtrlType));          RC_CHECK();
 
-            /* Attach the status driver */
-            rc = CFGMR3InsertNode(pSataInst,"LUN#999", &pLunL0);                              RC_CHECK();
-            rc = CFGMR3InsertString(pLunL0, "Driver",               "MainStatus");            RC_CHECK();
-            rc = CFGMR3InsertNode(pLunL0,   "Config", &pCfg);                                 RC_CHECK();
-            AssertRelease(cPorts <= RT_ELEMENTS(pConsole->mapSATALeds));
-            rc = CFGMR3InsertInteger(pCfg,  "papLeds", (uintptr_t)&pConsole->mapSATALeds[0]); RC_CHECK();
-            rc = CFGMR3InsertInteger(pCfg,  "First",    0);                                   RC_CHECK();
-            rc = CFGMR3InsertInteger(pCfg,  "Last",     cPorts - 1);                          RC_CHECK();
+                /* Attach the status driver */
+                rc = CFGMR3InsertNode(pCtlInst,    "LUN#999", &pLunL0);                         RC_CHECK();
+                rc = CFGMR3InsertString(pLunL0, "Driver",               "MainStatus");          RC_CHECK();
+                rc = CFGMR3InsertNode(pLunL0,   "Config", &pCfg);                               RC_CHECK();
+                rc = CFGMR3InsertInteger(pCfg,  "papLeds", (uintptr_t)&pConsole->mapIDELeds[0]);RC_CHECK();
+                rc = CFGMR3InsertInteger(pCfg,  "First",    0);                                 RC_CHECK();
+                rc = CFGMR3InsertInteger(pCfg,  "Last",     3);                                 RC_CHECK();
+
+                /*
+                 * Attach the CD/DVD driver now
+                 */
+                ComPtr<IDVDDrive> dvdDrive;
+                hrc = pMachine->COMGETTER(DVDDrive)(dvdDrive.asOutParam());                     H();
+                if (dvdDrive)
+                {
+                    // ASSUME: DVD drive is always attached to LUN#2 (i.e. secondary IDE master)
+                    rc = CFGMR3InsertNode(pCtlInst,    "LUN#2", &pLunL0);                       RC_CHECK();
+                    ComPtr<IHostDVDDrive> hostDvdDrive;
+                    hrc = dvdDrive->GetHostDrive(hostDvdDrive.asOutParam());                    H();
+                    if (hostDvdDrive)
+                    {
+                        pConsole->meDVDState = DriveState_HostDriveCaptured;
+                        rc = CFGMR3InsertString(pLunL0, "Driver",      "HostDVD");              RC_CHECK();
+                        rc = CFGMR3InsertNode(pLunL0,   "Config", &pCfg);                       RC_CHECK();
+                        hrc = hostDvdDrive->COMGETTER(Name)(&str);                              H();
+                        STR_CONV();
+                        rc = CFGMR3InsertString(pCfg,   "Path",         psz);                   RC_CHECK();
+                        STR_FREE();
+                        BOOL fPassthrough;
+                        hrc = dvdDrive->COMGETTER(Passthrough)(&fPassthrough);                  H();
+                        rc = CFGMR3InsertInteger(pCfg,  "Passthrough",  !!fPassthrough);        RC_CHECK();
+                    }
+                    else
+                    {
+                        pConsole->meDVDState = DriveState_NotMounted;
+                        rc = CFGMR3InsertString(pLunL0, "Driver",               "Block");       RC_CHECK();
+                        rc = CFGMR3InsertNode(pLunL0,   "Config", &pCfg);                       RC_CHECK();
+                        rc = CFGMR3InsertString(pCfg,   "Type",                 "DVD");         RC_CHECK();
+                        rc = CFGMR3InsertInteger(pCfg,  "Mountable",            1);             RC_CHECK();
+
+                        ComPtr<IDVDImage> dvdImage;
+                        hrc = dvdDrive->GetImage(dvdImage.asOutParam());                        H();
+                        if (dvdImage)
+                        {
+                            pConsole->meDVDState = DriveState_ImageMounted;
+                            rc = CFGMR3InsertNode(pLunL0,   "AttachedDriver", &pLunL1);         RC_CHECK();
+                            rc = CFGMR3InsertString(pLunL1, "Driver",          "MediaISO");     RC_CHECK();
+                            rc = CFGMR3InsertNode(pLunL1,   "Config", &pCfg);                   RC_CHECK();
+                            hrc = dvdImage->COMGETTER(Location)(&str);                          H();
+                            STR_CONV();
+                            rc = CFGMR3InsertString(pCfg,   "Path",             psz);           RC_CHECK();
+                            STR_FREE();
+                        }
+                    }
+                }
+                break;
+            }
+            default:
+                AssertMsgFailed (("invalid storage controller type: "
+                                    "%d\n", enmCtrlType));
+                return VERR_GENERAL_FAILURE;
         }
-    }
 
-    /* Attach the hard disks */
-    {
+        /* At the moment we only support one controller per type. So the instance id is always 0. */
+        rc = ctrls[i]->COMSETTER(Instance)(0);                                     H();
+
+        /* Attach the hard disks. */
         com::SafeIfaceArray<IHardDiskAttachment> atts;
         hrc = pMachine->
-            COMGETTER(HardDiskAttachments) (ComSafeArrayAsOutParam (atts));    H();
+            GetHardDiskAttachmentsOfController (controllerName,
+                                                ComSafeArrayAsOutParam (atts)); H();
 
-        for (size_t i = 0; i < atts.size(); ++ i)
+        for (size_t j = 0; j < atts.size(); ++ j)
         {
             ComPtr<IHardDisk> hardDisk;
-            hrc = atts [i]->COMGETTER(HardDisk) (hardDisk.asOutParam());        H();
-            StorageBus_T enmBus;
-            hrc = atts [i]->COMGETTER(Bus) (&enmBus);                           H();
+            hrc = atts [j]->COMGETTER(HardDisk) (hardDisk.asOutParam());        H();
             LONG lDev;
-            hrc = atts [i]->COMGETTER(Device) (&lDev);                          H();
-            LONG lChannel;
-            hrc = atts [i]->COMGETTER(Channel) (&lChannel);                     H();
+            hrc = atts [j]->COMGETTER(Device) (&lDev);                          H();
+            LONG lPort;
+            hrc = atts [j]->COMGETTER(Port) (&lPort);                           H();
 
-            PCFGMNODE pHardDiskCtl = NULL;
             int iLUN = 0;
 
             switch (enmBus)
             {
                 case StorageBus_IDE:
                 {
-                    if (lChannel >= 2 || lChannel < 0)
+                    if (lPort >= 2 || lPort < 0)
                     {
                         AssertMsgFailed (("invalid controller channel number: "
-                                          "%d\n", lChannel));
+                                            "%d\n", lPort));
                         return VERR_GENERAL_FAILURE;
                     }
 
                     if (lDev >= 2 || lDev < 0)
                     {
                         AssertMsgFailed (("invalid controller device number: "
-                                          "%d\n", lDev));
+                                            "%d\n", lDev));
                         return VERR_GENERAL_FAILURE;
                     }
 
-                    iLUN = 2 * lChannel + lDev;
-                    pHardDiskCtl = pIdeInst;
-
+                    iLUN = 2 * lPort + lDev;
                     break;
                 }
                 case StorageBus_SATA:
+                case StorageBus_SCSI:
                 {
-                    iLUN = lChannel;
-                    pHardDiskCtl = enabled ? pSataInst : NULL;
+                    iLUN = lPort;
                     break;
                 }
                 default:
                 {
-                    AssertMsgFailed (("invalid disk controller type: "
-                                      "%d\n", enmBus));
+                    AssertMsgFailed (("invalid storage bus type: "
+                                        "%d\n", enmBus));
                     return VERR_GENERAL_FAILURE;
                 }
             }
 
-            /* Can be NULL if SATA controller is not enabled and current hard
-             * disk is attached to SATA controller. */
-            if (pHardDiskCtl == NULL)
-                continue;
-
             char szLUN[16];
             RTStrPrintf (szLUN, sizeof(szLUN), "LUN#%d", iLUN);
 
-            rc = CFGMR3InsertNode (pHardDiskCtl, szLUN, &pLunL0);               RC_CHECK();
+            rc = CFGMR3InsertNode (pCtlInst, szLUN, &pLunL0);                       RC_CHECK();
+            /* SCSI has a another driver between device and block. */
+            if (fSCSI)
+            {
+                rc = CFGMR3InsertString (pLunL0, "Driver", "SCSI");             RC_CHECK();
+                rc = CFGMR3InsertNode (pLunL0, "Config", &pCfg);                RC_CHECK();
+
+                rc = CFGMR3InsertNode (pLunL0, "AttachedDriver", &pLunL0);      RC_CHECK();
+            }
             rc = CFGMR3InsertString (pLunL0, "Driver", "Block");                RC_CHECK();
             rc = CFGMR3InsertNode (pLunL0, "Config", &pCfg);                    RC_CHECK();
             rc = CFGMR3InsertString (pCfg, "Type", "HardDisk");                 RC_CHECK();
@@ -962,10 +1082,10 @@ DECLCALLBACK(int) Console::configConstructor(PVM pVM, void *pvConsole)
             if (bstr == L"VMDK")
             {
                 /* Create cfgm nodes for async transport driver because VMDK is
-                 * currently the only one which may support async I/O. This has
-                 * to be made generic based on the capabiliy flags when the new
-                 * HardDisk interface is merged.
-                 */
+                    * currently the only one which may support async I/O. This has
+                    * to be made generic based on the capabiliy flags when the new
+                    * HardDisk interface is merged.
+                    */
                 rc = CFGMR3InsertNode (pLunL1, "AttachedDriver", &pLunL2);      RC_CHECK();
                 rc = CFGMR3InsertString (pLunL2, "Driver", "TransportAsync");   RC_CHECK();
                 /* The async transport driver has no config options yet. */
@@ -976,19 +1096,19 @@ DECLCALLBACK(int) Console::configConstructor(PVM pVM, void *pvConsole)
             SafeArray <BSTR> names;
             SafeArray <BSTR> values;
             hrc = hardDisk->GetProperties (NULL,
-                                           ComSafeArrayAsOutParam (names),
-                                           ComSafeArrayAsOutParam (values));    H();
+                                            ComSafeArrayAsOutParam (names),
+                                            ComSafeArrayAsOutParam (values));    H();
 
             if (names.size() != 0)
             {
                 PCFGMNODE pVDC;
                 rc = CFGMR3InsertNode (pCfg, "VDConfig", &pVDC);                RC_CHECK();
-                for (size_t i = 0; i < names.size(); ++ i)
+                for (size_t ii = 0; ii < names.size(); ++ ii)
                 {
-                    if (values [i])
+                    if (values [ii])
                     {
-                        Utf8Str name = names [i];
-                        Utf8Str value = values [i];
+                        Utf8Str name = names [ii];
+                        Utf8Str value = values [ii];
                         rc = CFGMR3InsertString (pVDC, name, value);
                         if (    !(name.compare("HostIPStack"))
                             &&  !(value.compare("0")))
@@ -1018,19 +1138,19 @@ DECLCALLBACK(int) Console::configConstructor(PVM pVM, void *pvConsole)
                 SafeArray <BSTR> names;
                 SafeArray <BSTR> values;
                 hrc = hardDisk->GetProperties (NULL,
-                                               ComSafeArrayAsOutParam (names),
-                                               ComSafeArrayAsOutParam (values));H();
+                                                ComSafeArrayAsOutParam (names),
+                                                ComSafeArrayAsOutParam (values));H();
 
                 if (names.size() != 0)
                 {
                     PCFGMNODE pVDC;
                     rc = CFGMR3InsertNode (pCur, "VDConfig", &pVDC);            RC_CHECK();
-                    for (size_t i = 0; i < names.size(); ++ i)
+                    for (size_t ii = 0; ii < names.size(); ++ ii)
                     {
-                        if (values [i])
+                        if (values [ii])
                         {
-                            Utf8Str name = names [i];
-                            Utf8Str value = values [i];
+                            Utf8Str name = names [ii];
+                            Utf8Str value = values [ii];
                             rc = CFGMR3InsertString (pVDC, name, value);
                             if (    !(name.compare("HostIPStack"))
                                 &&  !(value.compare("0")))
@@ -1040,7 +1160,7 @@ DECLCALLBACK(int) Console::configConstructor(PVM pVM, void *pvConsole)
                 }
 
                 /* Custom code: put marker to not use host IP stack to driver
-                 * configuration node. Simplifies life of DrvVD a bit. */
+                    * configuration node. Simplifies life of DrvVD a bit. */
                 if (!fHostIP)
                 {
                     rc = CFGMR3InsertInteger (pCfg, "HostIPStack", 0);          RC_CHECK();
@@ -1051,57 +1171,16 @@ DECLCALLBACK(int) Console::configConstructor(PVM pVM, void *pvConsole)
                 parentHardDisk = hardDisk;
             }
         }
+        H();
     }
     H();
-
-    ComPtr<IDVDDrive> dvdDrive;
-    hrc = pMachine->COMGETTER(DVDDrive)(dvdDrive.asOutParam());                     H();
-    if (dvdDrive)
-    {
-        // ASSUME: DVD drive is always attached to LUN#2 (i.e. secondary IDE master)
-        rc = CFGMR3InsertNode(pIdeInst,    "LUN#2", &pLunL0);                       RC_CHECK();
-        ComPtr<IHostDVDDrive> hostDvdDrive;
-        hrc = dvdDrive->GetHostDrive(hostDvdDrive.asOutParam());                    H();
-        if (hostDvdDrive)
-        {
-            pConsole->meDVDState = DriveState_HostDriveCaptured;
-            rc = CFGMR3InsertString(pLunL0, "Driver",      "HostDVD");              RC_CHECK();
-            rc = CFGMR3InsertNode(pLunL0,   "Config", &pCfg);                       RC_CHECK();
-            hrc = hostDvdDrive->COMGETTER(Name)(&str);                              H();
-            STR_CONV();
-            rc = CFGMR3InsertString(pCfg,   "Path",         psz);                   RC_CHECK();
-            STR_FREE();
-            BOOL fPassthrough;
-            hrc = dvdDrive->COMGETTER(Passthrough)(&fPassthrough);                  H();
-            rc = CFGMR3InsertInteger(pCfg,  "Passthrough",  !!fPassthrough);        RC_CHECK();
-        }
-        else
-        {
-            pConsole->meDVDState = DriveState_NotMounted;
-            rc = CFGMR3InsertString(pLunL0, "Driver",               "Block");       RC_CHECK();
-            rc = CFGMR3InsertNode(pLunL0,   "Config", &pCfg);                       RC_CHECK();
-            rc = CFGMR3InsertString(pCfg,   "Type",                 "DVD");         RC_CHECK();
-            rc = CFGMR3InsertInteger(pCfg,  "Mountable",            1);             RC_CHECK();
-
-            ComPtr<IDVDImage> dvdImage;
-            hrc = dvdDrive->GetImage(dvdImage.asOutParam());                        H();
-            if (dvdImage)
-            {
-                pConsole->meDVDState = DriveState_ImageMounted;
-                rc = CFGMR3InsertNode(pLunL0,   "AttachedDriver", &pLunL1);         RC_CHECK();
-                rc = CFGMR3InsertString(pLunL1, "Driver",          "MediaISO");     RC_CHECK();
-                rc = CFGMR3InsertNode(pLunL1,   "Config", &pCfg);                   RC_CHECK();
-                hrc = dvdImage->COMGETTER(Location)(&str);                          H();
-                STR_CONV();
-                rc = CFGMR3InsertString(pCfg,   "Path",             psz);           RC_CHECK();
-                STR_FREE();
-            }
-        }
-    }
 
     /*
      * Network adapters
      */
+#ifdef VMWARE_NET_IN_SLOT_11
+    bool fSwapSlots3and11 = false;
+#endif
     PCFGMNODE pDevPCNet = NULL;          /* PCNet-type devices */
     rc = CFGMR3InsertNode(pDevices, "pcnet", &pDevPCNet);                           RC_CHECK();
 #ifdef VBOX_WITH_E1000
@@ -1131,6 +1210,7 @@ DECLCALLBACK(int) Console::configConstructor(PVM pVM, void *pvConsole)
 #ifdef VBOX_WITH_E1000
             case NetworkAdapterType_I82540EM:
             case NetworkAdapterType_I82543GC:
+            case NetworkAdapterType_I82545EM:
                 pDev = pDevE1000;
                 break;
 #endif
@@ -1156,6 +1236,19 @@ DECLCALLBACK(int) Console::configConstructor(PVM pVM, void *pvConsole)
             else
                 iPciDeviceNo = ulInstance - 4 + 16;
         }
+#ifdef VMWARE_NET_IN_SLOT_11
+        /* 
+         * Dirty hack for PCI slot compatibility with VMWare,
+         * it assigns slot 11 to the first network controller.
+         */
+        if (iPciDeviceNo == 3 && adapterType == NetworkAdapterType_I82545EM)
+        {
+            iPciDeviceNo = 0x11;
+            fSwapSlots3and11 = true;
+        }
+        else if (iPciDeviceNo == 0x11 && fSwapSlots3and11)
+            iPciDeviceNo = 3;
+#endif
         rc = CFGMR3InsertInteger(pInst, "PCIDeviceNo", iPciDeviceNo);               RC_CHECK();
         Assert(!afPciDeviceNo[iPciDeviceNo]);
         afPciDeviceNo[iPciDeviceNo] = true;
@@ -1184,6 +1277,9 @@ DECLCALLBACK(int) Console::configConstructor(PVM pVM, void *pvConsole)
                 break;
             case NetworkAdapterType_I82543GC:
                 rc = CFGMR3InsertInteger(pCfg, "AdapterType", 1);                   RC_CHECK();
+                break;
+            case NetworkAdapterType_I82545EM:
+                rc = CFGMR3InsertInteger(pCfg, "AdapterType", 2);                   RC_CHECK();
                 break;
         }
 
@@ -1253,8 +1349,10 @@ DECLCALLBACK(int) Console::configConstructor(PVM pVM, void *pvConsole)
             }
         }
 
+
         NetworkAttachmentType_T networkAttachment;
         hrc = networkAdapter->COMGETTER(AttachmentType)(&networkAttachment);        H();
+        Bstr networkName, trunkName, trunkType;
         switch (networkAttachment)
         {
             case NetworkAttachmentType_Null:
@@ -1298,7 +1396,12 @@ DECLCALLBACK(int) Console::configConstructor(PVM pVM, void *pvConsole)
                 {
                     STR_CONV();
                     if (psz && *psz)
+                    {
                         rc = CFGMR3InsertString(pCfg, "Network", psz);              RC_CHECK();
+                        /* NAT uses its own DHCP implementation */
+                        //networkName = Bstr(psz);
+                    }
+
                     STR_FREE();
                 }
                 break;
@@ -1422,9 +1525,80 @@ DECLCALLBACK(int) Console::configConstructor(PVM pVM, void *pvConsole)
                         LogRel(("NetworkAttachmentType_Bridged: COMGETTER(Id) failed, hrc (0x%x)", hrc));
                         H();
                     }
-                    char szDriverGUID[RTUUID_STR_LENGTH];
-                    strcpy(szDriverGUID , hostIFGuid.toString().raw());
-                    const char *pszTrunk = szDriverGUID;
+
+                    INetCfg              *pNc;
+                    ComPtr<INetCfgComponent> pAdaptorComponent;
+                    LPWSTR               lpszApp;
+                    int rc = VERR_INTNET_FLT_IF_NOT_FOUND;
+
+                    hrc = VBoxNetCfgWinQueryINetCfg( FALSE,
+                                       L"VirtualBox",
+                                       &pNc,
+                                       &lpszApp );
+                    Assert(hrc == S_OK);
+                    if(hrc == S_OK)
+                    {
+                        /* get the adapter's INetCfgComponent*/
+                        hrc = VBoxNetCfgWinGetComponentByGuid(pNc, &GUID_DEVCLASS_NET, (GUID*)hostIFGuid.ptr(), pAdaptorComponent.asOutParam());
+                        if(hrc != S_OK)
+                        {
+                            VBoxNetCfgWinReleaseINetCfg( pNc, FALSE );
+                            LogRel(("NetworkAttachmentType_Bridged: VBoxNetCfgWinGetComponentByGuid failed, hrc (0x%x)", hrc));
+                            H();
+                        }
+                    }
+#define VBOX_WIN_BINDNAME_PREFIX "\\DEVICE\\"
+                    char szTrunkName[INTNET_MAX_TRUNK_NAME];
+                    char *pszTrunkName = szTrunkName;
+                    wchar_t * pswzBindName;
+                    hrc = pAdaptorComponent->GetBindName(&pswzBindName);
+                    Assert(hrc == S_OK);
+                    if (hrc == S_OK)
+                    {
+                        int cwBindName = (int)wcslen(pswzBindName) + 1;
+                        int cbFullBindNamePrefix = sizeof(VBOX_WIN_BINDNAME_PREFIX);
+                        if(sizeof(szTrunkName) > cbFullBindNamePrefix + cwBindName)
+                        {
+                            strcpy(szTrunkName, VBOX_WIN_BINDNAME_PREFIX);
+                            pszTrunkName += cbFullBindNamePrefix-1;
+                            if(!WideCharToMultiByte(CP_ACP, 0, pswzBindName, cwBindName, pszTrunkName,
+                                    sizeof(szTrunkName) - cbFullBindNamePrefix + 1, NULL, NULL))
+                            {
+                                Assert(0);
+                                DWORD err = GetLastError();
+                                hrc = HRESULT_FROM_WIN32(err);
+                                AssertMsgFailed(("%hrc=%Rhrc %#x\n", hrc, hrc));
+                                LogRel(("NetworkAttachmentType_Bridged: WideCharToMultiByte failed, hr=%Rhrc (0x%x)\n", hrc, hrc));
+                            }
+                        }
+                        else
+                        {
+                            Assert(0);
+                            LogRel(("NetworkAttachmentType_Bridged: insufficient szTrunkName buffer space\n"));
+                            /** @todo set appropriate error code */
+                            hrc = E_FAIL;
+                        }
+
+                        if(hrc != S_OK)
+                        {
+                            Assert(0);
+                            CoTaskMemFree(pswzBindName);
+                            VBoxNetCfgWinReleaseINetCfg( pNc, FALSE );
+                            H();
+                        }
+
+                        /* we're not freeing the bind name since we'll use it later for detecting wireless*/
+                    }
+                    else
+                    {
+                        Assert(0);
+                        VBoxNetCfgWinReleaseINetCfg( pNc, FALSE );
+                        LogRel(("NetworkAttachmentType_Bridged: VBoxNetCfgWinGetComponentByGuid failed, hrc (0x%x)", hrc));
+                        H();
+                    }
+                    const char *pszTrunk = szTrunkName;
+                    /* we're not releasing the INetCfg stuff here since we use it later to figure out whether it is wireless */
+
 # elif defined(RT_OS_LINUX)
                     /* @todo Check for malformed names. */
                     const char *pszTrunk = pszHifName;
@@ -1440,6 +1614,9 @@ DECLCALLBACK(int) Console::configConstructor(PVM pVM, void *pvConsole)
                     char szNetwork[80];
                     RTStrPrintf(szNetwork, sizeof(szNetwork), "HostInterfaceNetworking-%s", pszHifName);
                     rc = CFGMR3InsertString(pCfg, "Network", szNetwork);            RC_CHECK();
+                    networkName = Bstr(szNetwork);
+                    trunkName = Bstr(pszTrunk);
+                    trunkType = Bstr(TRUNKTYPE_NETFLT);
 
 # if defined(RT_OS_DARWIN)
                     /** @todo Come up with a better deal here. Problem is that IHostNetworkInterface is completely useless here. */
@@ -1473,91 +1650,68 @@ DECLCALLBACK(int) Console::configConstructor(PVM pVM, void *pvConsole)
                     }
 # elif defined(RT_OS_WINDOWS)
 #  define DEVNAME_PREFIX L"\\\\.\\"
-                    INetCfg              *pNc;
-                    LPWSTR               lpszApp;
-                    HRESULT              hr;
-                    int rc = VERR_INTNET_FLT_IF_NOT_FOUND;
-
                     /* we are getting the medium type via IOCTL_NDIS_QUERY_GLOBAL_STATS Io Control
                      * there is a pretty long way till there though since we need to obtain the symbolic link name
                      * for the adapter device we are going to query given the device Guid */
-                    hr = VBoxNetCfgWinQueryINetCfg( FALSE,
-                                       L"VirtualBox",
-                                       &pNc,
-                                       &lpszApp );
-                    Assert(hr == S_OK);
-                    if(hr == S_OK)
-                    {
-                        /* get the adapter's INetCfgComponent*/
-                        INetCfgComponent *pAdaptorComponent;
-                        hr = VBoxNetCfgWinGetComponentByGuid(pNc, &GUID_DEVCLASS_NET, (GUID*)hostIFGuid.ptr(), &pAdaptorComponent);
-                        Assert(hr == S_OK);
-                        if(hr == S_OK)
-                        {
-                            /* now get the bind name */
-                            LPWSTR pName;
-                            hr = pAdaptorComponent->GetBindName(&pName);
-                            Assert(hr == S_OK);
-                            if(hr == S_OK)
-                            {
-                                /* prepend the "\\\\.\\" to the bind name to obtain the link name */
-                                wchar_t FileName[MAX_PATH];
-                                wcscpy(FileName, DEVNAME_PREFIX);
-                                wcscpy((wchar_t*)(((char*)FileName) + sizeof(DEVNAME_PREFIX) - sizeof(FileName[0])), pName);
 
-                                /* open the device */
-                                HANDLE hDevice = CreateFile(FileName,
+                     /* prepend the "\\\\.\\" to the bind name to obtain the link name */
+                     wchar_t FileName[MAX_PATH];
+                     wcscpy(FileName, DEVNAME_PREFIX);
+                     wcscpy((wchar_t*)(((char*)FileName) + sizeof(DEVNAME_PREFIX) - sizeof(FileName[0])), pswzBindName);
+
+                     /* open the device */
+                     HANDLE hDevice = CreateFile(FileName,
                                                             GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
                                                             NULL,
                                                             OPEN_EXISTING,
                                                             FILE_ATTRIBUTE_NORMAL,
                                                             NULL);
-                                if (hDevice != INVALID_HANDLE_VALUE)
-                                {
-                                    /* now issue the OID_GEN_PHYSICAL_MEDIUM query */
-                                    DWORD Oid = OID_GEN_PHYSICAL_MEDIUM;
-                                    NDIS_PHYSICAL_MEDIUM PhMedium;
-                                    DWORD cbResult;
-                                    if (DeviceIoControl(hDevice, IOCTL_NDIS_QUERY_GLOBAL_STATS, &Oid, sizeof(Oid), &PhMedium, sizeof(PhMedium), &cbResult, NULL))
-                                    {
-                                        /* that was simple, now examine PhMedium */
-                                        if(PhMedium == NdisPhysicalMediumWirelessWan
+                     if (hDevice != INVALID_HANDLE_VALUE)
+                     {
+                         /* now issue the OID_GEN_PHYSICAL_MEDIUM query */
+                         DWORD Oid = OID_GEN_PHYSICAL_MEDIUM;
+                         NDIS_PHYSICAL_MEDIUM PhMedium;
+                         DWORD cbResult;
+                         if (DeviceIoControl(hDevice, IOCTL_NDIS_QUERY_GLOBAL_STATS, &Oid, sizeof(Oid), &PhMedium, sizeof(PhMedium), &cbResult, NULL))
+                         {
+                             /* that was simple, now examine PhMedium */
+                             if(PhMedium == NdisPhysicalMediumWirelessWan
                                                 || PhMedium == NdisPhysicalMediumWirelessLan
                                                 || PhMedium == NdisPhysicalMediumNative802_11
                                                 || PhMedium == NdisPhysicalMediumBluetooth
                                                 /*|| PhMedium == NdisPhysicalMediumWiMax*/
                                                 )
-                                        {
-                                            Log(("this is a wireles adapter"));
-                                            rc = CFGMR3InsertInteger(pCfg, "SharedMacOnWire", true);    RC_CHECK();
+                             {
+                                 Log(("this is a wireless adapter"));
+                                 rc = CFGMR3InsertInteger(pCfg, "SharedMacOnWire", true);    RC_CHECK();
                                                                         Log(("Set SharedMacOnWire\n"));
-                                        }
-                                        else
-                                        {
-                                            Log(("this is NOT a wireles adapter"));
-                                        }
-                                    }
-                                    else
-                                    {
-                                        int winEr = GetLastError();
-                                        LogRel(("Console::configConstructor: DeviceIoControl failed, err (0x%x), ignoring\n", winEr));
-                                        Assert(winEr == ERROR_INVALID_PARAMETER || winEr == ERROR_NOT_SUPPORTED || winEr == ERROR_BAD_COMMAND);
-                                    }
+                             }
+                             else
+                             {
+                                 Log(("this is NOT a wireless adapter"));
+                             }
+                         }
+                         else
+                         {
+                             int winEr = GetLastError();
+                             LogRel(("Console::configConstructor: DeviceIoControl failed, err (0x%x), ignoring\n", winEr));
+                             Assert(winEr == ERROR_INVALID_PARAMETER || winEr == ERROR_NOT_SUPPORTED || winEr == ERROR_BAD_COMMAND);
+                         }
 
-                                    CloseHandle(hDevice);
-                                }
-                                else
-                                {
-                                    int winEr = GetLastError();
-                                    LogRel(("Console::configConstructor: CreateFile failed, err (0x%x), ignoring\n", winEr));
-                                    AssertBreakpoint();
-                                }
-                                CoTaskMemFree(pName);
-                            }
-                            VBoxNetCfgWinReleaseRef(pAdaptorComponent);
-                        }
-                        VBoxNetCfgWinReleaseINetCfg( pNc, FALSE );
-                    }
+                         CloseHandle(hDevice);
+                     }
+                     else
+                     {
+                         int winEr = GetLastError();
+                         LogRel(("Console::configConstructor: CreateFile failed, err (0x%x), ignoring\n", winEr));
+                         AssertBreakpoint();
+                     }
+
+                     CoTaskMemFree(pswzBindName);
+
+                     pAdaptorComponent.setNull();
+                     /* release the pNc finally */
+                     VBoxNetCfgWinReleaseINetCfg( pNc, FALSE );
 # else
                     /** @todo PORTME: wireless detection */
 # endif
@@ -1573,45 +1727,8 @@ DECLCALLBACK(int) Console::configConstructor(PVM pVM, void *pvConsole)
 #  endif
 # endif
 
-#elif defined(RT_OS_WINDOWS)
-                    if (fSniffer)
-                    {
-                        rc = CFGMR3InsertNode(pLunL0, "AttachedDriver", &pLunL0);   RC_CHECK();
-                    }
-                    else
-                    {
-                        rc = CFGMR3InsertNode(pInst, "LUN#0", &pLunL0);             RC_CHECK();
-                    }
-                    Bstr hostInterfaceName;
-                    hrc = networkAdapter->COMGETTER(HostInterface)(hostInterfaceName.asOutParam()); H();
-                    ComPtr<IHostNetworkInterface> hostInterface;
-                    rc = host->FindHostNetworkInterfaceByName(hostInterfaceName, hostInterface.asOutParam());
-                    if (!SUCCEEDED(rc))
-                    {
-                        AssertMsgFailed(("Cannot get GUID for host interface '%ls'\n", hostInterfaceName));
-                        hrc = networkAdapter->Detach();                             H();
-                    }
-                    else
-                    {
-# ifndef VBOX_WITH_NETFLT
-                        rc = CFGMR3InsertString(pLunL0, "Driver", "HostInterface");                     RC_CHECK();
-                        rc = CFGMR3InsertNode(pLunL0, "Config", &pCfg);                                 RC_CHECK();
-                        rc = CFGMR3InsertString(pCfg, "HostInterfaceName", Utf8Str(hostInterfaceName)); RC_CHECK();
-# else
-                        rc = CFGMR3InsertString(pLunL0, "Driver", "IntNet");                            RC_CHECK();
-                        rc = CFGMR3InsertNode(pLunL0, "Config", &pCfg);                                 RC_CHECK();
-                        rc = CFGMR3InsertString(pCfg, "Trunk", Utf8Str(hostInterfaceName));             RC_CHECK();
-                        rc = CFGMR3InsertInteger(pCfg, "TrunkType", kIntNetTrunkType_NetFlt);           RC_CHECK();
-# endif
-                        Guid hostIFGuid;
-                        hrc = hostInterface->COMGETTER(Id)(hostIFGuid.asOutParam());                    H();
-                        char szDriverGUID[256] = {0};
-                        /* add curly brackets */
-                        szDriverGUID[0] = '{';
-                        strcpy(szDriverGUID + 1, hostIFGuid.toString().raw());
-                        strcat(szDriverGUID, "}");
-                        rc = CFGMR3InsertBytes(pCfg, "GUID", szDriverGUID, sizeof(szDriverGUID));       RC_CHECK();
-                    }
+#elif defined(RT_OS_WINDOWS) /* not defined NetFlt */
+                    /* NOTHING TO DO HERE */
 #elif defined(RT_OS_LINUX)
 /// @todo aleksey: is there anything to be done here?
 #elif defined(RT_OS_FREEBSD)
@@ -1661,6 +1778,9 @@ DECLCALLBACK(int) Console::configConstructor(PVM pVM, void *pvConsole)
                         rc = CFGMR3InsertString(pLunL0, "Driver", "IntNet");        RC_CHECK();
                         rc = CFGMR3InsertNode(pLunL0, "Config", &pCfg);             RC_CHECK();
                         rc = CFGMR3InsertString(pCfg, "Network", psz);              RC_CHECK();
+                        rc = CFGMR3InsertInteger(pCfg, "TrunkType", kIntNetTrunkType_WhateverNone); RC_CHECK();
+                        networkName = Bstr(psz);
+                        trunkType = Bstr(TRUNKTYPE_WHATEVER);
                     }
                     STR_FREE();
                 }
@@ -1681,6 +1801,11 @@ DECLCALLBACK(int) Console::configConstructor(PVM pVM, void *pvConsole)
                 rc = CFGMR3InsertString(pLunL0, "Driver", "IntNet");            RC_CHECK();
                 rc = CFGMR3InsertNode(pLunL0, "Config", &pCfg);                 RC_CHECK();
 #if defined(RT_OS_WINDOWS)
+# ifndef VBOX_WITH_NETFLT
+                hrc = E_NOTIMPL;
+                LogRel(("NetworkAttachmentType_HostOnly: Not Implemented"));
+                H();
+# else
                 Bstr HifName;
                 hrc = networkAdapter->COMGETTER(HostInterface)(HifName.asOutParam());
                 if(FAILED(hrc))
@@ -1725,9 +1850,85 @@ DECLCALLBACK(int) Console::configConstructor(PVM pVM, void *pvConsole)
                     LogRel(("NetworkAttachmentType_HostOnly: COMGETTER(Id) failed, hrc (0x%x)", hrc));
                     H();
                 }
-                char szDriverGUID[RTUUID_STR_LENGTH];
-                strcpy(szDriverGUID , hostIFGuid.toString().raw());
-                const char *pszTrunk = szDriverGUID;
+
+                INetCfg              *pNc;
+                ComPtr<INetCfgComponent> pAdaptorComponent;
+                LPWSTR               lpszApp;
+                int rc = VERR_INTNET_FLT_IF_NOT_FOUND;
+
+                hrc = VBoxNetCfgWinQueryINetCfg( FALSE,
+                                   L"VirtualBox",
+                                   &pNc,
+                                   &lpszApp );
+                Assert(hrc == S_OK);
+                if(hrc == S_OK)
+                {
+                    /* get the adapter's INetCfgComponent*/
+                    hrc = VBoxNetCfgWinGetComponentByGuid(pNc, &GUID_DEVCLASS_NET, (GUID*)hostIFGuid.ptr(), pAdaptorComponent.asOutParam());
+                    if(hrc != S_OK)
+                    {
+                        VBoxNetCfgWinReleaseINetCfg( pNc, FALSE );
+                        LogRel(("NetworkAttachmentType_HostOnly: VBoxNetCfgWinGetComponentByGuid failed, hrc (0x%x)", hrc));
+                        H();
+                    }
+                }
+#define VBOX_WIN_BINDNAME_PREFIX "\\DEVICE\\"
+                char szTrunkName[INTNET_MAX_TRUNK_NAME];
+                char *pszTrunkName = szTrunkName;
+                wchar_t * pswzBindName;
+                hrc = pAdaptorComponent->GetBindName(&pswzBindName);
+                Assert(hrc == S_OK);
+                if (hrc == S_OK)
+                {
+                    int cwBindName = (int)wcslen(pswzBindName) + 1;
+                    int cbFullBindNamePrefix = sizeof(VBOX_WIN_BINDNAME_PREFIX);
+                    if(sizeof(szTrunkName) > cbFullBindNamePrefix + cwBindName)
+                    {
+                        strcpy(szTrunkName, VBOX_WIN_BINDNAME_PREFIX);
+                        pszTrunkName += cbFullBindNamePrefix-1;
+                        if(!WideCharToMultiByte(CP_ACP, 0, pswzBindName, cwBindName, pszTrunkName,
+                                sizeof(szTrunkName) - cbFullBindNamePrefix + 1, NULL, NULL))
+                        {
+                            Assert(0);
+                            DWORD err = GetLastError();
+                            hrc = HRESULT_FROM_WIN32(err);
+                            AssertMsgFailed(("%hrc=%Rhrc %#x\n", hrc, hrc));
+                            LogRel(("NetworkAttachmentType_HostOnly: WideCharToMultiByte failed, hr=%Rhrc (0x%x)\n", hrc, hrc));
+                        }
+                    }
+                    else
+                    {
+                        Assert(0);
+                        LogRel(("NetworkAttachmentType_HostOnly: insufficient szTrunkName buffer space\n"));
+                        /** @todo set appropriate error code */
+                        hrc = E_FAIL;
+                    }
+
+                    if(hrc != S_OK)
+                    {
+                        Assert(0);
+                        CoTaskMemFree(pswzBindName);
+                        VBoxNetCfgWinReleaseINetCfg( pNc, FALSE );
+                        H();
+                    }
+                }
+                else
+                {
+                    Assert(0);
+                    VBoxNetCfgWinReleaseINetCfg( pNc, FALSE );
+                    LogRel(("NetworkAttachmentType_HostOnly: VBoxNetCfgWinGetComponentByGuid failed, hrc (0x%x)", hrc));
+                    H();
+                }
+
+
+                CoTaskMemFree(pswzBindName);
+
+                pAdaptorComponent.setNull();
+                /* release the pNc finally */
+                VBoxNetCfgWinReleaseINetCfg( pNc, FALSE );
+
+                const char *pszTrunk = szTrunkName;
+
 
                 /* TODO: set the proper Trunk and Network values, currently the driver uses the first adapter instance */
                 rc = CFGMR3InsertInteger(pCfg, "TrunkType", kIntNetTrunkType_NetAdp); RC_CHECK();
@@ -1735,14 +1936,63 @@ DECLCALLBACK(int) Console::configConstructor(PVM pVM, void *pvConsole)
                 char szNetwork[80];
                 RTStrPrintf(szNetwork, sizeof(szNetwork), "HostInterfaceNetworking-%s", pszHifName);
                 rc = CFGMR3InsertString(pCfg, "Network", szNetwork);            RC_CHECK();
+                networkName = Bstr(szNetwork);
+                trunkName   = Bstr(pszTrunk);
+                trunkType   = TRUNKTYPE_NETADP;
+# endif /* defined VBOX_WITH_NETFLT*/
 #elif defined(RT_OS_DARWIN)
                 rc = CFGMR3InsertString(pCfg, "Trunk", "vboxnet0");             RC_CHECK();
                 rc = CFGMR3InsertString(pCfg, "Network", "HostInterfaceNetworking-vboxnet0"); RC_CHECK();
                 rc = CFGMR3InsertInteger(pCfg, "TrunkType", kIntNetTrunkType_NetAdp); RC_CHECK();
+                networkName = Bstr("HostInterfaceNetworking-vboxnet0");
+                trunkName   = Bstr("vboxnet0");
+                trunkType   = TRUNKTYPE_NETADP;
 #else
                 rc = CFGMR3InsertString(pCfg, "Trunk", "vboxnet0");             RC_CHECK();
                 rc = CFGMR3InsertString(pCfg, "Network", "HostInterfaceNetworking-vboxnet0"); RC_CHECK();
                 rc = CFGMR3InsertInteger(pCfg, "TrunkType", kIntNetTrunkType_NetFlt); RC_CHECK();
+                networkName = Bstr("HostInterfaceNetworking-vboxnet0");
+                trunkName   = Bstr("vboxnet0");
+                trunkType   = TRUNKTYPE_NETFLT;
+#endif
+#if !defined(RT_OS_WINDOWS) && defined(VBOX_WITH_NETFLT)
+                Bstr HifName;
+                hrc = networkAdapter->COMGETTER(HostInterface)(HifName.asOutParam());
+                if(FAILED(hrc))
+                {
+                    LogRel(("NetworkAttachmentType_HostOnly: COMGETTER(HostInterface) failed, hrc (0x%x)", hrc));
+                    H();
+                }
+
+                Utf8Str HifNameUtf8(HifName);
+                const char *pszHifName = HifNameUtf8.raw();
+                ComPtr<IHostNetworkInterface> hostInterface;
+                rc = host->FindHostNetworkInterfaceByName(HifName, hostInterface.asOutParam());
+                if (!SUCCEEDED(rc))
+                {
+                    LogRel(("NetworkAttachmentType_HostOnly: FindByName failed, rc (0x%x)", rc));
+                    return VMSetError(pVM, VERR_INTERNAL_ERROR, RT_SRC_POS,
+                                      N_("Inexistent host networking interface, name '%ls'"),
+                                      HifName.raw());
+                }
+                Bstr tmpAddr, tmpMask;
+                hrc = virtualBox->GetExtraData(Bstr("HostOnly/vboxnet0/IPAddress"), tmpAddr.asOutParam());
+                if (SUCCEEDED(hrc) && !tmpAddr.isNull())
+                {
+                    hrc = virtualBox->GetExtraData(Bstr("HostOnly/vboxnet0/IPNetMask"), tmpMask.asOutParam());
+                    if (SUCCEEDED(hrc) && !tmpAddr.isEmpty())
+                        hrc = hostInterface->EnableStaticIpConfig(tmpAddr, tmpMask);
+                }
+                else
+                    hrc = hostInterface->EnableStaticIpConfig(Bstr(VBOXNET_IPV4ADDR_DEFAULT),
+                                                              Bstr(VBOXNET_IPV4MASK_DEFAULT));
+
+
+                hrc = virtualBox->GetExtraData(Bstr("HostOnly/vboxnet0/IPV6Address"), tmpAddr.asOutParam());
+                if (SUCCEEDED(hrc))
+                    hrc = virtualBox->GetExtraData(Bstr("HostOnly/vboxnet0/IPV6NetMask"), tmpMask.asOutParam());
+                if (SUCCEEDED(hrc) && !tmpAddr.isEmpty())
+                    hrc = hostInterface->EnableStaticIpConfigV6(tmpAddr, Utf8Str(tmpMask).toUInt32());
 #endif
                 break;
             }
@@ -1751,6 +2001,35 @@ DECLCALLBACK(int) Console::configConstructor(PVM pVM, void *pvConsole)
                 AssertMsgFailed(("should not get here!\n"));
                 break;
         }
+
+        if(!networkName.isNull())
+        {
+            /*
+             * Until we implement service reference counters DHCP Server will be stopped
+             * by DHCPServerRunner destructor.
+             */
+            ComPtr<IDHCPServer> dhcpServer;
+            hrc = virtualBox->FindDHCPServerByNetworkName(networkName.mutableRaw(), dhcpServer.asOutParam());
+            if(SUCCEEDED(hrc))
+            {
+                /* there is a DHCP server available for this network */
+                BOOL bEnabled;
+                hrc = dhcpServer->COMGETTER(Enabled)(&bEnabled);
+                if(FAILED(hrc))
+                {
+                    LogRel(("DHCP svr: COMGETTER(Enabled) failed, hrc (0x%x)", hrc));
+                    H();
+                }
+
+                if(bEnabled)
+                    hrc = dhcpServer->Start(networkName, trunkName, trunkType);
+            }
+            else
+            {
+                hrc = S_OK;
+            }
+        }
+
     }
 
     /*
@@ -1890,6 +2169,7 @@ DECLCALLBACK(int) Console::configConstructor(PVM pVM, void *pvConsole)
     /*
      * AC'97 ICH / SoundBlaster16 audio
      */
+    BOOL enabled;
     ComPtr<IAudioAdapter> audioAdapter;
     hrc = pMachine->COMGETTER(AudioAdapter)(audioAdapter.asOutParam());             H();
     if (audioAdapter)
@@ -2143,6 +2423,8 @@ DECLCALLBACK(int) Console::configConstructor(PVM pVM, void *pvConsole)
     }
 
 #ifdef VBOX_WITH_CROGL
+/* Currently broken on Snow Leopard 64-bit */
+# if !(defined(RT_OS_DARWIN) && defined(RT_ARCH_AMD64))
     /*
      * crOpenGL
      */
@@ -2178,6 +2460,7 @@ DECLCALLBACK(int) Console::configConstructor(PVM pVM, void *pvConsole)
                 }
         }
     }
+# endif
 #endif
 
 #ifdef VBOX_WITH_GUEST_PROPS

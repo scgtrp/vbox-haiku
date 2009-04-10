@@ -2,6 +2,9 @@
 #ifdef RT_OS_OS2
 # include <paths.h>
 #endif
+#ifdef VBOX_WITH_SLIRP_DNS_PROXY
+#include "dnsproxy/dnsproxy.h"
+#endif
 
 #include <VBox/err.h>
 #include <VBox/pdmdrv.h>
@@ -10,6 +13,7 @@
 # include <sys/ioctl.h>
 # include <poll.h>
 #else
+# include <Winnls.h>
 # define _WINSOCK2API_
 # include <IPHlpApi.h>
 #endif
@@ -100,7 +104,7 @@
             DO_ENGAGE_EVENT1((so), fdset, ICMP);    \
     } while (0)
 # else /* !RT_OS_WINDOWS */
-#  ifdef VBOX_WITH_SIMPLIFIED_SLIRP_SYNC 
+#  ifdef VBOX_WITH_SIMPLIFIED_SLIRP_SYNC
 #   define DO_WIN_CHECK_FD_SET(so, events, fdset ) DO_CHECK_FD_SET((so), (events), fdset)
 #  else /* VBOX_WITH_SIMPLIFIED_SLIRP_SYNC */
 #   define DO_WIN_CHECK_FD_SET(so, events, fdset ) 0
@@ -331,27 +335,30 @@ static int get_dns_addr_domain(PNATState pData, bool fVerbose,
     PIP_ADAPTER_ADDRESSES addr = NULL;
     PIP_ADAPTER_DNS_SERVER_ADDRESS dns = NULL;
     ULONG size = 0;
+    int wlen = 0;
     char *suffix;
     struct dns_entry *da = NULL;
+    struct dns_domain_entry *dd = NULL;
+    int fzerro_len_added = 0;
     ULONG ret = ERROR_SUCCESS;
-    
+
     /* @todo add SKIPing flags to get only required information */
 
     ret = pData->pfGetAdaptersAddresses(AF_INET, 0, NULL /* reserved */, addresses, &size);
-    if (ret != ERROR_BUFFER_OVERFLOW) 
+    if (ret != ERROR_BUFFER_OVERFLOW)
     {
         LogRel(("NAT: error %lu occured on capacity detection operation\n", ret));
         return -1;
     }
-    
-    if (size == 0) 
+
+    if (size == 0)
     {
         LogRel(("NAT: Win socket API returns non capacity\n"));
         return -1;
     }
-    
+
     addresses = RTMemAllocZ(size);
-    if (addresses == NULL) 
+    if (addresses == NULL)
     {
         LogRel(("NAT: No memory available \n"));
         return -1;
@@ -361,16 +368,17 @@ static int get_dns_addr_domain(PNATState pData, bool fVerbose,
     if (ret != ERROR_SUCCESS)
     {
         LogRel(("NAT: error %lu occured on fetching adapters info\n", ret));
-        return -1; 
+        RTMemFree(addresses);
+        return -1;
     }
     addr = addresses;
-    while(addr != NULL) 
+    while(addr != NULL)
     {
-        size_t buff_size;
+        int found;
         if (addr->OperStatus != IfOperStatusUp)
             goto next;
         dns = addr->FirstDnsServerAddress;
-        while (dns != NULL) 
+        while (dns != NULL)
         {
             struct sockaddr *saddr = dns->Address.lpSockaddr;
             if (saddr->sa_family != AF_INET)
@@ -380,33 +388,66 @@ static int get_dns_addr_domain(PNATState pData, bool fVerbose,
             if (da == NULL)
             {
                 LogRel(("NAT: Can't allocate buffer for DNS entry\n"));
+                RTMemFree(addresses);
                 return VERR_NO_MEMORY;
             }
             LogRel(("NAT: adding %R[IP4] to DNS server list\n", &((struct sockaddr_in *)saddr)->sin_addr));
             if ((((struct sockaddr_in *)saddr)->sin_addr.s_addr & htonl(IN_CLASSA_NET)) == ntohl(INADDR_LOOPBACK & IN_CLASSA_NET)) {
                 da->de_addr.s_addr = htonl(ntohl(special_addr.s_addr) | CTL_ALIAS);
-            } 
-            else 
+            }
+            else
             {
                 da->de_addr.s_addr = ((struct sockaddr_in *)saddr)->sin_addr.s_addr;
             }
             LIST_INSERT_HEAD(&pData->dns_list_head, da, de_list);
-        next_dns:    
+
+            if (addr->DnsSuffix == NULL)
+                goto next_dns;
+
+            /*uniq*/
+            RTUtf16ToUtf8(addr->DnsSuffix, &suffix);
+            
+            if (strlen(suffix) == 0) {
+                /* dhcpcd client very sad if no domain name is passed */
+                if (fzerro_len_added)
+                    goto next_dns;
+                fzerro_len_added = 1; 
+                suffix = RTStrDup(" ");
+            }
+
+            found = 0;
+            LIST_FOREACH(dd, &pData->dns_domain_list_head, dd_list)
+            {
+                if (   dd->dd_pszDomain != NULL
+                    && strcmp(dd->dd_pszDomain, suffix) == 0)
+                {
+                    found = 1;
+                    RTStrFree(suffix);
+                    break;
+                }
+            }
+            if (found == 0)
+            {
+                dd = RTMemAllocZ(sizeof(struct dns_domain_entry));
+                if (dd == NULL)
+                {
+                    LogRel(("NAT: not enough memory\n"));
+                    RTStrFree(suffix);
+                    RTMemFree(addresses);
+                    return VERR_NO_MEMORY;
+                }
+                dd->dd_pszDomain = suffix;
+                LogRel(("NAT: adding domain name %s to search list\n", dd->dd_pszDomain));
+                LIST_INSERT_HEAD(&pData->dns_domain_list_head, dd, dd_list);
+            }
+        next_dns:
             dns = dns->Next;
         }
-        buff_size = wcstombs(NULL, addr->DnsSuffix, 0);
-        if (buff_size == 0) 
-            goto next;
-        suffix = RTMemAllocZ(buff_size);
-        wcstombs(suffix, addr->DnsSuffix, buff_size);
-        LogRel(("NAT: adding %s to DNS suffix list\n", suffix));
-        *ppszDomain = suffix;
-        next:
+    next:
         addr = addr->Next;
     }
-    /*@todo add dns suffix if required */
-    LogRel(("NAT: adding dns suffix %s to the list \n", ppszDomain));
-    return 0; 
+    RTMemFree(addresses);
+    return 0;
 }
 # endif /* VBOX_WITH_MULTI_DNS */
 
@@ -489,6 +530,7 @@ static int get_dns_addr_domain(PNATState pData, bool fVerbose,
 #endif
             found++;
         }
+#ifndef VBOX_WITH_MULTI_DNS
         if (   ppszDomain
             && (!strncmp(buff, "domain", 6) || !strncmp(buff, "search", 6)))
         {
@@ -511,6 +553,36 @@ static int get_dns_addr_domain(PNATState pData, bool fVerbose,
                 }
             }
         }
+#else
+        if ((!strncmp(buff, "domain", 6) || !strncmp(buff, "search", 6)))
+        {
+            char *tok;
+            char *saveptr;
+            struct dns_domain_entry *dd = NULL;
+            int found = 0;
+            tok = strtok_r(&buff[6], " \t\n", &saveptr);
+            LIST_FOREACH(dd, &pData->dns_domain_list_head, dd_list)
+            {
+                if(    tok != NULL
+                    && strcmp(tok, dd->dd_pszDomain) == 0)
+                {
+                    found = 1;
+                    break;
+                }
+            }
+            if (tok != NULL && found == 0) {
+                dd = RTMemAllocZ(sizeof(struct dns_domain_entry));
+                if (dd == NULL)
+                {
+                    LogRel(("NAT: not enought memory to add domain list\n"));
+                    return VERR_NO_MEMORY;
+                }
+                dd->dd_pszDomain = RTStrDup(tok);
+                LogRel(("NAT: adding domain name %s to search list\n", dd->dd_pszDomain));
+                LIST_INSERT_HEAD(&pData->dns_domain_list_head, dd, dd_list);
+            }
+        }
+#endif
     }
     fclose(f);
     if (!found)
@@ -523,15 +595,27 @@ static int get_dns_addr_domain(PNATState pData, bool fVerbose,
 static int slirp_init_dns_list(PNATState pData)
 {
     LIST_INIT(&pData->dns_list_head);
-    return get_dns_addr_domain(pData, true, NULL, &pData->pszDomain);
+    LIST_INIT(&pData->dns_domain_list_head);
+    return get_dns_addr_domain(pData, true, NULL, NULL);
 }
+
 static void slirp_release_dns_list(PNATState pData)
 {
     struct dns_entry *de = NULL;
-    while(!LIST_EMPTY(&pData->dns_list_head)) {
-        de = LIST_FIRST(&pData->dns_list_head);
-        LIST_REMOVE(de, de_list);
-        RTMemFree(de);
+    struct dns_domain_entry *dd = NULL;
+    while(!LIST_EMPTY(&pData->dns_domain_list_head)) {
+        dd = LIST_FIRST(&pData->dns_domain_list_head);
+        LIST_REMOVE(dd, dd_list);
+        if (dd->dd_pszDomain != NULL)
+            RTStrFree(dd->dd_pszDomain);
+        RTMemFree(dd);
+    }
+    while(!LIST_EMPTY(&pData->dns_domain_list_head)) {
+        dd = LIST_FIRST(&pData->dns_domain_list_head);
+        LIST_REMOVE(dd, dd_list);
+        if (dd->dd_pszDomain != NULL)
+            RTStrFree(dd->dd_pszDomain);
+        RTMemFree(dd);
     }
 }
 #endif
@@ -664,8 +748,10 @@ void slirp_link_down(PNATState pData)
  */
 void slirp_term(PNATState pData)
 {
+#ifndef VBOX_WITH_MULTI_DNS
     if (pData->pszDomain)
         RTStrFree((char *)(void *)pData->pszDomain);
+#endif
 
 #ifdef RT_OS_WINDOWS
     pData->pfIcmpCloseHandle(pData->icmp_socket.sh);
@@ -870,10 +956,10 @@ void slirp_select_fill(PNATState pData, int *pnfds, struct pollfd *polls)
                 {
 #ifdef VBOX_WITH_SLIRP_DNS_PROXY
                     Log2(("NAT: %R[natsock] expired\n", so));
-                    if (so->so_timeout != NULL) 
+                    if (so->so_timeout != NULL)
                     {
                         so->so_timeout(pData, so, so->so_timeout_arg);
-                    } 
+                    }
 #endif
 #ifdef VBOX_WITH_SLIRP_MT
                     /* we need so_next for continue our cycle*/
@@ -1206,7 +1292,7 @@ void slirp_select_poll(PNATState pData, fd_set *readfds, fd_set *writefds, fd_se
                 socklen_t optlen = sizeof(int);
                 inq = outq = 0;
                 status = getsockopt(so->s, SOL_SOCKET, SO_ERROR, &err, &optlen);
-                if (status != 0) 
+                if (status != 0)
                     Log(("NAT: can't get error status from %R[natsock]\n", so));
 #ifndef RT_OS_SOLARIS
                 status = ioctl(so->s, FIONREAD, &inq); /* tcp(7) recommends SIOCINQ which is Linux specific */
@@ -1216,27 +1302,27 @@ void slirp_select_poll(PNATState pData, fd_set *readfds, fd_set *writefds, fd_se
                     Log(("NAT: can't get depth of IN queue status from %R[natsock]\n", so));
                 }
                 status = ioctl(so->s, TIOCOUTQ, &outq); /* SIOCOUTQ see previous comment */
-                if (status != 0) 
+                if (status != 0)
                     Log(("NAT: can't get depth of OUT queue from %R[natsock]\n", so));
 #else
                 /*
                  * Solaris has bit different ioctl commands and its handlings
-                 * hint: streamio(7) I_NREAD 
+                 * hint: streamio(7) I_NREAD
                  */
 #endif
                 if (   so->so_state & SS_ISFCONNECTING
                     || UNIX_CHECK_FD_SET(so, NetworkEvents, readfds))
                 {
                     /**
-                     * Check if we need here take care about gracefull connection 
+                     * Check if we need here take care about gracefull connection
                      * @todo try with proxy server
                      */
                     if (UNIX_CHECK_FD_SET(so, NetworkEvents, readfds))
                     {
                         /*
-                         * Never meet inq != 0 or outq != 0, anyway let it stay for a while 
-                         * in case it happens we'll able to detect it. 
-                         * Give TCP/IP stack wait or expire the socket. 
+                         * Never meet inq != 0 or outq != 0, anyway let it stay for a while
+                         * in case it happens we'll able to detect it.
+                         * Give TCP/IP stack wait or expire the socket.
                          */
                         Log(("NAT: %R[natsock] err(%d:%s) s(in:%d,out:%d)happens on read I/O, "
                             "other side close connection \n", so, err, strerror(err), inq, outq));
@@ -1246,14 +1332,14 @@ void slirp_select_poll(PNATState pData, fd_set *readfds, fd_set *writefds, fd_se
                 }
                 if (   !UNIX_CHECK_FD_SET(so, NetworkEvents, readfds)
                     && !UNIX_CHECK_FD_SET(so, NetworkEvents, writefds)
-                    && !UNIX_CHECK_FD_SET(so, NetworkEvents, xfds)) 
+                    && !UNIX_CHECK_FD_SET(so, NetworkEvents, xfds))
                 {
                     Log(("NAT: system expires the socket %R[natsock] err(%d:%s) s(in:%d,out:%d) happens on non-I/O. ",
                             so, err, strerror(err), inq, outq));
                     goto tcp_input_close;
                 }
                 Log(("NAT: %R[natsock] we've met(%d:%s) s(in:%d, out:%d) unhandled combination hup (%d) "
-                    "rederr(%d) on (r:%d, w:%d, x:%d)\n", 
+                    "rederr(%d) on (r:%d, w:%d, x:%d)\n",
                         so, err, strerror(err),
                         inq, outq,
                         UNIX_CHECK_FD_SET(so, ign, rdhup),
@@ -1261,7 +1347,7 @@ void slirp_select_poll(PNATState pData, fd_set *readfds, fd_set *writefds, fd_se
                         UNIX_CHECK_FD_SET(so, ign, readfds),
                         UNIX_CHECK_FD_SET(so, ign, writefds),
                         UNIX_CHECK_FD_SET(so, ign, xfds)));
-                /* 
+                /*
                  * Give OS's TCP/IP stack a chance to resolve an issue or expire the socket.
                  */
                 CONTINUE(tcp);
@@ -1647,15 +1733,18 @@ uint16_t slirp_get_service(int proto, uint16_t dport, uint16_t sport)
 {
     uint16_t hdport, hsport, service;
     hdport = ntohs(dport);
-    hsport = ntohs(sport); 
+    hsport = ntohs(sport);
     Log2(("proto: %d, dport: %d sport: %d\n", proto, hdport, hsport));
     service = 0;
-    switch (hdport) 
+#if 0
+    /* Always return 0 here */
+    switch (hdport)
     {
         case 500:
                 /* service = sport; */
         break;
-    } 
+    }
+#endif
     Log2(("service : %d\n", service));
     return htons(service);
 }
@@ -1683,6 +1772,7 @@ void slirp_set_dhcp_next_server(PNATState pData, const char *next_server)
 #ifdef VBOX_WITH_SLIRP_DNS_PROXY
 void slirp_set_dhcp_dns_proxy(PNATState pData, bool fDNSProxy)
 {
+    Log2(("NAT: DNS proxy switched %s\n", (fDNSProxy ? "on" : "off")));
     pData->use_dns_proxy = fDNSProxy;
 }
 #endif

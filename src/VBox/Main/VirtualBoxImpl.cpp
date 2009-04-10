@@ -61,6 +61,8 @@
 #include "SystemPropertiesImpl.h"
 #include "GuestOSTypeImpl.h"
 #include "Version.h"
+#include "DHCPServerRunner.h"
+#include "DHCPServerImpl.h"
 
 #include "VirtualBoxXMLUtil.h"
 
@@ -84,12 +86,25 @@
 static const char gDefaultGlobalConfig [] =
 {
     "<?xml version=\"1.0\" encoding=\"UTF-8\" ?>" RTFILE_LINEFEED
-    "<!-- Sun xVM VirtualBox Global Configuration -->" RTFILE_LINEFEED
+    "<!-- Sun VirtualBox Global Configuration -->" RTFILE_LINEFEED
     "<VirtualBox xmlns=\"" VBOX_XML_NAMESPACE "\" "
         "version=\"" VBOX_XML_VERSION_FULL "\">" RTFILE_LINEFEED
     "  <Global>"RTFILE_LINEFEED
     "    <MachineRegistry/>"RTFILE_LINEFEED
     "    <MediaRegistry/>"RTFILE_LINEFEED
+    "    <NetserviceRegistry>"RTFILE_LINEFEED
+    "       <DHCPServers>"RTFILE_LINEFEED
+    "          <DHCPServer "
+#ifdef RT_OS_WINDOWS
+                          "networkName=\"HostInterfaceNetworking-VirtualBox Host-Only Ethernet Adapter\" "
+#else
+                          "networkName=\"HostInterfaceNetworking-vboxnet0\" "
+#endif
+                          "IPAddress=\"192.168.56.100\" networkMask=\"255.255.255.0\" "
+                          "lowerIP=\"192.168.56.101\" upperIP=\"192.168.56.254\" "
+                          "enabled=\"1\"/>"RTFILE_LINEFEED
+    "       </DHCPServers>"RTFILE_LINEFEED
+    "    </NetserviceRegistry>"RTFILE_LINEFEED
     "    <USBDeviceFilters/>"RTFILE_LINEFEED
     "    <SystemProperties/>"RTFILE_LINEFEED
     "  </Global>"RTFILE_LINEFEED
@@ -288,6 +303,10 @@ HRESULT VirtualBox::init()
             rc = loadMachines (global);
             CheckComRCThrowRC (rc);
 
+            /* net services */
+            rc = loadNetservices(global);
+            CheckComRCThrowRC (rc);
+
             /* check hard disk consistency */
 /// @todo (r=dmik) add IVirtualBox::cleanupHardDisks() instead or similar
 //            for (HardDiskList::const_iterator it = mData.mHardDisks.begin();
@@ -391,6 +410,7 @@ void VirtualBox::uninit()
     mData.mFloppyImages.clear();
     mData.mDVDImages.clear();
     mData.mHardDisks.clear();
+    mData.mDHCPServers.clear();
 
     mData.mProgressOperations.clear();
 
@@ -609,7 +629,7 @@ VirtualBox::COMGETTER(SystemProperties) (ISystemProperties **aSystemProperties)
 }
 
 STDMETHODIMP
-VirtualBox::COMGETTER(Machines2) (ComSafeArrayOut (IMachine *, aMachines))
+VirtualBox::COMGETTER(Machines) (ComSafeArrayOut (IMachine *, aMachines))
 {
     if (ComSafeArrayOutIsNull (aMachines))
         return E_POINTER;
@@ -709,6 +729,10 @@ STDMETHODIMP VirtualBox::COMGETTER(GuestOSTypes) (ComSafeArrayOut (IGuestOSType 
 STDMETHODIMP
 VirtualBox::COMGETTER(SharedFolders) (ComSafeArrayOut (ISharedFolder *, aSharedFolders))
 {
+#ifndef RT_OS_WINDOWS
+    NOREF(aSharedFoldersSize);
+#endif /* RT_OS_WINDOWS */
+
     CheckComArgOutSafeArrayPointerValid(aSharedFolders);
 
     AutoCaller autoCaller (this);
@@ -733,6 +757,23 @@ VirtualBox::COMGETTER(PerformanceCollector) (IPerformanceCollector **aPerformanc
 #else /* !VBOX_WITH_RESOURCE_USAGE_API */
     ReturnComNotImplemented();
 #endif /* !VBOX_WITH_RESOURCE_USAGE_API */
+}
+
+STDMETHODIMP
+VirtualBox::COMGETTER(DHCPServers) (ComSafeArrayOut (IDHCPServer *, aDHCPServers))
+{
+    if (ComSafeArrayOutIsNull (aDHCPServers))
+        return E_POINTER;
+
+    AutoCaller autoCaller (this);
+    CheckComRCReturnRC (autoCaller.rc());
+
+    AutoReadLock alock (this);
+
+    SafeIfaceArray<IDHCPServer> svrs (mData.mDHCPServers);
+    svrs.detachTo (ComSafeArrayOutArg (aDHCPServers));
+
+    return S_OK;
 }
 
 // IVirtualBox methods
@@ -1051,6 +1092,10 @@ STDMETHODIMP VirtualBox::UnregisterMachine (IN_GUID aId,
 
     /* save the global registry */
     rc = saveSettings();
+    CheckComRCReturnRC (rc);
+
+    /* Close settings file for this machine. */
+    rc = machine->unlockConfig();
 
     /* return the unregistered machine to the caller */
     machine.queryInterfaceTo (aMachine);
@@ -1084,7 +1129,7 @@ STDMETHODIMP VirtualBox::CreateHardDisk(IN_BSTR aFormat,
 
     ComObjPtr<HardDisk> hardDisk;
     hardDisk.createObject();
-    rc = hardDisk->init (this, format, aLocation);
+    rc = hardDisk->init(this, format, aLocation);
 
     if (SUCCEEDED (rc))
         hardDisk.queryInterfaceTo (aHardDisk);
@@ -1093,6 +1138,7 @@ STDMETHODIMP VirtualBox::CreateHardDisk(IN_BSTR aFormat,
 }
 
 STDMETHODIMP VirtualBox::OpenHardDisk(IN_BSTR aLocation,
+                                      AccessMode_T accessMode,
                                       IHardDisk **aHardDisk)
 {
     CheckComArgNotNull(aLocation);
@@ -1107,7 +1153,9 @@ STDMETHODIMP VirtualBox::OpenHardDisk(IN_BSTR aLocation,
 
     ComObjPtr<HardDisk> hardDisk;
     hardDisk.createObject();
-    rc = hardDisk->init (this, aLocation);
+    rc = hardDisk->init(this,
+                        aLocation,
+                        (accessMode == AccessMode_ReadWrite) ? HardDisk::OpenReadWrite : HardDisk::OpenReadOnly );
 
     if (SUCCEEDED (rc))
     {
@@ -1361,7 +1409,7 @@ STDMETHODIMP VirtualBox::GetGuestOSType (IN_BSTR aId, IGuestOSType **aType)
 }
 
 STDMETHODIMP
-VirtualBox::CreateSharedFolder (IN_BSTR aName, IN_BSTR aHostPath, BOOL aWritable)
+VirtualBox::CreateSharedFolder (IN_BSTR aName, IN_BSTR aHostPath, BOOL /* aWritable */)
 {
     CheckComArgNotNull(aName);
     CheckComArgNotNull(aHostPath);
@@ -1400,6 +1448,8 @@ GetNextExtraDataKey (IN_BSTR aKey, BSTR *aNextKey, BSTR *aNextValue)
 
     HRESULT rc = S_OK;
 
+    Bstr bstrInKey(aKey);
+
     /* serialize file access (prevent writes) */
     AutoReadLock alock (this);
 
@@ -1430,7 +1480,7 @@ GetNextExtraDataKey (IN_BSTR aKey, BSTR *aNextKey, BSTR *aNextValue)
                     Bstr key = (*it).stringValue ("name");
 
                     /* if we're supposed to return the first one */
-                    if (aKey == NULL)
+                    if (bstrInKey.isEmpty())
                     {
                         key.cloneTo (aNextKey);
                         if (aNextValue)
@@ -1442,7 +1492,7 @@ GetNextExtraDataKey (IN_BSTR aKey, BSTR *aNextKey, BSTR *aNextValue)
                     }
 
                     /* did we find the key we're looking for? */
-                    if (key == aKey)
+                    if (key == bstrInKey)
                     {
                         ++ it;
                         /* is there another item? */
@@ -1469,9 +1519,9 @@ GetNextExtraDataKey (IN_BSTR aKey, BSTR *aNextKey, BSTR *aNextValue)
          * (which is the case only when there are no items), we just fall
          * through to return NULLs and S_OK. */
 
-        if (aKey != NULL)
+        if (!bstrInKey.isEmpty())
             return setError (VBOX_E_OBJECT_NOT_FOUND,
-                tr ("Could not find the extra data key '%ls'"), aKey);
+                tr("Could not find the extra data key '%ls'"), bstrInKey.raw());
     }
     catch (...)
     {
@@ -1833,8 +1883,8 @@ STDMETHODIMP VirtualBox::UnregisterCallback (IVirtualBoxCallback *aCallback)
     return rc;
 }
 
-STDMETHODIMP VirtualBox::WaitForPropertyChange (IN_BSTR aWhat, ULONG aTimeout,
-                                                BSTR *aChanged, BSTR *aValues)
+STDMETHODIMP VirtualBox::WaitForPropertyChange (IN_BSTR /* aWhat */, ULONG /* aTimeout */,
+                                                BSTR * /* aChanged */, BSTR * /* aValues */)
 {
     ReturnComNotImplemented();
 }
@@ -1959,6 +2009,7 @@ HRESULT VirtualBox::removeProgress (IN_GUID aId)
 
     size_t cnt = mData.mProgressOperations.erase (aId);
     Assert (cnt == 1);
+    NOREF(cnt);
 
     return S_OK;
 }
@@ -3047,7 +3098,7 @@ HRESULT VirtualBox::loadMedia (const settings::Key &aGlobal)
             {
                 ComObjPtr<HardDisk> hardDisk;
                 hardDisk.createObject();
-                rc = hardDisk->init (this, NULL, *it);
+                rc = hardDisk->init(this, NULL, *it);
                 CheckComRCBreakRC (rc);
 
                 rc = registerHardDisk(hardDisk, false /* aSaveRegistry */);
@@ -3100,6 +3151,58 @@ HRESULT VirtualBox::loadMedia (const settings::Key &aGlobal)
     }
 
     return rc;
+}
+
+/**
+ *  Reads in the network service registration entries from the global settings file
+ *  and creates the relevant objects.
+ *
+ *  @param aGlobal  <Global> node
+ *
+ *  @note Can be called only from #init().
+ *  @note Doesn't lock anything.
+ */
+HRESULT VirtualBox::loadNetservices (const settings::Key &aGlobal)
+{
+    using namespace settings;
+
+    AutoCaller autoCaller (this);
+    AssertReturn (autoCaller.state() == InInit, E_FAIL);
+
+    HRESULT rc = S_OK;
+
+    Key registry = aGlobal.findKey ("NetserviceRegistry");
+    if(registry.isNull())
+        return S_OK;
+
+    const char *kMediaNodes[] = { "DHCPServers" };
+
+    for (size_t n = 0; n < RT_ELEMENTS (kMediaNodes); ++ n)
+    {
+        /* All three media nodes are optional */
+        Key node = registry.findKey (kMediaNodes [n]);
+        if (node.isNull())
+            continue;
+
+        if (n == 0)
+        {
+            Key::List dhcpServers = node.keys ("DHCPServer");
+            for (Key::List::const_iterator it = dhcpServers.begin();
+                 it != dhcpServers.end(); ++ it)
+            {
+                ComObjPtr<DHCPServer> dhcpServer;
+                dhcpServer.createObject();
+                rc = dhcpServer->init (this, *it);
+                CheckComRCBreakRC (rc);
+
+                rc = registerDHCPServer(dhcpServer, false /* aSaveRegistry */);
+                CheckComRCBreakRC (rc);
+            }
+
+            continue;
+        }
+    }
+   return rc;
 }
 
 /**
@@ -3200,6 +3303,30 @@ HRESULT VirtualBox::saveSettings()
                      ++ it)
                 {
                     rc = (*it)->saveSettings (imagesNode);
+                    CheckComRCThrowRC (rc);
+                }
+            }
+        }
+
+        /* netservices */
+        {
+            /* first, delete the entire netservice registry */
+            Key registryNode = global.findKey ("NetserviceRegistry");
+            if (!registryNode.isNull())
+                registryNode.zap();
+            /* then, recreate it */
+            registryNode = global.createKey ("NetserviceRegistry");
+
+            /* hard disks */
+            {
+                Key dhcpServersNode = registryNode.createKey ("DHCPServers");
+
+                for (DHCPServerList::const_iterator it =
+                        mData.mDHCPServers.begin();
+                     it != mData.mDHCPServers.end();
+                     ++ it)
+                {
+                    rc = (*it)->saveSettings (dhcpServersNode);
                     CheckComRCThrowRC (rc);
                 }
             }
@@ -3387,6 +3514,7 @@ HRESULT VirtualBox::unregisterHardDisk(HardDisk *aHardDisk,
 
     size_t cnt = mData.mHardDiskMap.erase (aHardDisk->id());
     Assert (cnt == 1);
+    NOREF(cnt);
 
     if (aHardDisk->parent().isNull())
     {
@@ -4013,7 +4141,7 @@ HRESULT VirtualBox::unlockConfig()
  *  that have opened sessions using IVirtualBox::OpenSession()
  */
 // static
-DECLCALLBACK(int) VirtualBox::ClientWatcher (RTTHREAD thread, void *pvUser)
+DECLCALLBACK(int) VirtualBox::ClientWatcher (RTTHREAD /* thread */, void *pvUser)
 {
     LogFlowFuncEnter();
 
@@ -4050,7 +4178,7 @@ DECLCALLBACK(int) VirtualBox::ClientWatcher (RTTHREAD thread, void *pvUser)
             /* release the caller to let uninit() ever proceed */
             autoCaller.release();
 
-            DWORD rc = ::WaitForMultipleObjects (1 + cnt + cntSpawned,
+            DWORD rc = ::WaitForMultipleObjects ((DWORD)(1 + cnt + cntSpawned),
                                                  handles, FALSE, INFINITE);
 
             /* Restore the caller before using VirtualBox. If it fails, this
@@ -4556,4 +4684,182 @@ void *VirtualBox::CallbackEvent::handler()
 
     return NULL;
 }
+
+//STDMETHODIMP VirtualBox::CreateDHCPServerForInterface (/*IHostNetworkInterface * aIinterface,*/ IDHCPServer ** aServer)
+//{
+//    return E_NOTIMPL;
+//}
+
+STDMETHODIMP VirtualBox::CreateDHCPServer (IN_BSTR aName, IDHCPServer ** aServer)
+{
+    CheckComArgNotNull(aName);
+    CheckComArgNotNull(aServer);
+
+    AutoCaller autoCaller (this);
+    CheckComRCReturnRC (autoCaller.rc());
+
+    ComObjPtr<DHCPServer> dhcpServer;
+    dhcpServer.createObject();
+    HRESULT rc = dhcpServer->init (this, aName);
+    CheckComRCReturnRC (rc);
+
+    rc = registerDHCPServer(dhcpServer, true);
+    CheckComRCReturnRC (rc);
+
+    dhcpServer.queryInterfaceTo(aServer);
+
+    return rc;
+}
+
+//STDMETHODIMP VirtualBox::FindDHCPServerForInterface (IHostNetworkInterface * aIinterface, IDHCPServer ** aServer)
+//{
+//    return E_NOTIMPL;
+//}
+
+STDMETHODIMP VirtualBox::FindDHCPServerByNetworkName (IN_BSTR aName, IDHCPServer ** aServer)
+{
+    CheckComArgNotNull(aName);
+    CheckComArgNotNull(aServer);
+
+    AutoCaller autoCaller (this);
+    CheckComRCReturnRC (autoCaller.rc());
+
+    AutoWriteLock alock (this);
+
+    HRESULT rc;
+    Bstr bstr;
+    ComPtr <DHCPServer> found;
+
+    for (DHCPServerList::const_iterator it =
+            mData.mDHCPServers.begin();
+         it != mData.mDHCPServers.end();
+         ++ it)
+    {
+        rc = (*it)->COMGETTER(NetworkName) (bstr.asOutParam());
+        CheckComRCThrowRC (rc);
+
+        if(bstr == aName)
+        {
+            found = *it;
+            break;
+        }
+    }
+
+    if (!found)
+        return E_INVALIDARG;
+
+    return found.queryInterfaceTo (aServer);
+}
+
+STDMETHODIMP VirtualBox::RemoveDHCPServer (IDHCPServer * aServer)
+{
+    CheckComArgNotNull(aServer);
+
+    AutoCaller autoCaller (this);
+    CheckComRCReturnRC (autoCaller.rc());
+
+    HRESULT rc = unregisterDHCPServer(static_cast<DHCPServer *>(aServer), true);
+
+    return rc;
+}
+
+/**
+ * Remembers the given dhcp server by storing it in the hard disk registry.
+ *
+ * @param aDHCPServer     Dhcp Server object to remember.
+ * @param aSaveRegistry @c true to save hard disk registry to disk (default).
+ *
+ * When @a aSaveRegistry is @c true, this operation may fail because of the
+ * failed #saveSettings() method it calls. In this case, the dhcp server object
+ * will not be remembered. It is therefore the responsibility of the caller to
+ * call this method as the last step of some action that requires registration
+ * in order to make sure that only fully functional dhcp server objects get
+ * registered.
+ *
+ * @note Locks this object for writing and @a aDHCPServer for reading.
+ */
+HRESULT VirtualBox::registerDHCPServer(DHCPServer *aDHCPServer,
+                                     bool aSaveRegistry /*= true*/)
+{
+    AssertReturn (aDHCPServer != NULL, E_INVALIDARG);
+
+    AutoCaller autoCaller (this);
+    AssertComRCReturn (autoCaller.rc(), autoCaller.rc());
+
+    AutoWriteLock alock (this);
+
+    AutoCaller dhcpServerCaller (aDHCPServer);
+    AssertComRCReturn (dhcpServerCaller.rc(), dhcpServerCaller.rc());
+
+    AutoReadLock dhcpServerLock (aDHCPServer);
+
+    Bstr name;
+    HRESULT rc;
+    rc = aDHCPServer->COMGETTER(NetworkName) (name.asOutParam());
+    CheckComRCReturnRC (rc);
+
+    ComPtr<IDHCPServer> existing;
+    rc = FindDHCPServerByNetworkName(name.mutableRaw(), existing.asOutParam());
+    if(SUCCEEDED(rc))
+    {
+        return E_INVALIDARG;
+    }
+    rc = S_OK;
+
+    mData.mDHCPServers.push_back (aDHCPServer);
+
+    if (aSaveRegistry)
+    {
+        rc = saveSettings();
+        if (FAILED (rc))
+            unregisterDHCPServer(aDHCPServer, false /* aSaveRegistry */);
+    }
+
+    return rc;
+}
+
+/**
+ * Removes the given hard disk from the hard disk registry.
+ *
+ * @param aHardDisk     Hard disk object to remove.
+ * @param aSaveRegistry @c true to save hard disk registry to disk (default).
+ *
+ * When @a aSaveRegistry is @c true, this operation may fail because of the
+ * failed #saveSettings() method it calls. In this case, the hard disk object
+ * will NOT be removed from the registry when this method returns. It is
+ * therefore the responsibility of the caller to call this method as the first
+ * step of some action that requires unregistration, before calling uninit() on
+ * @a aHardDisk.
+ *
+ * @note Locks this object for writing and @a aHardDisk for reading.
+ */
+HRESULT VirtualBox::unregisterDHCPServer(DHCPServer *aDHCPServer,
+                                       bool aSaveRegistry /*= true*/)
+{
+    AssertReturn (aDHCPServer != NULL, E_INVALIDARG);
+
+    AutoCaller autoCaller (this);
+    AssertComRCReturn (autoCaller.rc(), autoCaller.rc());
+
+    AutoWriteLock alock (this);
+
+    AutoCaller dhcpServerCaller (aDHCPServer);
+    AssertComRCReturn (dhcpServerCaller.rc(), dhcpServerCaller.rc());
+
+    AutoReadLock dhcpServerLock (aDHCPServer);
+
+    mData.mDHCPServers.remove (aDHCPServer);
+
+    HRESULT rc = S_OK;
+
+    if (aSaveRegistry)
+    {
+        rc = saveSettings();
+        if (FAILED (rc))
+            registerDHCPServer(aDHCPServer, false /* aSaveRegistry */);
+    }
+
+    return rc;
+}
+
 /* vi: set tabstop=4 shiftwidth=4 expandtab: */

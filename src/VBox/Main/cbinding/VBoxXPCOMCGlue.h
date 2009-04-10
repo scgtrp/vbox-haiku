@@ -4,7 +4,7 @@
  */
 
 /*
- * Copyright (C) 2009 Sun Microsystems, Inc.
+ * Copyright (C) 2008-2009 Sun Microsystems, Inc.
  *
  * Permission is hereby granted, free of charge, to any person
  * obtaining a copy of this software and associated documentation
@@ -31,7 +31,7 @@
 #ifndef ___VBoxXPCOMC_cglue_h
 #define ___VBoxXPCOMC_cglue_h
 
-#include "VirtualBox_CXPCOM.h"
+#include "VBoxCAPI_v2_2.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -43,8 +43,11 @@ extern void *g_hVBoxXPCOMC;
 extern char g_szVBoxErrMsg[256];
 /** Pointer to the VBoxXPCOMC function table.  */
 extern PCVBOXXPCOM g_pVBoxFuncs;
+/** Pointer to VBoxGetXPCOMCFunctions for the loaded VBoxXPCOMC so/dylib/dll. */
+extern PFNVBOXGETXPCOMCFUNCTIONS g_pfnGetFunctions;
 
-int VBoxCGlueInit(const char *pszMsgPrefix);
+
+int VBoxCGlueInit(void);
 void VBoxCGlueTerm(void);
 
 

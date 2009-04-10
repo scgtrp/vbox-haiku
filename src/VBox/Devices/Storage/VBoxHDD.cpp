@@ -60,8 +60,8 @@ typedef struct VDIMAGE
     char            *pszFilename;
     /** Data managed by the backend which keeps the actual info. */
     void            *pvBackendData;
-    /** Cached sanitized image type. */
-    VDIMAGETYPE     enmImageType;
+    /** Cached sanitized image flags. */
+    unsigned        uImageFlags;
     /** Image open flags (only those handled generically in this code and which
      * the backends will never ever see). */
     unsigned        uOpenFlags;
@@ -1051,43 +1051,40 @@ VBOXDDU_DECL(int) VDOpen(PVBOXHDD pDisk, const char *pszBackend,
             }
         }
 
-        VDIMAGETYPE enmImageType;
-        rc = pImage->Backend->pfnGetImageType(pImage->pvBackendData,
-                                              &enmImageType);
+        unsigned uImageFlags;
+        uImageFlags = pImage->Backend->pfnGetImageFlags(pImage->pvBackendData);
         /* Check image type. As the image itself has only partial knowledge
          * whether it's a base image or not, this info is derived here. The
          * base image can be fixed or normal, all others must be normal or
          * diff images. Some image formats don't distinguish between normal
          * and diff images, so this must be corrected here. */
         if (RT_FAILURE(rc))
-            enmImageType = VD_IMAGE_TYPE_INVALID;
+            uImageFlags = VD_IMAGE_FLAGS_NONE;
         if (    RT_SUCCESS(rc)
             &&  !(uOpenFlags & VD_OPEN_FLAGS_INFO))
         {
             if (    pDisk->cImages == 0
-                &&  enmImageType != VD_IMAGE_TYPE_FIXED
-                &&  enmImageType != VD_IMAGE_TYPE_NORMAL)
+                &&  (uImageFlags & VD_IMAGE_FLAGS_DIFF))
             {
                 rc = VERR_VD_INVALID_TYPE;
                 break;
             }
             else if (pDisk->cImages != 0)
             {
-                if (    enmImageType != VD_IMAGE_TYPE_NORMAL
-                    &&  enmImageType != VD_IMAGE_TYPE_DIFF)
+                if (uImageFlags & VD_IMAGE_FLAGS_FIXED)
                 {
                     rc = VERR_VD_INVALID_TYPE;
                     break;
                 }
                 else
-                    enmImageType = VD_IMAGE_TYPE_DIFF;
+                    uImageFlags |= VD_IMAGE_FLAGS_DIFF;
             }
         }
-        pImage->enmImageType = enmImageType;
+        pImage->uImageFlags = uImageFlags;
 
         /* Force sane optimization settings. It's not worth avoiding writes
          * to fixed size images. The overhead would have almost no payback. */
-        if (enmImageType == VD_IMAGE_TYPE_FIXED)
+        if (uImageFlags & VD_IMAGE_FLAGS_FIXED)
             pImage->uOpenFlags |= VD_OPEN_FLAGS_HONOR_SAME;
 
         /** @todo optionally check UUIDs */
@@ -1126,7 +1123,6 @@ VBOXDDU_DECL(int) VDOpen(PVBOXHDD pDisk, const char *pszBackend,
         else
         {
             /* Make sure the LCHS geometry is properly clipped. */
-            pDisk->LCHSGeometry.cCylinders = RT_MIN(pDisk->LCHSGeometry.cCylinders, 1024);
             pDisk->LCHSGeometry.cHeads = RT_MIN(pDisk->LCHSGeometry.cHeads, 255);
             pDisk->LCHSGeometry.cSectors = RT_MIN(pDisk->LCHSGeometry.cSectors, 63);
         }
@@ -1181,21 +1177,19 @@ VBOXDDU_DECL(int) VDOpen(PVBOXHDD pDisk, const char *pszBackend,
  * @param   pDisk           Pointer to HDD container.
  * @param   pszBackend      Name of the image file backend to use.
  * @param   pszFilename     Name of the image file to create.
- * @param   enmType         Image type, only base image types are acceptable.
  * @param   cbSize          Image size in bytes.
  * @param   uImageFlags     Flags specifying special image features.
  * @param   pszComment      Pointer to image comment. NULL is ok.
  * @param   pPCHSGeometry   Pointer to physical disk geometry <= (16383,16,63). Not NULL.
- * @param   pLCHSGeometry   Pointer to logical disk geometry <= (1024,255,63). Not NULL.
+ * @param   pLCHSGeometry   Pointer to logical disk geometry <= (x,255,63). Not NULL.
  * @param   pUuid           New UUID of the image. If NULL, a new UUID is created.
  * @param   uOpenFlags      Image file open mode, see VD_OPEN_FLAGS_* constants.
  * @param   pVDIfsImage     Pointer to the per-image VD interface list.
  * @param   pVDIfsOperation Pointer to the per-operation VD interface list.
  */
 VBOXDDU_DECL(int) VDCreateBase(PVBOXHDD pDisk, const char *pszBackend,
-                               const char *pszFilename, VDIMAGETYPE enmType,
-                               uint64_t cbSize, unsigned uImageFlags,
-                               const char *pszComment,
+                               const char *pszFilename, uint64_t cbSize,
+                               unsigned uImageFlags, const char *pszComment,
                                PCPDMMEDIAGEOMETRY pPCHSGeometry,
                                PCPDMMEDIAGEOMETRY pLCHSGeometry,
                                PCRTUUID pUuid, unsigned uOpenFlags,
@@ -1206,8 +1200,8 @@ VBOXDDU_DECL(int) VDCreateBase(PVBOXHDD pDisk, const char *pszBackend,
     PVDIMAGE pImage = NULL;
     RTUUID uuid;
 
-    LogFlowFunc(("pDisk=%#p pszBackend=\"%s\" pszFilename=\"%s\" enmType=%#x cbSize=%llu uImageFlags=%#x pszComment=\"%s\" PCHS=%u/%u/%u LCHS=%u/%u/%u Uuid=%RTuuid uOpenFlags=%#x pVDIfsImage=%#p pVDIfsOperation=%#p\n",
-                 pDisk, pszBackend, pszFilename, enmType, cbSize, uImageFlags, pszComment,
+    LogFlowFunc(("pDisk=%#p pszBackend=\"%s\" pszFilename=\"%s\" cbSize=%llu uImageFlags=%#x pszComment=\"%s\" PCHS=%u/%u/%u LCHS=%u/%u/%u Uuid=%RTuuid uOpenFlags=%#x pVDIfsImage=%#p pVDIfsOperation=%#p\n",
+                 pDisk, pszBackend, pszFilename, cbSize, uImageFlags, pszComment,
                  pPCHSGeometry->cCylinders, pPCHSGeometry->cHeads,
                  pPCHSGeometry->cSectors, pLCHSGeometry->cCylinders,
                  pLCHSGeometry->cHeads, pLCHSGeometry->cSectors, pUuid,
@@ -1232,13 +1226,11 @@ VBOXDDU_DECL(int) VDCreateBase(PVBOXHDD pDisk, const char *pszBackend,
         AssertMsgBreakStmt(VALID_PTR(pszFilename) && *pszFilename,
                            ("pszFilename=%#p \"%s\"\n", pszFilename, pszFilename),
                            rc = VERR_INVALID_PARAMETER);
-        AssertMsgBreakStmt(enmType == VD_IMAGE_TYPE_NORMAL || enmType == VD_IMAGE_TYPE_FIXED,
-                           ("enmType=%#x\n", enmType),
-                           rc = VERR_INVALID_PARAMETER);
         AssertMsgBreakStmt(cbSize,
                            ("cbSize=%llu\n", cbSize),
                            rc = VERR_INVALID_PARAMETER);
-        AssertMsgBreakStmt((uImageFlags & ~VD_IMAGE_FLAGS_MASK) == 0,
+        AssertMsgBreakStmt(   ((uImageFlags & ~VD_IMAGE_FLAGS_MASK) == 0)
+                           || ((uImageFlags & (VD_IMAGE_FLAGS_FIXED | VD_IMAGE_FLAGS_DIFF)) != VD_IMAGE_FLAGS_FIXED),
                            ("uImageFlags=%#x\n", uImageFlags),
                            rc = VERR_INVALID_PARAMETER);
         /* The PCHS geometry fields may be 0 to leave it for later. */
@@ -1252,7 +1244,6 @@ VBOXDDU_DECL(int) VDCreateBase(PVBOXHDD pDisk, const char *pszBackend,
                            rc = VERR_INVALID_PARAMETER);
         /* The LCHS geometry fields may be 0 to leave it to later autodetection. */
         AssertMsgBreakStmt(   VALID_PTR(pLCHSGeometry)
-                           && pLCHSGeometry->cCylinders <= 1024
                            && pLCHSGeometry->cHeads <= 255
                            && pLCHSGeometry->cSectors <= 63,
                            ("pLCHSGeometry=%#p LCHS=%u/%u/%u\n", pLCHSGeometry,
@@ -1312,7 +1303,8 @@ VBOXDDU_DECL(int) VDCreateBase(PVBOXHDD pDisk, const char *pszBackend,
         }
 
         pImage->uOpenFlags = uOpenFlags & VD_OPEN_FLAGS_HONOR_SAME;
-        rc = pImage->Backend->pfnCreate(pImage->pszFilename, enmType, cbSize,
+        uImageFlags &= ~VD_IMAGE_FLAGS_DIFF;
+        rc = pImage->Backend->pfnCreate(pImage->pszFilename, cbSize,
                                         uImageFlags, pszComment, pPCHSGeometry,
                                         pLCHSGeometry, pUuid,
                                         uOpenFlags & ~VD_OPEN_FLAGS_HONOR_SAME,
@@ -1324,11 +1316,11 @@ VBOXDDU_DECL(int) VDCreateBase(PVBOXHDD pDisk, const char *pszBackend,
 
         if (RT_SUCCESS(rc))
         {
-            pImage->enmImageType = enmType;
+            pImage->uImageFlags = uImageFlags;
 
             /* Force sane optimization settings. It's not worth avoiding writes
              * to fixed size images. The overhead would have almost no payback. */
-            if (enmType == VD_IMAGE_TYPE_FIXED)
+            if (uImageFlags & VD_IMAGE_FLAGS_FIXED)
                 pImage->uOpenFlags |= VD_OPEN_FLAGS_HONOR_SAME;
 
             /** @todo optionally check UUIDs */
@@ -1367,7 +1359,6 @@ VBOXDDU_DECL(int) VDCreateBase(PVBOXHDD pDisk, const char *pszBackend,
             else
             {
                 /* Make sure the CHS geometry is properly clipped. */
-                pDisk->LCHSGeometry.cCylinders = RT_MIN(pDisk->LCHSGeometry.cCylinders, 1024);
                 pDisk->LCHSGeometry.cHeads = RT_MIN(pDisk->LCHSGeometry.cHeads, 255);
                 pDisk->LCHSGeometry.cSectors = RT_MIN(pDisk->LCHSGeometry.cSectors, 63);
             }
@@ -1517,8 +1508,7 @@ VBOXDDU_DECL(int) VDCreateDiff(PVBOXHDD pDisk, const char *pszBackend,
         }
 
         pImage->uOpenFlags = uOpenFlags & VD_OPEN_FLAGS_HONOR_SAME;
-        rc = pImage->Backend->pfnCreate(pImage->pszFilename,
-                                        VD_IMAGE_TYPE_DIFF, pDisk->cbSize,
+        rc = pImage->Backend->pfnCreate(pImage->pszFilename, pDisk->cbSize,
                                         uImageFlags, pszComment,
                                         &pDisk->PCHSGeometry,
                                         &pDisk->LCHSGeometry, pUuid,
@@ -1531,7 +1521,7 @@ VBOXDDU_DECL(int) VDCreateDiff(PVBOXHDD pDisk, const char *pszBackend,
 
         if (RT_SUCCESS(rc) && pDisk->cImages != 0)
         {
-            pImage->enmImageType = VD_IMAGE_TYPE_DIFF;
+            pImage->uImageFlags |= VD_IMAGE_FLAGS_DIFF;
 
             /* Switch previous image to read-only mode. */
             unsigned uOpenFlagsPrevImg;
@@ -1878,6 +1868,7 @@ VBOXDDU_DECL(int) VDMerge(PVBOXHDD pDisk, unsigned nImageFrom,
  * @param   pszFilename     New name of the image (may be NULL if pDiskFrom == pDiskTo).
  * @param   fMoveByRename   If true, attempt to perform a move by renaming (if successful the new size is ignored).
  * @param   cbSize          New image size (0 means leave unchanged).
+ * @param   uImageFlags     Flags specifying special destination image features.
  * @param   pDstUuid        New UUID of the destination image. If NULL, a new UUID is created.
  *                          This parameter is used if and only if a true copy is created.
  *                          In all rename/move cases the UUIDs are copied over.
@@ -1889,7 +1880,8 @@ VBOXDDU_DECL(int) VDMerge(PVBOXHDD pDisk, unsigned nImageFrom,
  */
 VBOXDDU_DECL(int) VDCopy(PVBOXHDD pDiskFrom, unsigned nImage, PVBOXHDD pDiskTo,
                          const char *pszBackend, const char *pszFilename,
-                         bool fMoveByRename, uint64_t cbSize, PCRTUUID pDstUuid,
+                         bool fMoveByRename, uint64_t cbSize,
+                         unsigned uImageFlags, PCRTUUID pDstUuid,
                          PVDINTERFACE pVDIfsOperation,
                          PVDINTERFACE pDstVDIfsImage,
                          PVDINTERFACE pDstVDIfsOperation)
@@ -1949,9 +1941,6 @@ VBOXDDU_DECL(int) VDCopy(PVBOXHDD pDiskFrom, unsigned nImage, PVBOXHDD pDiskTo,
                            ("pszFilename=%#p \"%s\"\n", pszFilename, pszFilename),
                            rc = VERR_INVALID_PARAMETER);
 
-        /* Collect properties of source image. */
-        VDIMAGETYPE enmTypeFrom = pImageFrom->enmImageType;
-
         uint64_t cbSizeFrom;
         cbSizeFrom = pImageFrom->Backend->pfnGetSize(pImageFrom->pvBackendData);
         if (cbSizeFrom == 0)
@@ -1962,9 +1951,6 @@ VBOXDDU_DECL(int) VDCopy(PVBOXHDD pDiskFrom, unsigned nImage, PVBOXHDD pDiskTo,
 
         if (cbSize == 0)
             cbSize = cbSizeFrom;
-
-        unsigned uImageFlagsFrom;
-        uImageFlagsFrom = pImageFrom->Backend->pfnGetImageFlags(pImageFrom->pvBackendData);
 
         PDMMEDIAGEOMETRY PCHSGeometryFrom = {0, 0, 0};
         PDMMEDIAGEOMETRY LCHSGeometryFrom = {0, 0, 0};
@@ -2010,18 +1996,17 @@ VBOXDDU_DECL(int) VDCopy(PVBOXHDD pDiskFrom, unsigned nImage, PVBOXHDD pDiskTo,
         /** @todo replace the VDCreateDiff/VDCreateBase calls by direct
          * calls to the backend. Unifies the code and reduces the API
          * dependencies. */
-        if (enmTypeFrom == VD_IMAGE_TYPE_DIFF)
+        if (uImageFlags & VD_IMAGE_FLAGS_DIFF)
         {
-            rc = VDCreateDiff(pDiskTo, pszBackend, pszFilename, uImageFlagsFrom,
+            rc = VDCreateDiff(pDiskTo, pszBackend, pszFilename, uImageFlags,
                               szComment, &ImageUuid, &ParentUuid, uOpenFlagsFrom & ~VD_OPEN_FLAGS_READONLY, NULL, NULL);
         } else {
-            VDIMAGETYPE enmTypeTo = enmTypeFrom; /** @todo Please, review this! It's an ugly hack I think... */
-            if (    !strcmp(pszBackend, "RAW")
-                &&  enmTypeTo != VD_IMAGE_TYPE_FIXED)
-                enmTypeTo = VD_IMAGE_TYPE_FIXED;
+            /** @todo Please, review this! It's an ugly hack I think... */
+            if (!RTStrICmp(pszBackend, "RAW"))
+                uImageFlags |= VD_IMAGE_FLAGS_FIXED;
 
-            rc = VDCreateBase(pDiskTo, pszBackend, pszFilename, enmTypeTo,
-                              cbSize, uImageFlagsFrom, szComment,
+            rc = VDCreateBase(pDiskTo, pszBackend, pszFilename, cbSize,
+                              uImageFlags, szComment,
                               &PCHSGeometryFrom, &LCHSGeometryFrom,
                               NULL, uOpenFlagsFrom & ~VD_OPEN_FLAGS_READONLY, NULL, NULL);
             if (RT_SUCCESS(rc) && !RTUuidIsNull(&ImageUuid))
@@ -2136,7 +2121,7 @@ VBOXDDU_DECL(int) VDCopy(PVBOXHDD pDiskFrom, unsigned nImage, PVBOXHDD pDiskTo,
  */
 VBOXDDU_DECL(int) VDClose(PVBOXHDD pDisk, bool fDelete)
 {
-    int rc = VINF_SUCCESS;;
+    int rc = VINF_SUCCESS;
 
     LogFlowFunc(("pDisk=%#p fDelete=%d\n", pDisk, fDelete));
     do
@@ -2146,7 +2131,11 @@ VBOXDDU_DECL(int) VDClose(PVBOXHDD pDisk, bool fDelete)
         AssertMsg(pDisk->u32Signature == VBOXHDDDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
 
         PVDIMAGE pImage = pDisk->pLast;
-        AssertPtrBreakStmt(pImage, rc = VERR_VD_NOT_OPENED);
+        if (!pImage)
+        {
+            rc = VERR_VD_NOT_OPENED;
+            break;
+        }
         unsigned uOpenFlags = pImage->Backend->pfnGetOpenFlags(pImage->pvBackendData);
         /* Remove image from list of opened images. */
         vdRemoveImageFromList(pDisk, pImage);
@@ -2204,7 +2193,6 @@ VBOXDDU_DECL(int) VDClose(PVBOXHDD pDisk, bool fDelete)
         else
         {
             /* Make sure the LCHS geometry is properly clipped. */
-            pDisk->LCHSGeometry.cCylinders = RT_MIN(pDisk->LCHSGeometry.cCylinders, 1024);
             pDisk->LCHSGeometry.cHeads = RT_MIN(pDisk->LCHSGeometry.cHeads, 255);
             pDisk->LCHSGeometry.cSectors = RT_MIN(pDisk->LCHSGeometry.cSectors, 63);
         }
@@ -2599,7 +2587,6 @@ VBOXDDU_DECL(int) VDSetPCHSGeometry(PVBOXHDD pDisk, unsigned nImage,
                 else
                 {
                     /* Make sure the CHS geometry is properly clipped. */
-                    pDisk->PCHSGeometry.cCylinders = RT_MIN(pDisk->PCHSGeometry.cCylinders, 1024);
                     pDisk->PCHSGeometry.cHeads = RT_MIN(pDisk->PCHSGeometry.cHeads, 255);
                     pDisk->PCHSGeometry.cSectors = RT_MIN(pDisk->PCHSGeometry.cSectors, 63);
                 }
@@ -2708,7 +2695,6 @@ VBOXDDU_DECL(int) VDSetLCHSGeometry(PVBOXHDD pDisk, unsigned nImage,
 
         /* Check arguments. */
         AssertMsgBreakStmt(   VALID_PTR(pLCHSGeometry)
-                           && pLCHSGeometry->cCylinders <= 1024
                            && pLCHSGeometry->cHeads <= 255
                            && pLCHSGeometry->cSectors <= 63,
                            ("pLCHSGeometry=%#p LCHS=%u/%u/%u\n", pLCHSGeometry,
@@ -2745,7 +2731,6 @@ VBOXDDU_DECL(int) VDSetLCHSGeometry(PVBOXHDD pDisk, unsigned nImage,
                 else
                 {
                     /* Make sure the CHS geometry is properly clipped. */
-                    pDisk->LCHSGeometry.cCylinders = RT_MIN(pDisk->LCHSGeometry.cCylinders, 1024);
                     pDisk->LCHSGeometry.cHeads = RT_MIN(pDisk->LCHSGeometry.cHeads, 255);
                     pDisk->LCHSGeometry.cSectors = RT_MIN(pDisk->LCHSGeometry.cSectors, 63);
                 }
@@ -2814,51 +2799,6 @@ VBOXDDU_DECL(int) VDGetVersion(PVBOXHDD pDisk, unsigned nImage,
 }
 
 /**
- * Get type of image in HDD container.
- *
- * @returns VBox status code.
- * @returns VERR_VD_IMAGE_NOT_FOUND if image with specified number was not opened.
- * @param   pDisk           Pointer to HDD container.
- * @param   nImage          Image number, counts from 0. 0 is always base image of container.
- * @param   penmType        Where to store the image type.
- */
-VBOXDDU_DECL(int) VDGetImageType(PVBOXHDD pDisk, unsigned nImage,
-                                 PVDIMAGETYPE penmType)
-{
-    int rc = VINF_SUCCESS;
-
-    LogFlowFunc(("pDisk=%#p nImage=%u penmType=%#p\n",
-                 pDisk, nImage, penmType));
-    do
-    {
-        /* sanity check */
-        AssertPtrBreakStmt(pDisk, rc = VERR_INVALID_PARAMETER);
-        AssertMsg(pDisk->u32Signature == VBOXHDDDISK_SIGNATURE, ("u32Signature=%08x\n", pDisk->u32Signature));
-
-        /* Check arguments. */
-        AssertMsgBreakStmt(VALID_PTR(penmType),
-                           ("penmType=%#p\n", penmType),
-                           rc = VERR_INVALID_PARAMETER);
-
-        PVDIMAGE pImage = vdGetImageByNumber(pDisk, nImage);
-        AssertPtrBreakStmt(pImage, rc = VERR_VD_IMAGE_NOT_FOUND);
-
-        if (    pImage->enmImageType >= VD_IMAGE_TYPE_FIRST
-            &&  pImage->enmImageType <= VD_IMAGE_TYPE_DIFF)
-        {
-            *penmType = pImage->enmImageType;
-            rc = VINF_SUCCESS;
-        }
-        else
-            rc = VERR_VD_INVALID_TYPE;
-    } while (0);
-
-    LogFlowFunc(("returns %Rrc uenmType=%u\n", rc, *penmType));
-    return rc;
-}
-
-
-/**
  * List the capabilities of image backend in HDD container.
  *
  * @returns VBox status code.
@@ -2872,7 +2812,7 @@ VBOXDDU_DECL(int) VDBackendInfoSingle(PVBOXHDD pDisk, unsigned nImage,
 {
     int rc = VINF_SUCCESS;
 
-    LogFlowFunc(("pDisk=%#p nImage=%u penmType=%#p\n",
+    LogFlowFunc(("pDisk=%#p nImage=%u pBackendInfo=%#p\n",
                  pDisk, nImage, pBackendInfo));
     do
     {
@@ -2888,17 +2828,10 @@ VBOXDDU_DECL(int) VDBackendInfoSingle(PVBOXHDD pDisk, unsigned nImage,
         PVDIMAGE pImage = vdGetImageByNumber(pDisk, nImage);
         AssertPtrBreakStmt(pImage, rc = VERR_VD_IMAGE_NOT_FOUND);
 
-        if (    pImage->enmImageType >= VD_IMAGE_TYPE_FIRST
-            &&  pImage->enmImageType <= VD_IMAGE_TYPE_DIFF)
-        {
-            pBackendInfo->pszBackend = RTStrDup(pImage->Backend->pszBackendName);
-            pBackendInfo->uBackendCaps = pImage->Backend->uBackendCaps;
-            pBackendInfo->papszFileExtensions = pImage->Backend->papszFileExtensions;
-            pBackendInfo->paConfigInfo = pImage->Backend->paConfigInfo;
-            rc = VINF_SUCCESS;
-        }
-        else
-            rc = VERR_VD_INVALID_TYPE;
+        pBackendInfo->pszBackend = RTStrDup(pImage->Backend->pszBackendName);
+        pBackendInfo->uBackendCaps = pImage->Backend->uBackendCaps;
+        pBackendInfo->papszFileExtensions = pImage->Backend->papszFileExtensions;
+        pBackendInfo->paConfigInfo = pImage->Backend->paConfigInfo;
     } while (0);
 
     LogFlowFunc(("returns %Rrc\n", rc));

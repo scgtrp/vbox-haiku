@@ -49,6 +49,7 @@
 #include <QThread>
 #include <QPainter>
 #include <QTimer>
+#include <QDir>
 
 #include <math.h>
 
@@ -1115,6 +1116,11 @@ QString VBoxGlobal::toString (KStorageBus aBus, LONG aChannel) const
             channel = mStorageBusChannels [2].arg (aChannel);
             break;
         }
+        case KStorageBus_SCSI:
+        {
+            channel = mStorageBusChannels [2].arg (aChannel);
+            break;
+        }
         default:
             AssertFailedBreak();
     }
@@ -1144,6 +1150,7 @@ LONG VBoxGlobal::toStorageChannel (KStorageBus aBus, const QString &aChannel) co
             break;
         }
         case KStorageBus_SATA:
+        case KStorageBus_SCSI:
         {
             /// @todo use regexp to properly extract the %1 text
             QString tpl = mStorageBusChannels [2].arg ("");
@@ -1187,6 +1194,7 @@ QString VBoxGlobal::toString (KStorageBus aBus, LONG aChannel, LONG aDevice) con
             AssertMsgFailedBreak (("Invalid device %d\n", aDevice));
         }
         case KStorageBus_SATA:
+        case KStorageBus_SCSI:
         {
             AssertMsgBreak (aDevice == 0, ("Invalid device %d\n", aDevice));
             /* always empty so far for SATA */
@@ -1226,6 +1234,7 @@ LONG VBoxGlobal::toStorageDevice (KStorageBus aBus, LONG aChannel,
             break;
         }
         case KStorageBus_SATA:
+        case KStorageBus_SCSI:
         {
             AssertMsgBreak(aDevice.isEmpty(), ("Invalid device {%s}\n", aDevice.toLatin1().constData()));
             /* always zero for SATA so far. */
@@ -1259,8 +1268,9 @@ QString VBoxGlobal::toFullString (KStorageBus aBus, LONG aChannel,
             break;
         }
         case KStorageBus_SATA:
+        case KStorageBus_SCSI:
         {
-            /* we only have one SATA device so far which is always zero */
+            /* we only have one SATA/SCSI device so far which is always zero */
             device = QString ("%1 %2")
                 .arg (vboxGlobal().toString (aBus))
                 .arg (vboxGlobal().toString (aBus, aChannel));
@@ -1643,7 +1653,7 @@ QString VBoxGlobal::detailsReport (const CMachine &aMachine, bool aIsNewVM,
         int rows = 2; /* including section header and footer */
 
         CHardDiskAttachmentVector vec = aMachine.GetHardDiskAttachments();
-        for (size_t i = 0; i < (size_t) vec.size(); ++ i)
+        for (int i = 0; i < vec.size(); ++ i)
         {
             CHardDiskAttachment hda = vec [i];
             CHardDisk hd = hda.GetHardDisk();
@@ -1652,11 +1662,16 @@ QString VBoxGlobal::detailsReport (const CMachine &aMachine, bool aIsNewVM,
             /// in VBoxMedium::details().
             if (hda.isOk())
             {
-                KStorageBus bus = hda.GetBus();
-                LONG channel = hda.GetChannel();
+                const QString controller = hda.GetController();
+                KStorageBus bus;
+
+                CStorageController ctrl = aMachine.GetStorageControllerByName(controller);
+                bus = ctrl.GetBus();
+
+                LONG port   = hda.GetPort();
                 LONG device = hda.GetDevice();
                 hardDisks += QString (sSectionItemTpl2)
-                    .arg (toFullString (bus, channel, device))
+                    .arg (toFullString (bus, port, device))
                     .arg (details (hd, aIsNewVM));
                 ++ rows;
             }
@@ -1881,11 +1896,14 @@ QString VBoxGlobal::detailsReport (const CMachine &aMachine, bool aIsNewVM,
                      * an additional symbolic network/interface name field, use
                      * this name instead */
                     if (type == KNetworkAttachmentType_Bridged)
-                        attType = attType.arg (tr ("host interface, %1",
+                        attType = attType.arg (tr ("Bridged network, %1",
                             "details report (network)").arg (adapter.GetHostInterface()));
                     else if (type == KNetworkAttachmentType_Internal)
-                        attType = attType.arg (tr ("internal network, '%1'",
+                        attType = attType.arg (tr ("Internal network, '%1'",
                             "details report (network)").arg (adapter.GetInternalNetwork()));
+                    else if (type == KNetworkAttachmentType_HostOnly)
+                        attType = attType.arg (tr ("Host-only network, '%1'",
+                            "details report (network)").arg (adapter.GetHostInterface()));
                     else
                         attType = attType.arg (vboxGlobal().toString (type));
 
@@ -2251,7 +2269,7 @@ bool VBoxGlobal::checkForAutoConvertedSettings (bool aAfterRefresh /*= false*/)
     QString fileList;
     QString version;
 
-    CMachineVector vec = mVBox.GetMachines2();
+    CMachineVector vec = mVBox.GetMachines();
     for (CMachineVector::ConstIterator m = vec.begin();
          m != vec.end(); ++ m)
     {
@@ -2837,6 +2855,7 @@ void VBoxGlobal::retranslateUi()
 
     mStorageBuses [KStorageBus_IDE] =   tr ("IDE", "StorageBus");
     mStorageBuses [KStorageBus_SATA] =  tr ("SATA", "StorageBus");
+    mStorageBuses [KStorageBus_SCSI] =  tr ("SCSI", "StorageBus");
 
     mStorageBusChannels [0] =   tr ("Primary", "StorageBusChannel");
     mStorageBusChannels [1] =   tr ("Secondary", "StorageBusChannel");
@@ -2893,13 +2912,15 @@ void VBoxGlobal::retranslateUi()
         tr ("Intel PRO/1000 MT Desktop (82540EM)", "NetworkAdapterType");
     mNetworkAdapterTypes [KNetworkAdapterType_I82543GC] =
         tr ("Intel PRO/1000 T Server (82543GC)", "NetworkAdapterType");
+    mNetworkAdapterTypes [KNetworkAdapterType_I82545EM] =
+        tr ("Intel PRO/1000 MT Server (82545EM)", "NetworkAdapterType");
 
     mNetworkAttachmentTypes [KNetworkAttachmentType_Null] =
         tr ("Not attached", "NetworkAttachmentType");
     mNetworkAttachmentTypes [KNetworkAttachmentType_NAT] =
         tr ("NAT", "NetworkAttachmentType");
     mNetworkAttachmentTypes [KNetworkAttachmentType_Bridged] =
-        tr ("Bridged Interface", "NetworkAttachmentType");
+        tr ("Bridged Network", "NetworkAttachmentType");
     mNetworkAttachmentTypes [KNetworkAttachmentType_Internal] =
         tr ("Internal Network", "NetworkAttachmentType");
     mNetworkAttachmentTypes [KNetworkAttachmentType_HostOnly] =
@@ -2914,12 +2935,18 @@ void VBoxGlobal::retranslateUi()
     mClipboardTypes [KClipboardMode_Bidirectional] =
         tr ("Bidirectional", "ClipboardType");
 
-    mIDEControllerTypes [KIDEControllerType_PIIX3] =
-        tr ("PIIX3", "IDEControllerType");
-    mIDEControllerTypes [KIDEControllerType_PIIX4] =
-        tr ("PIIX4", "IDEControllerType");
-    mIDEControllerTypes [KIDEControllerType_ICH6] =
-        tr ("ICH6", "IDEControllerType");
+    mStorageControllerTypes [KStorageControllerType_PIIX3] =
+        tr ("PIIX3", "StorageControllerType");
+    mStorageControllerTypes [KStorageControllerType_PIIX4] =
+        tr ("PIIX4", "StorageControllerType");
+    mStorageControllerTypes [KStorageControllerType_ICH6] =
+        tr ("ICH6", "StorageControllerType");
+    mStorageControllerTypes [KStorageControllerType_IntelAhci] =
+        tr ("AHCI", "StorageControllerType");
+    mStorageControllerTypes [KStorageControllerType_LsiLogic] =
+        tr ("Lsilogic", "StorageControllerType");
+    mStorageControllerTypes [KStorageControllerType_BusLogic] =
+        tr ("BusLogic", "StorageControllerType");
 
     mUSBDeviceStates [KUSBDeviceState_NotSupported] =
         tr ("Not supported", "USBDeviceState");
@@ -3298,6 +3325,8 @@ QIcon VBoxGlobal::iconSetFull (const QSize &aNormalSize, const QSize &aSmallSize
 QIcon VBoxGlobal::standardIcon (QStyle::StandardPixmap aStandard, QWidget *aWidget /* = NULL */)
 {
     QStyle *style = aWidget ? aWidget->style(): QApplication::style();
+    if (!style)
+        return QIcon();
 #ifdef Q_WS_MAC
     /* At least in Qt 4.3.4/4.4 RC1 SP_MessageBoxWarning is the application
      * icon. So change this to the critical icon. (Maybe this would be
@@ -4817,6 +4846,24 @@ QList <QPair <QString, QString> > VBoxGlobal::HDDBackends()
     return backendPropList;
 }
 
+/* static */
+QString VBoxGlobal::documentsPath()
+{
+    QString path;
+#if QT_VERSION < 0x040400
+    path = QDir::homePath();
+#else
+    path = QDesktopServices::storageLocation (QDesktopServices::DocumentsLocation);
+#endif
+
+    /* Make sure the path exists */
+    QDir dir (path);
+    while (!dir.exists())
+        dir.cdUp();
+
+    return QDir::cleanPath (dir.canonicalPath());
+}
+
 // Public slots
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -5230,6 +5277,7 @@ void VBoxGlobal::init()
         {"Mandriva_64",     ":/os_mandriva_64.png"},
         {"RedHat",          ":/os_redhat.png"},
         {"RedHat_64",       ":/os_redhat_64.png"},
+        {"Turbolinux",      ":/os_turbolinux.png"},
         {"Ubuntu",          ":/os_ubuntu.png"},
         {"Ubuntu_64",       ":/os_ubuntu_64.png"},
         {"Xandros",         ":/os_xandros.png"},
@@ -5319,7 +5367,11 @@ void VBoxGlobal::init()
     while (i < argc)
     {
         const char *arg = qApp->argv() [i];
-        if (       !::strcmp (arg, "-startvm"))
+        if (    !::strcmp (arg, "--startvm")
+            ||  !::strcmp (arg, "-startvm")
+            ||  !::strcmp (arg, "-s")
+            ||  !::strcmp (arg, "--vm")
+            ||  !::strcmp (arg, "-vm"))
         {
             if (++i < argc)
             {
@@ -5342,16 +5394,16 @@ void VBoxGlobal::init()
             }
         }
 #ifdef VBOX_GUI_WITH_SYSTRAY
-        else if (!::strcmp (arg, "-systray"))
+        else if (!::strcmp (arg, "-systray") || !::strcmp (arg, "--systray"))
         {
             mIsTrayMenu = true;
         }
 #endif
-        else if (!::strcmp (arg, "-comment"))
+        else if (!::strcmp (arg, "-comment") || !::strcmp (arg, "--comment"))
         {
             ++i;
         }
-        else if (!::strcmp (arg, "-rmode"))
+        else if (!::strcmp (arg, "-rmode") || !::strcmp (arg, "--rmode"))
         {
             if (++i < argc)
                 vm_render_mode_str = qApp->argv() [i];
@@ -5361,7 +5413,7 @@ void VBoxGlobal::init()
         {
             mDbgEnabled = true;
         }
-        else if (!::strcmp( arg, "-debug") || !::strcmp( arg, "--debug"))
+        else if (!::strcmp( arg, "-debug") || !::strcmp (arg, "--debug"))
         {
             mDbgEnabled = true;
             mDbgAutoShow = true;
@@ -5521,7 +5573,7 @@ void VBoxUSBMenu::processAboutToShow()
 
     CHost host = vboxGlobal().virtualBox().GetHost();
 
-    bool isUSBEmpty = host.GetUSBDevices().GetCount() == 0;
+    bool isUSBEmpty = host.GetUSBDevices().size() == 0;
     if (isUSBEmpty)
     {
         QAction *action = addAction (tr ("<no available devices>", "USB devices"));
@@ -5531,10 +5583,10 @@ void VBoxUSBMenu::processAboutToShow()
     }
     else
     {
-        CHostUSBDeviceEnumerator en = host.GetUSBDevices().Enumerate();
-        while (en.HasMore())
+        CHostUSBDeviceVector devvec = host.GetUSBDevices();
+        for (int i = 0; i < devvec.size(); ++i)
         {
-            CHostUSBDevice dev = en.GetNext();
+            CHostUSBDevice dev = devvec[i];
             CUSBDevice usb (dev);
             QAction *action = addAction (vboxGlobal().details (usb));
             action->setCheckable (true);

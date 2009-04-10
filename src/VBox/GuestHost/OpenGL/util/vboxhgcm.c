@@ -166,11 +166,22 @@ static int crVBoxHGCMCall(void *pvData, unsigned cbData)
     crDebug("vboxCall failed with %x\n", GetLastError());
     return VERR_NOT_SUPPORTED;
 #else
+# ifdef RT_OS_SOLARIS
+    VBGLBIGREQ Hdr;
+    Hdr.u32Magic = VBGLBIGREQ_MAGIC;
+    Hdr.cbData = cbData;
+    Hdr.pvDataR3 = pvData;
+#  if HC_ARCH_BITS == 32
+    Hdr.u32Padding = 0;
+#  endif
+    if (ioctl(g_crvboxhgcm.iGuestDrv, VBOXGUEST_IOCTL_HGCM_CALL(cbData), &Hdr) >= 0)
+# else
     if (ioctl(g_crvboxhgcm.iGuestDrv, VBOXGUEST_IOCTL_HGCM_CALL(cbData), pvData) >= 0)
+# endif
     {
         return VINF_SUCCESS;
     }
-    crDebug("vboxCall failed with %x\n", errno);
+    crWarning("vboxCall failed with %x\n", errno);
     return VERR_NOT_SUPPORTED;
 #endif /*#ifdef RT_OS_WINDOWS*/
 
@@ -324,7 +335,7 @@ static void crVBoxHGCMWriteExact(CRConnection *conn, const void *buf, unsigned i
 
     if (RT_FAILURE(rc) || RT_FAILURE(parms.hdr.result))
     {
-        crDebug("SHCRGL_GUEST_FN_WRITE failed with %x %x\n", rc, parms.hdr.result);
+        crWarning("SHCRGL_GUEST_FN_WRITE failed with %x %x\n", rc, parms.hdr.result);
     }
 }
 
@@ -350,7 +361,7 @@ static void crVBoxHGCMReadExact( CRConnection *conn, const void *buf, unsigned i
 
     if (RT_FAILURE(rc) || RT_FAILURE(parms.hdr.result))
     {
-        crDebug("SHCRGL_GUEST_FN_WRITE_READ failed with %x %x\n", rc, parms.hdr.result);
+        crWarning("SHCRGL_GUEST_FN_READ failed with %x %x\n", rc, parms.hdr.result);
         return;
     }
 
@@ -425,7 +436,7 @@ crVBoxHGCMWriteReadExact(CRConnection *conn, const void *buf, unsigned int len, 
         }
         else
         {
-            crDebug("SHCRGL_GUEST_FN_WRITE_READ failed with %x %x\n", rc, parms.hdr.result);
+            crWarning("SHCRGL_GUEST_FN_WRITE_READ (%i) failed with %x %x\n", len, rc, parms.hdr.result);
             return;
         }
     }
@@ -690,7 +701,7 @@ static int crVBoxHGCMDoConnect( CRConnection *conn )
 #else
     if (g_crvboxhgcm.iGuestDrv == INVALID_HANDLE_VALUE)
     {
-        g_crvboxhgcm.iGuestDrv = open(VBOXGUEST_DEVICE_NAME, O_RDWR, 0);
+        g_crvboxhgcm.iGuestDrv = open(VBOXGUEST_USER_DEVICE_NAME, O_RDWR, 0);
         if (g_crvboxhgcm.iGuestDrv == INVALID_HANDLE_VALUE)
         {
             crDebug("could not open Guest Additions kernel module! rc = %d\n", errno);
@@ -710,6 +721,15 @@ static int crVBoxHGCMDoConnect( CRConnection *conn )
                         &info, sizeof (info),
                         &cbReturned,
                         NULL))
+#elif defined(RT_OS_SOLARIS)
+    VBGLBIGREQ Hdr;
+    Hdr.u32Magic = VBGLBIGREQ_MAGIC;
+    Hdr.cbData = sizeof(info);
+    Hdr.pvDataR3 = &info;
+# if HC_ARCH_BITS == 32
+    Hdr.u32Padding = 0;
+# endif
+    if (ioctl(g_crvboxhgcm.iGuestDrv, VBOXGUEST_IOCTL_HGCM_CONNECT, &Hdr) >= 0)
 #else
     /*@todo it'd fail */
     if (ioctl(g_crvboxhgcm.iGuestDrv, VBOXGUEST_IOCTL_HGCM_CONNECT, &info, sizeof (info)) >= 0)
@@ -718,20 +738,20 @@ static int crVBoxHGCMDoConnect( CRConnection *conn )
         if (info.result == VINF_SUCCESS)
         {
             conn->u32ClientID = info.u32ClientID;
-            crDebug("HGCM connect was successful: client id =%x\n", conn->u32ClientID);
+            crDebug("HGCM connect was successful: client id =0x%x\n", conn->u32ClientID);
         }
         else
         {
-            crDebug("HGCM connect failed with rc=%x\n", info.result);
+            crDebug("HGCM connect failed with rc=0x%x\n", info.result);
             return FALSE;
         }
     }
     else
     {
 #ifdef RT_OS_WINDOWS
-        crDebug("HGCM connect failed with rc=%x\n", GetLastError());
+        crDebug("IOCTL for HGCM connect failed with rc=0x%x\n", GetLastError());
 #else
-        crDebug("HGCM connect failed with rc=%x\n", errno);
+        crDebug("IOCTL for HGCM connect failed with rc=0x%x\n", errno);
 #endif
         return FALSE;
     }
@@ -748,11 +768,13 @@ static int crVBoxHGCMDoConnect( CRConnection *conn )
 /*@todo same, replace DeviceIoControl with vbglR3DoIOCtl */
 static void crVBoxHGCMDoDisconnect( CRConnection *conn )
 {
+#ifdef IN_GUEST
     VBoxGuestHGCMDisconnectInfo info;
-#ifdef RT_OS_WINDOWS
+# ifdef RT_OS_WINDOWS
     DWORD cbReturned;
-#endif
+# endif
     int i;
+#endif
 
     if (conn->pHostBuffer)
     {
@@ -781,13 +803,13 @@ static void crVBoxHGCMDoDisconnect( CRConnection *conn )
     }
 
 #ifndef IN_GUEST
-#else
+#else /* IN_GUEST */
     if (conn->u32ClientID)
     {
         memset (&info, 0, sizeof (info));
         info.u32ClientID = conn->u32ClientID;
 
-#ifdef RT_OS_WINDOWS
+# ifdef RT_OS_WINDOWS
         if ( !DeviceIoControl(g_crvboxhgcm.hGuestDrv,
                                VBOXGUEST_IOCTL_HGCM_DISCONNECT,
                                &info, sizeof (info),
@@ -797,12 +819,21 @@ static void crVBoxHGCMDoDisconnect( CRConnection *conn )
         {
             crDebug("Disconnect failed with %x\n", GetLastError());
         }
-#else
+# elif defined(RT_OS_SOLARIS)
+        VBGLBIGREQ Hdr;
+        Hdr.u32Magic = VBGLBIGREQ_MAGIC;
+        Hdr.cbData = sizeof(info);
+        Hdr.pvDataR3 = &info;
+#  if HC_ARCH_BITS == 32
+        Hdr.u32Padding = 0;
+#  endif
+        if (ioctl(g_crvboxhgcm.iGuestDrv, VBOXGUEST_IOCTL_HGCM_DISCONNECT, &Hdr) >= 0)
+# else
         if (ioctl(g_crvboxhgcm.iGuestDrv, VBOXGUEST_IOCTL_HGCM_DISCONNECT, &info, sizeof (info)) < 0)
         {
             crDebug("Disconnect failed with %x\n", errno);
         }
-#endif
+# endif
 
         conn->u32ClientID = 0;
     }
@@ -815,15 +846,15 @@ static void crVBoxHGCMDoDisconnect( CRConnection *conn )
     /* close guest additions driver*/
     if (i>=g_crvboxhgcm.num_conns)
     {
-#ifdef RT_OS_WINDOWS
+# ifdef RT_OS_WINDOWS
         CloseHandle(g_crvboxhgcm.hGuestDrv);
         g_crvboxhgcm.hGuestDrv = INVALID_HANDLE_VALUE;
-#else
+# else
         close(g_crvboxhgcm.iGuestDrv);
         g_crvboxhgcm.iGuestDrv = INVALID_HANDLE_VALUE;
-#endif
+# endif
     }
-#endif
+#endif /* IN_GUEST */
 }
 
 static void crVBoxHGCMInstantReclaim(CRConnection *conn, CRMessage *mess)
@@ -975,7 +1006,7 @@ void crVBoxHGCMConnection(CRConnection *conn)
     conn->allow_redir_ptr = 1;
 
     //@todo remove this crap at all later
-    conn->cbHostBufferAllocated = 1*1024;
+    conn->cbHostBufferAllocated = 2*1024;
     conn->pHostBuffer = (uint8_t*) crAlloc(conn->cbHostBufferAllocated);
     CRASSERT(conn->pHostBuffer);
     conn->cbHostBuffer = 0;

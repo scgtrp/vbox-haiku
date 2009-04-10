@@ -38,6 +38,7 @@
 #include <iprt/string.h>
 #include <iprt/time.h>
 #include <iprt/getopt.h>
+#include <iprt/ctype.h>
 
 #include "VBoxManage.h"
 using namespace com;
@@ -73,7 +74,7 @@ enum enOptionCodes
     LISTHOSTDVDS,
     LISTHOSTFLOPPIES,
     LISTBRIDGEDIFS,
-#if (defined(RT_OS_WINDOWS) && defined(VBOX_WITH_NETFLT))
+#if defined(VBOX_WITH_NETFLT)
     LISTHOSTONLYIFS,
 #endif
     LISTHOSTINFO,
@@ -83,7 +84,8 @@ enum enOptionCodes
     LISTFLOPPIES,
     LISTUSBHOST,
     LISTUSBFILTERS,
-    LISTSYSTEMPROPERTIES
+    LISTSYSTEMPROPERTIES,
+    LISTDHCPSERVERS
 };
 
 static const RTGETOPTDEF g_aListOptions[]
@@ -96,7 +98,7 @@ static const RTGETOPTDEF g_aListOptions[]
         { "hostfloppies",       LISTHOSTFLOPPIES, RTGETOPT_REQ_NOTHING },
         { "hostifs",             LISTBRIDGEDIFS, RTGETOPT_REQ_NOTHING }, /* backward compatibility */
         { "bridgedifs",          LISTBRIDGEDIFS, RTGETOPT_REQ_NOTHING },
-        #if (defined(RT_OS_WINDOWS) && defined(VBOX_WITH_NETFLT))
+#if defined(VBOX_WITH_NETFLT)
         { "hostonlyifs",          LISTHOSTONLYIFS, RTGETOPT_REQ_NOTHING },
 #endif
         { "hostinfo",           LISTHOSTINFO, RTGETOPT_REQ_NOTHING },
@@ -106,7 +108,8 @@ static const RTGETOPTDEF g_aListOptions[]
         { "floppies",           LISTFLOPPIES, RTGETOPT_REQ_NOTHING },
         { "usbhost",            LISTUSBHOST, RTGETOPT_REQ_NOTHING },
         { "usbfilters",         LISTUSBFILTERS, RTGETOPT_REQ_NOTHING },
-        { "systemproperties",   LISTSYSTEMPROPERTIES, RTGETOPT_REQ_NOTHING }
+        { "systemproperties",   LISTSYSTEMPROPERTIES, RTGETOPT_REQ_NOTHING },
+        { "dhcpservers",        LISTDHCPSERVERS, RTGETOPT_REQ_NOTHING }
       };
 
 int handleList(HandlerArg *a)
@@ -135,7 +138,7 @@ int handleList(HandlerArg *a)
             case LISTHOSTDVDS:
             case LISTHOSTFLOPPIES:
             case LISTBRIDGEDIFS:
-#if (defined(RT_OS_WINDOWS) && defined(VBOX_WITH_NETFLT))
+#if defined(VBOX_WITH_NETFLT)
             case LISTHOSTONLYIFS:
 #endif
             case LISTHOSTINFO:
@@ -146,6 +149,7 @@ int handleList(HandlerArg *a)
             case LISTUSBHOST:
             case LISTUSBFILTERS:
             case LISTSYSTEMPROPERTIES:
+            case LISTDHCPSERVERS:
                 if (command)
                     return errorSyntax(USAGE_LIST, "Too many subcommands for \"list\" command.\n");
 
@@ -158,7 +162,14 @@ int handleList(HandlerArg *a)
 
             default:
                 if (c > 0)
-                    return errorSyntax(USAGE_LIST, "missing case: %c\n", c);
+                {
+                    if (RT_C_IS_GRAPH(c))
+                        return errorSyntax(USAGE_LIST, "unhandled option: -%c", c);
+                    else
+                        return errorSyntax(USAGE_LIST, "unhandled option: %i", c);
+                }
+                else if (c == VERR_GETOPT_UNKNOWN_OPTION)
+                    return errorSyntax(USAGE_LIST, "unknown option: %s", ValueUnion.psz);
                 else if (ValueUnion.pDef)
                     return errorSyntax(USAGE_LIST, "%s: %Rrs", ValueUnion.pDef->pszLong, c);
                 else
@@ -178,7 +189,7 @@ int handleList(HandlerArg *a)
              * Get the list of all registered VMs
              */
             com::SafeIfaceArray <IMachine> machines;
-            rc = a->virtualBox->COMGETTER(Machines2)(ComSafeArrayAsOutParam (machines));
+            rc = a->virtualBox->COMGETTER(Machines)(ComSafeArrayAsOutParam (machines));
             if (SUCCEEDED(rc))
             {
                 /*
@@ -186,7 +197,7 @@ int handleList(HandlerArg *a)
                  */
                 for (size_t i = 0; i < machines.size(); ++ i)
                 {
-                    if (machines [i])
+                    if (machines[i])
                         rc = showVMInfo(a->virtualBox,
                                         machines[i],
                                         (fOptLong) ? VMINFO_STANDARD : VMINFO_COMPACT);
@@ -201,7 +212,7 @@ int handleList(HandlerArg *a)
              * Get the list of all _running_ VMs
              */
             com::SafeIfaceArray <IMachine> machines;
-            rc = a->virtualBox->COMGETTER(Machines2)(ComSafeArrayAsOutParam (machines));
+            rc = a->virtualBox->COMGETTER(Machines)(ComSafeArrayAsOutParam (machines));
             if (SUCCEEDED(rc))
             {
                 /*
@@ -209,7 +220,7 @@ int handleList(HandlerArg *a)
                  */
                 for (size_t i = 0; i < machines.size(); ++ i)
                 {
-                    if (machines [i])
+                    if (machines[i])
                     {
                         MachineState_T machineState;
                         rc = machines [i]->COMGETTER(State)(&machineState);
@@ -293,21 +304,22 @@ int handleList(HandlerArg *a)
         break;
 
         case LISTBRIDGEDIFS:
-#if (defined(RT_OS_WINDOWS) && defined(VBOX_WITH_NETFLT))
+#if defined(VBOX_WITH_NETFLT)
         case LISTHOSTONLYIFS:
 #endif
         {
             ComPtr<IHost> host;
             CHECK_ERROR(a->virtualBox, COMGETTER(Host)(host.asOutParam()));
             com::SafeIfaceArray <IHostNetworkInterface> hostNetworkInterfaces;
-#if (defined(RT_OS_WINDOWS) && defined(VBOX_WITH_NETFLT))
-            CHECK_ERROR(host,
-                    FindHostNetworkInterfacesOfType (
-                            command == LISTBRIDGEDIFS ? HostNetworkInterfaceType_Bridged : HostNetworkInterfaceType_HostOnly,
-                            ComSafeArrayAsOutParam (hostNetworkInterfaces)));
+#if defined(VBOX_WITH_NETFLT)
+            if (command == LISTBRIDGEDIFS)
+                CHECK_ERROR(host, FindHostNetworkInterfacesOfType(HostNetworkInterfaceType_Bridged,
+                                                                  ComSafeArrayAsOutParam(hostNetworkInterfaces)));
+            else
+                CHECK_ERROR(host, FindHostNetworkInterfacesOfType(HostNetworkInterfaceType_HostOnly,
+                                                                  ComSafeArrayAsOutParam(hostNetworkInterfaces)));
 #else
-            CHECK_ERROR(host,
-                        COMGETTER(NetworkInterfaces) (ComSafeArrayAsOutParam (hostNetworkInterfaces)));
+            CHECK_ERROR(host, COMGETTER(NetworkInterfaces)(ComSafeArrayAsOutParam(hostNetworkInterfaces)));
 #endif
             for (size_t i = 0; i < hostNetworkInterfaces.size(); ++i)
             {
@@ -326,20 +338,16 @@ int handleList(HandlerArg *a)
                 Guid interfaceGuid;
                 networkInterface->COMGETTER(Id)(interfaceGuid.asOutParam());
                 RTPrintf("GUID:            %lS\n", Bstr(interfaceGuid.toString()).raw());
-                ULONG IPAddress;
-                networkInterface->COMGETTER(IPAddress)(&IPAddress);
-                RTPrintf("IPAddress:       %d.%d.%d.%d\n",
-                        ((uint8_t*)&IPAddress)[0],
-                        ((uint8_t*)&IPAddress)[1],
-                        ((uint8_t*)&IPAddress)[2],
-                        ((uint8_t*)&IPAddress)[3]);
-                ULONG NetworkMask;
-                networkInterface->COMGETTER(NetworkMask)(&NetworkMask);
-                RTPrintf("NetworkMask:     %d.%d.%d.%d\n",
-                        ((uint8_t*)&NetworkMask)[0],
-                        ((uint8_t*)&NetworkMask)[1],
-                        ((uint8_t*)&NetworkMask)[2],
-                        ((uint8_t*)&NetworkMask)[3]);
+                BOOL bDhcpEnabled;
+                networkInterface->COMGETTER(DhcpEnabled)(&bDhcpEnabled);
+                RTPrintf("Dhcp:            %s\n", bDhcpEnabled ? "Enabled" : "Disabled");
+
+                Bstr IPAddress;
+                networkInterface->COMGETTER(IPAddress)(IPAddress.asOutParam());
+                RTPrintf("IPAddress:       %lS\n", IPAddress.raw());
+                Bstr NetworkMask;
+                networkInterface->COMGETTER(NetworkMask)(NetworkMask.asOutParam());
+                RTPrintf("NetworkMask:     %lS\n", NetworkMask.raw());
                 Bstr IPV6Address;
                 networkInterface->COMGETTER(IPV6Address)(IPV6Address.asOutParam());
                 RTPrintf("IPV6Address:     %lS\n", IPV6Address.raw());
@@ -354,7 +362,11 @@ int handleList(HandlerArg *a)
                 RTPrintf("MediumType:            %s\n", getHostIfMediumTypeText(Type));
                 HostNetworkInterfaceStatus_T Status;
                 networkInterface->COMGETTER(Status)(&Status);
-                RTPrintf("Status:          %s\n\n", getHostIfStatusText(Status));
+                RTPrintf("Status:          %s\n", getHostIfStatusText(Status));
+                Bstr netName;
+                networkInterface->COMGETTER(NetworkName)(netName.asOutParam());
+                RTPrintf("VBoxNetworkName: %lS\n\n", netName.raw());
+
 #endif
             }
         }
@@ -585,92 +597,79 @@ int handleList(HandlerArg *a)
             ComPtr<IHost> Host;
             CHECK_ERROR_RET (a->virtualBox, COMGETTER(Host)(Host.asOutParam()), 1);
 
-            ComPtr<IHostUSBDeviceCollection> CollPtr;
-            CHECK_ERROR_RET (Host, COMGETTER(USBDevices)(CollPtr.asOutParam()), 1);
-
-            ComPtr<IHostUSBDeviceEnumerator> EnumPtr;
-            CHECK_ERROR_RET (CollPtr, Enumerate(EnumPtr.asOutParam()), 1);
+            SafeIfaceArray <IHostUSBDevice> CollPtr;
+            CHECK_ERROR_RET (Host, COMGETTER(USBDevices)(ComSafeArrayAsOutParam(CollPtr)), 1);
 
             RTPrintf("Host USB Devices:\n\n");
 
-            BOOL fMore = FALSE;
-            ASSERT(SUCCEEDED(rc = EnumPtr->HasMore (&fMore)));
-            if (FAILED(rc))
-                return rc;
-
-            if (!fMore)
+            if (CollPtr.size() == 0)
             {
                 RTPrintf("<none>\n\n");
             }
             else
-            while (fMore)
             {
-                ComPtr <IHostUSBDevice> dev;
-                ASSERT(SUCCEEDED(rc = EnumPtr->GetNext (dev.asOutParam())));
-                if (FAILED(rc))
-                    return rc;
-
-                /* Query info. */
-                Guid id;
-                CHECK_ERROR_RET (dev, COMGETTER(Id)(id.asOutParam()), 1);
-                USHORT usVendorId;
-                CHECK_ERROR_RET (dev, COMGETTER(VendorId)(&usVendorId), 1);
-                USHORT usProductId;
-                CHECK_ERROR_RET (dev, COMGETTER(ProductId)(&usProductId), 1);
-                USHORT bcdRevision;
-                CHECK_ERROR_RET (dev, COMGETTER(Revision)(&bcdRevision), 1);
-
-                RTPrintf("UUID:               %S\n"
-                        "VendorId:           0x%04x (%04X)\n"
-                        "ProductId:          0x%04x (%04X)\n"
-                        "Revision:           %u.%u (%02u%02u)\n",
-                        id.toString().raw(),
-                        usVendorId, usVendorId, usProductId, usProductId,
-                        bcdRevision >> 8, bcdRevision & 0xff,
-                        bcdRevision >> 8, bcdRevision & 0xff);
-
-                /* optional stuff. */
-                Bstr bstr;
-                CHECK_ERROR_RET (dev, COMGETTER(Manufacturer)(bstr.asOutParam()), 1);
-                if (!bstr.isEmpty())
-                    RTPrintf("Manufacturer:       %lS\n", bstr.raw());
-                CHECK_ERROR_RET (dev, COMGETTER(Product)(bstr.asOutParam()), 1);
-                if (!bstr.isEmpty())
-                    RTPrintf("Product:            %lS\n", bstr.raw());
-                CHECK_ERROR_RET (dev, COMGETTER(SerialNumber)(bstr.asOutParam()), 1);
-                if (!bstr.isEmpty())
-                    RTPrintf("SerialNumber:       %lS\n", bstr.raw());
-                CHECK_ERROR_RET (dev, COMGETTER(Address)(bstr.asOutParam()), 1);
-                if (!bstr.isEmpty())
-                    RTPrintf("Address:            %lS\n", bstr.raw());
-
-                /* current state  */
-                USBDeviceState_T state;
-                CHECK_ERROR_RET (dev, COMGETTER(State)(&state), 1);
-                const char *pszState = "?";
-                switch (state)
+                for (size_t i = 0; i < CollPtr.size(); ++i)
                 {
-                    case USBDeviceState_NotSupported:
-                        pszState = "Not supported"; break;
-                    case USBDeviceState_Unavailable:
-                        pszState = "Unavailable"; break;
-                    case USBDeviceState_Busy:
-                        pszState = "Busy"; break;
-                    case USBDeviceState_Available:
-                        pszState = "Available"; break;
-                    case USBDeviceState_Held:
-                        pszState = "Held"; break;
-                    case USBDeviceState_Captured:
-                        pszState = "Captured"; break;
-                    default:
-                        ASSERT (false);
-                        break;
-                }
-                RTPrintf("Current State:      %s\n\n", pszState);
+                    ComPtr <IHostUSBDevice> dev = CollPtr[i];
 
-                ASSERT(SUCCEEDED(rc = EnumPtr->HasMore (&fMore)));
-                if (FAILED(rc))
-                    return rc;
+                    /* Query info. */
+                    Guid id;
+                    CHECK_ERROR_RET (dev, COMGETTER(Id)(id.asOutParam()), 1);
+                    USHORT usVendorId;
+                    CHECK_ERROR_RET (dev, COMGETTER(VendorId)(&usVendorId), 1);
+                    USHORT usProductId;
+                    CHECK_ERROR_RET (dev, COMGETTER(ProductId)(&usProductId), 1);
+                    USHORT bcdRevision;
+                    CHECK_ERROR_RET (dev, COMGETTER(Revision)(&bcdRevision), 1);
+
+                    RTPrintf("UUID:               %S\n"
+                            "VendorId:           0x%04x (%04X)\n"
+                            "ProductId:          0x%04x (%04X)\n"
+                            "Revision:           %u.%u (%02u%02u)\n",
+                            id.toString().raw(),
+                            usVendorId, usVendorId, usProductId, usProductId,
+                            bcdRevision >> 8, bcdRevision & 0xff,
+                            bcdRevision >> 8, bcdRevision & 0xff);
+
+                    /* optional stuff. */
+                    Bstr bstr;
+                    CHECK_ERROR_RET (dev, COMGETTER(Manufacturer)(bstr.asOutParam()), 1);
+                    if (!bstr.isEmpty())
+                        RTPrintf("Manufacturer:       %lS\n", bstr.raw());
+                    CHECK_ERROR_RET (dev, COMGETTER(Product)(bstr.asOutParam()), 1);
+                    if (!bstr.isEmpty())
+                        RTPrintf("Product:            %lS\n", bstr.raw());
+                    CHECK_ERROR_RET (dev, COMGETTER(SerialNumber)(bstr.asOutParam()), 1);
+                    if (!bstr.isEmpty())
+                        RTPrintf("SerialNumber:       %lS\n", bstr.raw());
+                    CHECK_ERROR_RET (dev, COMGETTER(Address)(bstr.asOutParam()), 1);
+                    if (!bstr.isEmpty())
+                        RTPrintf("Address:            %lS\n", bstr.raw());
+
+                    /* current state  */
+                    USBDeviceState_T state;
+                    CHECK_ERROR_RET (dev, COMGETTER(State)(&state), 1);
+                    const char *pszState = "?";
+                    switch (state)
+                    {
+                        case USBDeviceState_NotSupported:
+                            pszState = "Not supported"; break;
+                        case USBDeviceState_Unavailable:
+                            pszState = "Unavailable"; break;
+                        case USBDeviceState_Busy:
+                            pszState = "Busy"; break;
+                        case USBDeviceState_Available:
+                            pszState = "Available"; break;
+                        case USBDeviceState_Held:
+                            pszState = "Held"; break;
+                        case USBDeviceState_Captured:
+                            pszState = "Captured"; break;
+                        default:
+                            ASSERT (false);
+                            break;
+                    }
+                    RTPrintf("Current State:      %s\n\n", pszState);
+                }
             }
         }
         break;
@@ -770,6 +769,35 @@ int handleList(HandlerArg *a)
             systemProperties->COMGETTER(LogHistoryCount)(&ulValue);
             RTPrintf("Log history count:           %u\n", ulValue);
 
+        }
+        break;
+        case LISTDHCPSERVERS:
+        {
+            com::SafeIfaceArray<IDHCPServer> svrs;
+            CHECK_ERROR(a->virtualBox, COMGETTER(DHCPServers)(ComSafeArrayAsOutParam (svrs)));
+            for (size_t i = 0; i < svrs.size(); ++ i)
+            {
+                ComPtr<IDHCPServer> svr = svrs[i];
+                Bstr netName;
+                svr->COMGETTER(NetworkName)(netName.asOutParam());
+                RTPrintf("NetworkName:    %lS\n", netName.raw());
+                Bstr ip;
+                svr->COMGETTER(IPAddress)(ip.asOutParam());
+                RTPrintf("IP:             %lS\n", ip.raw());
+                Bstr netmask;
+                svr->COMGETTER(NetworkMask)(netmask.asOutParam());
+                RTPrintf("NetworkMask:    %lS\n", netmask.raw());
+                Bstr lowerIp;
+                svr->COMGETTER(LowerIP)(lowerIp.asOutParam());
+                RTPrintf("lowerIPAddress: %lS\n", lowerIp.raw());
+                Bstr upperIp;
+                svr->COMGETTER(UpperIP)(upperIp.asOutParam());
+                RTPrintf("upperIPAddress: %lS\n", upperIp.raw());
+                BOOL bEnabled;
+                svr->COMGETTER(Enabled)(&bEnabled);
+                RTPrintf("Enabled:        %s\n", bEnabled ? "Yes" : "No");
+                RTPrintf("\n");
+            }
         }
         break;
     } // end switch

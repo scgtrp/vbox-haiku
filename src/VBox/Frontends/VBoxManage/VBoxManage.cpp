@@ -53,6 +53,8 @@
 #include <iprt/stdarg.h>
 #include <iprt/thread.h>
 #include <iprt/uuid.h>
+#include <iprt/getopt.h>
+#include <iprt/ctype.h>
 #include <VBox/version.h>
 #include <VBox/log.h>
 
@@ -66,8 +68,112 @@ typedef int (*PFNHANDLER)(HandlerArg *a);
 
 #endif /* !VBOX_ONLY_DOCS */
 
-// funcs
-///////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
+//
+// global variables
+//
+////////////////////////////////////////////////////////////////////////////////
+
+/*extern*/ bool g_fDetailedProgress = false;
+
+////////////////////////////////////////////////////////////////////////////////
+//
+// functions
+//
+////////////////////////////////////////////////////////////////////////////////
+
+#ifndef VBOX_ONLY_DOCS
+/**
+ * Print out progress on the console
+ */
+void showProgress(ComPtr<IProgress> progress)
+{
+    BOOL fCompleted;
+    ULONG ulCurrentPercent;
+    ULONG ulLastPercent = 0;
+
+    ULONG ulCurrentOperationPercent;
+    ULONG ulLastOperationPercent = (ULONG)-1;
+
+    ULONG ulLastOperation = (ULONG)-1;
+    Bstr bstrOperationDescription;
+
+    ULONG cOperations;
+    progress->COMGETTER(OperationCount)(&cOperations);
+
+    if (!g_fDetailedProgress)
+    {
+        RTPrintf("0%%...");
+        RTStrmFlush(g_pStdOut);
+    }
+
+    while (SUCCEEDED(progress->COMGETTER(Completed(&fCompleted))))
+    {
+        ULONG ulOperation;
+        progress->COMGETTER(Operation)(&ulOperation);
+
+        progress->COMGETTER(Percent(&ulCurrentPercent));
+        progress->COMGETTER(OperationPercent(&ulCurrentOperationPercent));
+
+        if (g_fDetailedProgress)
+        {
+            if (ulLastOperation != ulOperation)
+            {
+                progress->COMGETTER(OperationDescription(bstrOperationDescription.asOutParam()));
+                ulLastPercent = (ULONG)-1;        // force print
+                ulLastOperation = ulOperation;
+            }
+
+            if (    (ulCurrentPercent != ulLastPercent)
+                 || (ulCurrentOperationPercent != ulLastOperationPercent)
+               )
+            {
+                LONG lSecsRem;
+                progress->COMGETTER(TimeRemaining)(&lSecsRem);
+
+                RTPrintf("(%ld/%ld) %ls %ld%% => %ld%% (%d s remaining)\n", ulOperation + 1, cOperations, bstrOperationDescription.raw(), ulCurrentOperationPercent, ulCurrentPercent, lSecsRem);
+                ulLastPercent = ulCurrentPercent;
+                ulLastOperationPercent = ulCurrentOperationPercent;
+            }
+        }
+        else
+        {
+            /* did we cross a 10% mark? */
+            if (((ulCurrentPercent / 10) > (ulLastPercent / 10)))
+            {
+                /* make sure to also print out missed steps */
+                for (ULONG curVal = (ulLastPercent / 10) * 10 + 10; curVal <= (ulCurrentPercent / 10) * 10; curVal += 10)
+                {
+                    if (curVal < 100)
+                    {
+                        RTPrintf("%ld%%...", curVal);
+                        RTStrmFlush(g_pStdOut);
+                    }
+                }
+                ulLastPercent = (ulCurrentPercent / 10) * 10;
+            }
+        }
+        if (fCompleted)
+            break;
+
+        /* make sure the loop is not too tight */
+        progress->WaitForCompletion(100);
+    }
+
+    /* complete the line. */
+    HRESULT rc;
+    if (SUCCEEDED(progress->COMGETTER(ResultCode)(&rc)))
+    {
+        if (SUCCEEDED(rc))
+            RTPrintf("100%%\n");
+        else
+            RTPrintf("FAILED\n");
+    }
+    else
+        RTPrintf("\n");
+    RTStrmFlush(g_pStdOut);
+}
+#endif /* !VBOX_ONLY_DOCS */
 
 void showLogo(void)
 {
@@ -94,7 +200,23 @@ static int handleRegisterVM(HandlerArg *a)
         return errorSyntax(USAGE_REGISTERVM, "Incorrect number of parameters");
 
     ComPtr<IMachine> machine;
-    CHECK_ERROR(a->virtualBox, OpenMachine(Bstr(a->argv[0]), machine.asOutParam()));
+    /** @todo Ugly hack to get both the API interpretation of relative paths
+     * and the client's interpretation of relative paths. Remove after the API
+     * has been redesigned. */
+    rc = a->virtualBox->OpenMachine(Bstr(a->argv[0]), machine.asOutParam());
+    if (rc == VBOX_E_FILE_ERROR)
+    {
+        char szVMFileAbs[RTPATH_MAX] = "";
+        int vrc = RTPathAbs(a->argv[0], szVMFileAbs, sizeof(szVMFileAbs));
+        if (RT_FAILURE(vrc))
+        {
+            RTPrintf("Cannot convert filename \"%s\" to absolute path\n", a->argv[0]);
+            return 1;
+        }
+        CHECK_ERROR(a->virtualBox, OpenMachine(Bstr(szVMFileAbs), machine.asOutParam()));
+    }
+    else
+        CHECK_ERROR(a->virtualBox, OpenMachine(Bstr(a->argv[0]), machine.asOutParam()));
     if (SUCCEEDED(rc))
     {
         ASSERT(machine);
@@ -103,20 +225,66 @@ static int handleRegisterVM(HandlerArg *a)
     return SUCCEEDED(rc) ? 0 : 1;
 }
 
+static const RTGETOPTDEF g_aUnregisterVMOptions[] =
+{
+    { "--delete",       'd', RTGETOPT_REQ_NOTHING },
+    { "-delete",        'd', RTGETOPT_REQ_NOTHING },    // deprecated
+};
+
 static int handleUnregisterVM(HandlerArg *a)
 {
     HRESULT rc;
+    const char *VMName = NULL;
+    bool fDelete = false;
 
-    if ((a->argc != 1) && (a->argc != 2))
-        return errorSyntax(USAGE_UNREGISTERVM, "Incorrect number of parameters");
+    int c;
+    RTGETOPTUNION ValueUnion;
+    RTGETOPTSTATE GetState;
+    // start at 0 because main() has hacked both the argc and argv given to us
+    RTGetOptInit(&GetState, a->argc, a->argv, g_aUnregisterVMOptions, RT_ELEMENTS(g_aUnregisterVMOptions), 0, 0 /* fFlags */);
+    while ((c = RTGetOpt(&GetState, &ValueUnion)))
+    {
+        switch (c)
+        {
+            case 'd':   // --delete
+                fDelete = true;
+                break;
+
+            case VINF_GETOPT_NOT_OPTION:
+                if (!VMName)
+                    VMName = ValueUnion.psz;
+                else
+                    return errorSyntax(USAGE_UNREGISTERVM, "Invalid parameter '%s'", ValueUnion.psz);
+                break;
+
+            default:
+                if (c > 0)
+                {
+                    if (RT_C_IS_PRINT(c))
+                        return errorSyntax(USAGE_UNREGISTERVM, "Invalid option -%c", c);
+                    else
+                        return errorSyntax(USAGE_UNREGISTERVM, "Invalid option case %i", c);
+                }
+                else if (c == VERR_GETOPT_UNKNOWN_OPTION)
+                    return errorSyntax(USAGE_UNREGISTERVM, "unknown option: %s\n", ValueUnion.psz);
+                else if (ValueUnion.pDef)
+                    return errorSyntax(USAGE_UNREGISTERVM, "%s: %Rrs", ValueUnion.pDef->pszLong, c);
+                else
+                    return errorSyntax(USAGE_UNREGISTERVM, "error: %Rrs", c);
+        }
+    }
+
+    /* check for required options */
+    if (!VMName)
+        return errorSyntax(USAGE_UNREGISTERVM, "VM name required");
 
     ComPtr<IMachine> machine;
     /* assume it's a UUID */
-    rc = a->virtualBox->GetMachine(Guid(a->argv[0]), machine.asOutParam());
+    rc = a->virtualBox->GetMachine(Guid(VMName), machine.asOutParam());
     if (FAILED(rc) || !machine)
     {
         /* must be a name */
-        CHECK_ERROR(a->virtualBox, FindMachine(Bstr(a->argv[0]), machine.asOutParam()));
+        CHECK_ERROR(a->virtualBox, FindMachine(Bstr(VMName), machine.asOutParam()));
     }
     if (machine)
     {
@@ -124,14 +292,8 @@ static int handleUnregisterVM(HandlerArg *a)
         machine->COMGETTER(Id)(uuid.asOutParam());
         machine = NULL;
         CHECK_ERROR(a->virtualBox, UnregisterMachine(uuid, machine.asOutParam()));
-        if (SUCCEEDED(rc) && machine)
-        {
-            /* are we supposed to delete the config file? */
-            if ((a->argc == 2) && (strcmp(a->argv[1], "-delete") == 0))
-            {
-                CHECK_ERROR(machine, DeleteSettings());
-            }
-        }
+        if (SUCCEEDED(rc) && machine && fDelete)
+            CHECK_ERROR(machine, DeleteSettings());
     }
     return SUCCEEDED(rc) ? 0 : 1;
 }
@@ -149,35 +311,40 @@ static int handleCreateVM(HandlerArg *a)
     RTUuidClear(&id);
     for (int i = 0; i < a->argc; i++)
     {
-        if (strcmp(a->argv[i], "-basefolder") == 0)
+        if (   !strcmp(a->argv[i], "--basefolder")
+            || !strcmp(a->argv[i], "-basefolder"))
         {
             if (a->argc <= i + 1)
                 return errorArgument("Missing argument to '%s'", a->argv[i]);
             i++;
             baseFolder = a->argv[i];
         }
-        else if (strcmp(a->argv[i], "-settingsfile") == 0)
+        else if (   !strcmp(a->argv[i], "--settingsfile")
+                 || !strcmp(a->argv[i], "-settingsfile"))
         {
             if (a->argc <= i + 1)
                 return errorArgument("Missing argument to '%s'", a->argv[i]);
             i++;
             settingsFile = a->argv[i];
         }
-        else if (strcmp(a->argv[i], "-name") == 0)
+        else if (   !strcmp(a->argv[i], "--name")
+                 || !strcmp(a->argv[i], "-name"))
         {
             if (a->argc <= i + 1)
                 return errorArgument("Missing argument to '%s'", a->argv[i]);
             i++;
             name = a->argv[i];
         }
-        else if (strcmp(a->argv[i], "-ostype") == 0)
+        else if (   !strcmp(a->argv[i], "--ostype")
+                 || !strcmp(a->argv[i], "-ostype"))
         {
             if (a->argc <= i + 1)
                 return errorArgument("Missing argument to '%s'", a->argv[i]);
             i++;
             osTypeId = a->argv[i];
         }
-        else if (strcmp(a->argv[i], "-uuid") == 0)
+        else if (   !strcmp(a->argv[i], "--uuid")
+                 || !strcmp(a->argv[i], "-uuid"))
         {
             if (a->argc <= i + 1)
                 return errorArgument("Missing argument to '%s'", a->argv[i]);
@@ -185,7 +352,8 @@ static int handleCreateVM(HandlerArg *a)
             if (RT_FAILURE(RTUuidFromStr(&id, a->argv[i])))
                 return errorArgument("Invalid UUID format %s\n", a->argv[i]);
         }
-        else if (strcmp(a->argv[i], "-register") == 0)
+        else if (   !strcmp(a->argv[i], "--register")
+                 || !strcmp(a->argv[i], "-register"))
         {
             fRegister = true;
         }
@@ -193,10 +361,10 @@ static int handleCreateVM(HandlerArg *a)
             return errorSyntax(USAGE_CREATEVM, "Invalid parameter '%s'", Utf8Str(a->argv[i]).raw());
     }
     if (!name)
-        return errorSyntax(USAGE_CREATEVM, "Parameter -name is required");
+        return errorSyntax(USAGE_CREATEVM, "Parameter --name is required");
 
     if (!!baseFolder && !!settingsFile)
-        return errorSyntax(USAGE_CREATEVM, "Either -basefolder or -settingsfile must be specified");
+        return errorSyntax(USAGE_CREATEVM, "Either --basefolder or --settingsfile must be specified");
 
     do
     {
@@ -255,51 +423,96 @@ unsigned parseNum(const char *psz, unsigned cMaxNum, const char *name)
 # pragma optimize("", on)
 #endif
 
+static const RTGETOPTDEF g_aStartVMOptions[] =
+{
+    { "--type",         't', RTGETOPT_REQ_STRING },
+    { "-type",          't', RTGETOPT_REQ_STRING },     // deprecated
+};
+
 static int handleStartVM(HandlerArg *a)
 {
     HRESULT rc;
+    const char *VMName = NULL;
+    Bstr sessionType = "gui";
 
-    if (a->argc < 1)
-        return errorSyntax(USAGE_STARTVM, "Not enough parameters");
+    int c;
+    RTGETOPTUNION ValueUnion;
+    RTGETOPTSTATE GetState;
+    // start at 0 because main() has hacked both the argc and argv given to us
+    RTGetOptInit(&GetState, a->argc, a->argv, g_aStartVMOptions, RT_ELEMENTS(g_aStartVMOptions), 0, 0 /* fFlags */);
+    while ((c = RTGetOpt(&GetState, &ValueUnion)))
+    {
+        switch (c)
+        {
+            case 't':   // --type
+                if (!RTStrICmp(ValueUnion.psz, "gui"))
+                {
+                    sessionType = "gui";
+                }
+#ifdef VBOX_WITH_VBOXSDL
+                else if (!RTStrICmp(ValueUnion.psz, "sdl"))
+                {
+                    sessionType = "sdl";
+                }
+#endif
+#ifdef VBOX_WITH_VRDP
+                else if (!RTStrICmp(ValueUnion.psz, "vrdp"))
+                {
+                    sessionType = "vrdp";
+                }
+#endif
+                else if (!RTStrICmp(ValueUnion.psz, "capture"))
+                {
+                    sessionType = "capture";
+                }
+                else
+                    return errorArgument("Invalid session type '%s'", ValueUnion.psz);
+                break;
+
+            case VINF_GETOPT_NOT_OPTION:
+                if (!VMName)
+                    VMName = ValueUnion.psz;
+                else
+                    return errorSyntax(USAGE_STARTVM, "Invalid parameter '%s'", ValueUnion.psz);
+                break;
+
+            default:
+                if (c > 0)
+                {
+                    if (RT_C_IS_PRINT(c))
+                        return errorSyntax(USAGE_STARTVM, "Invalid option -%c", c);
+                    else
+                        return errorSyntax(USAGE_STARTVM, "Invalid option case %i", c);
+                }
+                else if (c == VERR_GETOPT_UNKNOWN_OPTION)
+                    return errorSyntax(USAGE_STARTVM, "unknown option: %s\n", ValueUnion.psz);
+                else if (ValueUnion.pDef)
+                    return errorSyntax(USAGE_STARTVM, "%s: %Rrs", ValueUnion.pDef->pszLong, c);
+                else
+                    return errorSyntax(USAGE_STARTVM, "error: %Rrs", c);
+        }
+    }
+
+    /* check for required options */
+    if (!VMName)
+        return errorSyntax(USAGE_STARTVM, "VM name required");
 
     ComPtr<IMachine> machine;
     /* assume it's a UUID */
-    rc = a->virtualBox->GetMachine(Guid(a->argv[0]), machine.asOutParam());
+    rc = a->virtualBox->GetMachine(Guid(VMName), machine.asOutParam());
     if (FAILED(rc) || !machine)
     {
         /* must be a name */
-        CHECK_ERROR(a->virtualBox, FindMachine(Bstr(a->argv[0]), machine.asOutParam()));
+        CHECK_ERROR(a->virtualBox, FindMachine(Bstr(VMName), machine.asOutParam()));
     }
     if (machine)
     {
         Guid uuid;
         machine->COMGETTER(Id)(uuid.asOutParam());
 
-        /* default to GUI session type */
-        Bstr sessionType = "gui";
-        /* has a session type been specified? */
-        if ((a->argc > 2) && (strcmp(a->argv[1], "-type") == 0))
-        {
-            if (strcmp(a->argv[2], "gui") == 0)
-            {
-                sessionType = "gui";
-            }
-#ifdef VBOX_WITH_VRDP
-            else if (strcmp(a->argv[2], "vrdp") == 0)
-            {
-                sessionType = "vrdp";
-            }
-#endif
-            else if (strcmp(a->argv[2], "capture") == 0)
-            {
-                sessionType = "capture";
-            }
-            else
-                return errorArgument("Invalid session type argument '%s'", a->argv[2]);
-        }
 
         Bstr env;
-#ifdef RT_OS_LINUX
+#if defined(RT_OS_LINUX) || defined(RT_OS_SOLARIS)
         /* make sure the VM process will start on the same display as VBoxManage */
         {
             const char *display = RTEnvGet ("DISPLAY");
@@ -374,23 +587,23 @@ static int handleControlVM(HandlerArg *a)
         CHECK_ERROR_BREAK (a->session, COMGETTER(Machine)(sessionMachine.asOutParam()));
 
         /* which command? */
-        if (strcmp(a->argv[1], "pause") == 0)
+        if (!strcmp(a->argv[1], "pause"))
         {
             CHECK_ERROR_BREAK (console, Pause());
         }
-        else if (strcmp(a->argv[1], "resume") == 0)
+        else if (!strcmp(a->argv[1], "resume"))
         {
             CHECK_ERROR_BREAK (console, Resume());
         }
-        else if (strcmp(a->argv[1], "reset") == 0)
+        else if (!strcmp(a->argv[1], "reset"))
         {
             CHECK_ERROR_BREAK (console, Reset());
         }
-        else if (strcmp(a->argv[1], "poweroff") == 0)
+        else if (!strcmp(a->argv[1], "poweroff"))
         {
             CHECK_ERROR_BREAK (console, PowerDown());
         }
-        else if (strcmp(a->argv[1], "savestate") == 0)
+        else if (!strcmp(a->argv[1], "savestate"))
         {
             ComPtr<IProgress> progress;
             CHECK_ERROR_BREAK (console, SaveState(progress.asOutParam()));
@@ -411,22 +624,22 @@ static int handleControlVM(HandlerArg *a)
                 }
             }
         }
-        else if (strcmp(a->argv[1], "acpipowerbutton") == 0)
+        else if (!strcmp(a->argv[1], "acpipowerbutton"))
         {
             CHECK_ERROR_BREAK (console, PowerButton());
         }
-        else if (strcmp(a->argv[1], "acpisleepbutton") == 0)
+        else if (!strcmp(a->argv[1], "acpisleepbutton"))
         {
             CHECK_ERROR_BREAK (console, SleepButton());
         }
-        else if (strcmp(a->argv[1], "injectnmi") == 0)
+        else if (!strcmp(a->argv[1], "injectnmi"))
         {
             /* get the machine debugger. */
             ComPtr <IMachineDebugger> debugger;
             CHECK_ERROR_BREAK(console, COMGETTER(Debugger)(debugger.asOutParam()));
             CHECK_ERROR_BREAK(debugger, InjectNMI());
         }
-        else if (strcmp(a->argv[1], "keyboardputscancode") == 0)
+        else if (!strcmp(a->argv[1], "keyboardputscancode"))
         {
             ComPtr<IKeyboard> keyboard;
             CHECK_ERROR_BREAK(console, COMGETTER(Keyboard)(keyboard.asOutParam()));
@@ -489,7 +702,7 @@ static int handleControlVM(HandlerArg *a)
                 RTPrintf("Scancode[%d]: 0x%02X\n", i, alScancodes[i]);
             }
         }
-        else if (strncmp(a->argv[1], "setlinkstate", 12) == 0)
+        else if (!strncmp(a->argv[1], "setlinkstate", 12))
         {
             /* Get the number of network adapters */
             ULONG NetworkAdapterCount = 0;
@@ -514,11 +727,11 @@ static int handleControlVM(HandlerArg *a)
             CHECK_ERROR_BREAK (sessionMachine, GetNetworkAdapter(n - 1, adapter.asOutParam()));
             if (adapter)
             {
-                if (strcmp(a->argv[2], "on") == 0)
+                if (!strcmp(a->argv[2], "on"))
                 {
                     CHECK_ERROR_BREAK (adapter, COMSETTER(CableConnected)(TRUE));
                 }
-                else if (strcmp(a->argv[2], "off") == 0)
+                else if (!strcmp(a->argv[2], "off"))
                 {
                     CHECK_ERROR_BREAK (adapter, COMSETTER(CableConnected)(FALSE));
                 }
@@ -531,7 +744,7 @@ static int handleControlVM(HandlerArg *a)
             }
         }
 #ifdef VBOX_WITH_VRDP
-        else if (strcmp(a->argv[1], "vrdp") == 0)
+        else if (!strcmp(a->argv[1], "vrdp"))
         {
             if (a->argc <= 1 + 1)
             {
@@ -545,11 +758,11 @@ static int handleControlVM(HandlerArg *a)
             ASSERT(vrdpServer);
             if (vrdpServer)
             {
-                if (strcmp(a->argv[2], "on") == 0)
+                if (!strcmp(a->argv[2], "on"))
                 {
                     CHECK_ERROR_BREAK (vrdpServer, COMSETTER(Enabled)(TRUE));
                 }
-                else if (strcmp(a->argv[2], "off") == 0)
+                else if (!strcmp(a->argv[2], "off"))
                 {
                     CHECK_ERROR_BREAK (vrdpServer, COMSETTER(Enabled)(FALSE));
                 }
@@ -562,8 +775,8 @@ static int handleControlVM(HandlerArg *a)
             }
         }
 #endif /* VBOX_WITH_VRDP */
-        else if (strcmp (a->argv[1], "usbattach") == 0 ||
-                 strcmp (a->argv[1], "usbdetach") == 0)
+        else if (   !strcmp (a->argv[1], "usbattach")
+                 || !strcmp (a->argv[1], "usbdetach"))
         {
             if (a->argc < 3)
             {
@@ -572,7 +785,7 @@ static int handleControlVM(HandlerArg *a)
                 break;
             }
 
-            bool attach = strcmp (a->argv[1], "usbattach") == 0;
+            bool attach = !strcmp(a->argv[1], "usbattach");
 
             Guid usbId = a->argv [2];
             if (usbId.isEmpty())
@@ -582,10 +795,10 @@ static int handleControlVM(HandlerArg *a)
                 {
                     ComPtr <IHost> host;
                     CHECK_ERROR_BREAK (a->virtualBox, COMGETTER(Host) (host.asOutParam()));
-                    ComPtr <IHostUSBDeviceCollection> coll;
-                    CHECK_ERROR_BREAK (host, COMGETTER(USBDevices) (coll.asOutParam()));
+                    SafeIfaceArray <IHostUSBDevice> coll;
+                    CHECK_ERROR_BREAK (host, COMGETTER(USBDevices) (ComSafeArrayAsOutParam(coll)));
                     ComPtr <IHostUSBDevice> dev;
-                    CHECK_ERROR_BREAK (coll, FindByAddress (Bstr (a->argv [2]), dev.asOutParam()));
+                    CHECK_ERROR_BREAK (host, FindUSBDeviceByAddress (Bstr (a->argv [2]), dev.asOutParam()));
                     CHECK_ERROR_BREAK (dev, COMGETTER(Id) (usbId.asOutParam()));
                 }
                 else
@@ -607,7 +820,7 @@ static int handleControlVM(HandlerArg *a)
                 CHECK_ERROR_BREAK (console, DetachUSBDevice (usbId, dev.asOutParam()));
             }
         }
-        else if (strcmp(a->argv[1], "setvideomodehint") == 0)
+        else if (!strcmp(a->argv[1], "setvideomodehint"))
         {
             if (a->argc != 5 && a->argc != 6)
             {
@@ -626,18 +839,19 @@ static int handleControlVM(HandlerArg *a)
             CHECK_ERROR_BREAK(console, COMGETTER(Display)(display.asOutParam()));
             CHECK_ERROR_BREAK(display, SetVideoModeHint(xres, yres, bpp, displayIdx));
         }
-        else if (strcmp(a->argv[1], "setcredentials") == 0)
+        else if (!strcmp(a->argv[1], "setcredentials"))
         {
             bool fAllowLocalLogon = true;
             if (a->argc == 7)
             {
-                if (strcmp(a->argv[5], "-allowlocallogon") != 0)
+                if (   strcmp(a->argv[5], "--allowlocallogon")
+                    && strcmp(a->argv[5], "-allowlocallogon"))
                 {
                     errorArgument("Invalid parameter '%s'", a->argv[5]);
                     rc = E_FAIL;
                     break;
                 }
-                if (strcmp(a->argv[6], "no") == 0)
+                if (!strcmp(a->argv[6], "no"))
                     fAllowLocalLogon = false;
             }
             else if (a->argc != 5)
@@ -651,7 +865,7 @@ static int handleControlVM(HandlerArg *a)
             CHECK_ERROR_BREAK(console, COMGETTER(Guest)(guest.asOutParam()));
             CHECK_ERROR_BREAK(guest, SetCredentials(Bstr(a->argv[2]), Bstr(a->argv[3]), Bstr(a->argv[4]), fAllowLocalLogon));
         }
-        else if (strcmp(a->argv[1], "dvdattach") == 0)
+        else if (!strcmp(a->argv[1], "dvdattach"))
         {
             if (a->argc != 3)
             {
@@ -664,12 +878,12 @@ static int handleControlVM(HandlerArg *a)
             ASSERT(dvdDrive);
 
             /* unmount? */
-            if (strcmp(a->argv[2], "none") == 0)
+            if (!strcmp(a->argv[2], "none"))
             {
                 CHECK_ERROR(dvdDrive, Unmount());
             }
             /* host drive? */
-            else if (strncmp(a->argv[2], "host:", 5) == 0)
+            else if (!strncmp(a->argv[2], "host:", 5))
             {
                 ComPtr<IHost> host;
                 CHECK_ERROR(a->virtualBox, COMGETTER(Host)(host.asOutParam()));
@@ -712,7 +926,7 @@ static int handleControlVM(HandlerArg *a)
                 CHECK_ERROR(dvdDrive, MountImage(uuid));
             }
         }
-        else if (strcmp(a->argv[1], "floppyattach") == 0)
+        else if (!strcmp(a->argv[1], "floppyattach"))
         {
             if (a->argc != 3)
             {
@@ -726,18 +940,18 @@ static int handleControlVM(HandlerArg *a)
             ASSERT(floppyDrive);
 
             /* unmount? */
-            if (strcmp(a->argv[2], "none") == 0)
+            if (!strcmp(a->argv[2], "none"))
             {
                 CHECK_ERROR(floppyDrive, Unmount());
             }
             /* host drive? */
-            else if (strncmp(a->argv[2], "host:", 5) == 0)
+            else if (!strncmp(a->argv[2], "host:", 5))
             {
                 ComPtr<IHost> host;
                 CHECK_ERROR(a->virtualBox, COMGETTER(Host)(host.asOutParam()));
                 com::SafeIfaceArray <IHostFloppyDrive> hostFloppies;
                 rc = host->COMGETTER(FloppyDrives)(ComSafeArrayAsOutParam(hostFloppies));
-				CheckComRCReturnRC (rc);
+                CheckComRCReturnRC (rc);
                 ComPtr<IHostFloppyDrive> hostFloppyDrive;
                 host->FindHostFloppyDrive(Bstr(a->argv[2] + 5), hostFloppyDrive.asOutParam());
                 if (!hostFloppyDrive)
@@ -775,7 +989,8 @@ static int handleControlVM(HandlerArg *a)
             }
         }
 #ifdef VBOX_WITH_MEM_BALLOONING
-        else if (strncmp(a->argv[1], "-guestmemoryballoon", 19) == 0)
+        else if (   !strcmp(a->argv[1], "--guestmemoryballoon")
+                 || !strcmp(a->argv[1], "-guestmemoryballoon"))
         {
             if (a->argc != 3)
             {
@@ -801,7 +1016,8 @@ static int handleControlVM(HandlerArg *a)
                 CHECK_ERROR(guest, COMSETTER(MemoryBalloonSize)(uVal));
         }
 #endif
-        else if (strncmp(a->argv[1], "-gueststatisticsinterval", 24) == 0)
+        else if (   !strcmp(a->argv[1], "--gueststatisticsinterval")
+                 || !strcmp(a->argv[1], "-gueststatisticsinterval"))
         {
             if (a->argc != 3)
             {
@@ -923,10 +1139,10 @@ static int handleGetExtraData(HandlerArg *a)
         return errorSyntax(USAGE_GETEXTRADATA, "Incorrect number of parameters");
 
     /* global data? */
-    if (strcmp(a->argv[0], "global") == 0)
+    if (!strcmp(a->argv[0], "global"))
     {
         /* enumeration? */
-        if (strcmp(a->argv[1], "enumerate") == 0)
+        if (!strcmp(a->argv[1], "enumerate"))
         {
             Bstr extraDataKey;
 
@@ -965,7 +1181,7 @@ static int handleGetExtraData(HandlerArg *a)
         if (machine)
         {
             /* enumeration? */
-            if (strcmp(a->argv[1], "enumerate") == 0)
+            if (!strcmp(a->argv[1], "enumerate"))
             {
                 Bstr extraDataKey;
 
@@ -1005,7 +1221,7 @@ static int handleSetExtraData(HandlerArg *a)
         return errorSyntax(USAGE_SETEXTRADATA, "Not enough parameters");
 
     /* global data? */
-    if (strcmp(a->argv[0], "global") == 0)
+    if (!strcmp(a->argv[0], "global"))
     {
         if (a->argc < 3)
             CHECK_ERROR(a->virtualBox, SetExtraData(Bstr(a->argv[1]), NULL));
@@ -1048,48 +1264,48 @@ static int handleSetProperty(HandlerArg *a)
     ComPtr<ISystemProperties> systemProperties;
     a->virtualBox->COMGETTER(SystemProperties)(systemProperties.asOutParam());
 
-    if (strcmp(a->argv[0], "hdfolder") == 0)
+    if (!strcmp(a->argv[0], "hdfolder"))
     {
         /* reset to default? */
-        if (strcmp(a->argv[1], "default") == 0)
+        if (!strcmp(a->argv[1], "default"))
             CHECK_ERROR(systemProperties, COMSETTER(DefaultHardDiskFolder)(NULL));
         else
             CHECK_ERROR(systemProperties, COMSETTER(DefaultHardDiskFolder)(Bstr(a->argv[1])));
     }
-    else if (strcmp(a->argv[0], "machinefolder") == 0)
+    else if (!strcmp(a->argv[0], "machinefolder"))
     {
         /* reset to default? */
-        if (strcmp(a->argv[1], "default") == 0)
+        if (!strcmp(a->argv[1], "default"))
             CHECK_ERROR(systemProperties, COMSETTER(DefaultMachineFolder)(NULL));
         else
             CHECK_ERROR(systemProperties, COMSETTER(DefaultMachineFolder)(Bstr(a->argv[1])));
     }
-    else if (strcmp(a->argv[0], "vrdpauthlibrary") == 0)
+    else if (!strcmp(a->argv[0], "vrdpauthlibrary"))
     {
         /* reset to default? */
-        if (strcmp(a->argv[1], "default") == 0)
+        if (!strcmp(a->argv[1], "default"))
             CHECK_ERROR(systemProperties, COMSETTER(RemoteDisplayAuthLibrary)(NULL));
         else
             CHECK_ERROR(systemProperties, COMSETTER(RemoteDisplayAuthLibrary)(Bstr(a->argv[1])));
     }
-    else if (strcmp(a->argv[0], "websrvauthlibrary") == 0)
+    else if (!strcmp(a->argv[0], "websrvauthlibrary"))
     {
         /* reset to default? */
-        if (strcmp(a->argv[1], "default") == 0)
+        if (!strcmp(a->argv[1], "default"))
             CHECK_ERROR(systemProperties, COMSETTER(WebServiceAuthLibrary)(NULL));
         else
             CHECK_ERROR(systemProperties, COMSETTER(WebServiceAuthLibrary)(Bstr(a->argv[1])));
     }
-    else if (strcmp(a->argv[0], "hwvirtexenabled") == 0)
+    else if (!strcmp(a->argv[0], "hwvirtexenabled"))
     {
-        if (strcmp(a->argv[1], "yes") == 0)
+        if (!strcmp(a->argv[1], "yes"))
             CHECK_ERROR(systemProperties, COMSETTER(HWVirtExEnabled)(TRUE));
-        else if (strcmp(a->argv[1], "no") == 0)
+        else if (!strcmp(a->argv[1], "no"))
             CHECK_ERROR(systemProperties, COMSETTER(HWVirtExEnabled)(FALSE));
         else
             return errorArgument("Invalid value '%s' for hardware virtualization extension flag", a->argv[1]);
     }
-    else if (strcmp(a->argv[0], "loghistorycount") == 0)
+    else if (!strcmp(a->argv[0], "loghistorycount"))
     {
         uint32_t uVal;
         int vrc;
@@ -1125,7 +1341,7 @@ static int handleSharedFolder (HandlerArg *a)
     Guid uuid;
     machine->COMGETTER(Id)(uuid.asOutParam());
 
-    if (strcmp(a->argv[0], "add") == 0)
+    if (!strcmp(a->argv[0], "add"))
     {
         /* we need at least four more parameters */
         if (a->argc < 5)
@@ -1138,25 +1354,29 @@ static int handleSharedFolder (HandlerArg *a)
 
         for (int i = 2; i < a->argc; i++)
         {
-            if (strcmp(a->argv[i], "-name") == 0)
+            if (   !strcmp(a->argv[i], "--name")
+                || !strcmp(a->argv[i], "-name"))
             {
                 if (a->argc <= i + 1 || !*a->argv[i+1])
                     return errorArgument("Missing argument to '%s'", a->argv[i]);
                 i++;
                 name = a->argv[i];
             }
-            else if (strcmp(a->argv[i], "-hostpath") == 0)
+            else if (   !strcmp(a->argv[i], "--hostpath")
+                     || !strcmp(a->argv[i], "-hostpath"))
             {
                 if (a->argc <= i + 1 || !*a->argv[i+1])
                     return errorArgument("Missing argument to '%s'", a->argv[i]);
                 i++;
                 hostpath = a->argv[i];
             }
-            else if (strcmp(a->argv[i], "-readonly") == 0)
+            else if (   !strcmp(a->argv[i], "--readonly")
+                     || !strcmp(a->argv[i], "-readonly"))
             {
                 fWritable = false;
             }
-            else if (strcmp(a->argv[i], "-transient") == 0)
+            else if (   !strcmp(a->argv[i], "--transient")
+                     || !strcmp(a->argv[i], "-transient"))
             {
                 fTransient = true;
             }
@@ -1170,7 +1390,7 @@ static int handleSharedFolder (HandlerArg *a)
         /* required arguments */
         if (!name || !hostpath)
         {
-            return errorSyntax(USAGE_SHAREDFOLDER_ADD, "Parameters -name and -hostpath are required");
+            return errorSyntax(USAGE_SHAREDFOLDER_ADD, "Parameters --name and --hostpath are required");
         }
 
         if (fTransient)
@@ -1205,7 +1425,7 @@ static int handleSharedFolder (HandlerArg *a)
             a->session->Close();
         }
     }
-    else if (strcmp(a->argv[0], "remove") == 0)
+    else if (!strcmp(a->argv[0], "remove"))
     {
         /* we need at least two more parameters */
         if (a->argc < 3)
@@ -1216,14 +1436,16 @@ static int handleSharedFolder (HandlerArg *a)
 
         for (int i = 2; i < a->argc; i++)
         {
-            if (strcmp(a->argv[i], "-name") == 0)
+            if (   !strcmp(a->argv[i], "--name")
+                || !strcmp(a->argv[i], "-name"))
             {
                 if (a->argc <= i + 1 || !*a->argv[i+1])
                     return errorArgument("Missing argument to '%s'", a->argv[i]);
                 i++;
                 name = a->argv[i];
             }
-            else if (strcmp(a->argv[i], "-transient") == 0)
+            else if (   !strcmp(a->argv[i], "--transient")
+                     || !strcmp(a->argv[i], "-transient"))
             {
                 fTransient = true;
             }
@@ -1233,7 +1455,7 @@ static int handleSharedFolder (HandlerArg *a)
 
         /* required arguments */
         if (!name)
-            return errorSyntax(USAGE_SHAREDFOLDER_REMOVE, "Parameter -name is required");
+            return errorSyntax(USAGE_SHAREDFOLDER_REMOVE, "Parameter --name is required");
 
         if (fTransient)
         {
@@ -1300,24 +1522,27 @@ static int handleVMStatistics(HandlerArg *a)
     const char *pszPattern = NULL; /* all */
     for (int i = 1; i < a->argc; i++)
     {
-        if (!strcmp(a->argv[i], "-pattern"))
+        if (   !strcmp(a->argv[i], "--pattern")
+            || !strcmp(a->argv[i], "-pattern"))
         {
             if (pszPattern)
-                return errorSyntax(USAGE_VM_STATISTICS, "Multiple -patterns options is not permitted");
+                return errorSyntax(USAGE_VM_STATISTICS, "Multiple --patterns options is not permitted");
             if (i + 1 >= a->argc)
                 return errorArgument("Missing argument to '%s'", a->argv[i]);
             pszPattern = a->argv[++i];
         }
-        else if (!strcmp(a->argv[i], "-descriptions"))
+        else if (   !strcmp(a->argv[i], "--descriptions")
+                 || !strcmp(a->argv[i], "-descriptions"))
             fWithDescriptions = true;
-        /* add: -file <filename> and -formatted */
-        else if (!strcmp(a->argv[i], "-reset"))
+        /* add: --file <filename> and --formatted */
+        else if (   !strcmp(a->argv[i], "--reset")
+                 || !strcmp(a->argv[i], "-reset"))
             fReset = true;
         else
             return errorSyntax(USAGE_VM_STATISTICS, "Unknown option '%s'", a->argv[i]);
     }
     if (fReset && fWithDescriptions)
-        return errorSyntax(USAGE_VM_STATISTICS, "The -reset and -descriptions options does not mix");
+        return errorSyntax(USAGE_VM_STATISTICS, "The --reset and --descriptions options does not mix");
 
 
     /* open an existing session for the VM. */
@@ -1395,7 +1620,7 @@ static bool checkForAutoConvertedSettings (ComPtr<IVirtualBox> virtualBox,
         Bstr filePath;
 
         com::SafeIfaceArray <IMachine> machines;
-        CHECK_ERROR_BREAK(virtualBox, COMGETTER(Machines2) (ComSafeArrayAsOutParam (machines)));
+        CHECK_ERROR_BREAK(virtualBox, COMGETTER(Machines)(ComSafeArrayAsOutParam (machines)));
 
         for (size_t i = 0; i < machines.size(); ++ i)
         {
@@ -1450,14 +1675,14 @@ static bool checkForAutoConvertedSettings (ComPtr<IVirtualBox> virtualBox,
 "Please put one of the following command line switches to the beginning of\n"
 "the VBoxManage command line and repeat the command:\n"
 "\n"
-"  -convertSettings       - to save all auto-converted files (it will not\n"
-"                           be possible to use these settings files with an\n"
-"                           older version of VirtualBox in the future);\n"
-"  -convertSettingsBackup - to create backup copies of the settings files in\n"
-"                           the old format before saving them in the new format;\n"
-"  -convertSettingsIgnore - to not save the auto-converted settings files.\n"
+"  --convertSettings       - to save all auto-converted files (it will not\n"
+"                            be possible to use these settings files with an\n"
+"                            older version of VirtualBox in the future);\n"
+"  --convertSettingsBackup - to create backup copies of the settings files in\n"
+"                            the old format before saving them in the new format;\n"
+"  --convertSettingsIgnore - to not save the auto-converted settings files.\n"
 "\n"
-"Note that if you use -convertSettingsIgnore, the auto-converted settings files\n"
+"Note that if you use --convertSettingsIgnore, the auto-converted settings files\n"
 "will be implicitly saved in the new format anyway once you change a setting or\n"
 "start a virtual machine, but NO backup copies will be created in this case.\n");
                     return false;
@@ -1538,49 +1763,55 @@ int main(int argc, char *argv[])
     for (int i = 1; i < argc || argc <= iCmd; i++)
     {
         if (    argc <= iCmd
-            ||  (strcmp(argv[i], "help")   == 0)
-            ||  (strcmp(argv[i], "-?")     == 0)
-            ||  (strcmp(argv[i], "-h")     == 0)
-            ||  (strcmp(argv[i], "-help")  == 0)
-            ||  (strcmp(argv[i], "--help") == 0))
+            ||  !strcmp(argv[i], "help")
+            ||  !strcmp(argv[i], "-?")
+            ||  !strcmp(argv[i], "-h")
+            ||  !strcmp(argv[i], "-help")
+            ||  !strcmp(argv[i], "--help"))
         {
             showLogo();
             printUsage(USAGE_ALL);
             return 0;
         }
-        else if (   strcmp(argv[i], "-v") == 0
-                 || strcmp(argv[i], "-version") == 0
-                 || strcmp(argv[i], "-Version") == 0
-                 || strcmp(argv[i], "--version") == 0)
+        else if (   !strcmp(argv[i], "-v")
+                 || !strcmp(argv[i], "-version")
+                 || !strcmp(argv[i], "-Version")
+                 || !strcmp(argv[i], "--version"))
         {
             /* Print version number, and do nothing else. */
             RTPrintf("%sr%d\n", VBOX_VERSION_STRING, VBoxSVNRev ());
             return 0;
         }
-        else if (strcmp(argv[i], "-dumpopts") == 0)
+        else if (   !strcmp(argv[i], "--dumpopts")
+                 || !strcmp(argv[i], "-dumpopts"))
         {
             /* Special option to dump really all commands,
              * even the ones not understood on this platform. */
             printUsage(USAGE_DUMPOPTS);
             return 0;
         }
-        else if (strcmp(argv[i], "-nologo") == 0)
+        else if (   !strcmp(argv[i], "--nologo")
+                 || !strcmp(argv[i], "-nologo")
+                 || !strcmp(argv[i], "-q"))
         {
             /* suppress the logo */
             fShowLogo = false;
             iCmd++;
         }
-        else if (strcmp(argv[i], "-convertSettings") == 0)
+        else if (   !strcmp(argv[i], "--convertSettings")
+                 || !strcmp(argv[i], "-convertSettings"))
         {
             fConvertSettings = ConvertSettings_Yes;
             iCmd++;
         }
-        else if (strcmp(argv[i], "-convertSettingsBackup") == 0)
+        else if (   !strcmp(argv[i], "--convertSettingsBackup")
+                 || !strcmp(argv[i], "-convertSettingsBackup"))
         {
             fConvertSettings = ConvertSettings_Backup;
             iCmd++;
         }
-        else if (strcmp(argv[i], "-convertSettingsIgnore") == 0)
+        else if (   !strcmp(argv[i], "--convertSettingsIgnore")
+                 || !strcmp(argv[i], "-convertSettingsIgnore"))
         {
             fConvertSettings = ConvertSettings_Ignore;
             iCmd++;
@@ -1724,14 +1955,17 @@ int main(int argc, char *argv[])
         { "metrics",          handleMetrics },
         { "import",           handleImportAppliance },
         { "export",           handleExportAppliance },
+#if defined(VBOX_WITH_NETFLT)
         { "hostonlyif",       handleHostonlyIf },
+#endif
+        { "dhcpserver",       handleDHCPServer},
         { NULL,               NULL }
     };
 
     int commandIndex;
     for (commandIndex = 0; commandHandlers[commandIndex].command != NULL; commandIndex++)
     {
-        if (strcmp(commandHandlers[commandIndex].command, argv[iCmd]) == 0)
+        if (!strcmp(commandHandlers[commandIndex].command, argv[iCmd]))
         {
             handlerArg.argc = argc - iCmdArg;
             handlerArg.argv = &argv[iCmdArg];

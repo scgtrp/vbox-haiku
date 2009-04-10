@@ -5,7 +5,7 @@
  */
 
 /*
- * Copyright (C) 2006-2007 Sun Microsystems, Inc.
+ * Copyright (C) 2006-2009 Sun Microsystems, Inc.
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -50,11 +50,44 @@
 #include <iprt/stream.h>
 #ifdef VBOX_WITH_HARDENING
 # include <VBox/sup.h>
+#else
+# include <VBox/err.h>
 #endif
 
 #ifdef RT_OS_LINUX
 # include <unistd.h>
 #endif
+
+/* XXX Temporarily. Don't rely on ther user to hack the Makefile himsef! */
+QString g_QStrHintLinuxNoMemory = QApplication::tr(
+  "This error means that the kernel driver was either not able to "
+  "allocate enough memory or that some mapping operation failed.<br/><br/>"
+  "There are known problems with Linux 2.6.29. If you are running "
+  "such a kernel, please edit /usr/src/vboxdrv-*/Makefile and enable "
+  "<i>VBOX_USE_INSERT_PAGE = 1</i>. After that, re-compile the kernel "
+  "module by executing<br/><br/>"
+  "  <font color=blue>'/etc/init.d/vboxdrv setup'</font><br/><br/>"
+  "as root."
+  );
+
+QString g_QStrHintLinuxNoDriver = QApplication::tr(
+  "The VirtualBox Linux kernel driver (vboxdrv) is either not loaded or "
+  "there is a permission problem with /dev/vboxdrv. Re-setup the kernel "
+  "module by executing<br/><br/>"
+  "  <font color=blue>'/etc/init.d/vboxdrv setup'</font><br/><br/>"
+  "as root. Users of Ubuntu, Fedora or Mandriva should install the DKMS "
+  "package first. This package keeps track of Linux kernel changes and "
+  "recompiles the vboxdrv kernel module if necessary."
+  );
+
+QString g_QStrHintOtherNoDriver = QApplication::tr(
+  "Make sure the kernel module has been loaded successfully."
+  );
+
+/* I hope this isn't (C), (TM) or (R) Microsoft support ;-) */
+QString g_QStrHintReinstall = QApplication::tr(
+  "It may help to reinstall VirtualBox."
+  );
 
 #if defined(DEBUG) && defined(Q_WS_X11) && defined(RT_OS_LINUX)
 
@@ -105,7 +138,25 @@ void bt_sighandler (int sig, siginfo_t *info, void *secret) {
     exit (0);
 }
 
-#endif
+#endif /* DEBUG && X11 && LINUX*/
+
+#if defined(RT_OS_DARWIN) && defined(RT_ARCH_AMD64)
+# include <dlfcn.h>
+# include <sys/mman.h>
+# include <iprt/asm.h>
+
+/** Really ugly hack to shut up a silly check in AppKit. */
+static void ShutUpAppKit(void)
+{
+    /*
+     * Find issetguid() and make it always return 0 by modifying the code.
+     */
+    void *addr = dlsym(RTLD_DEFAULT, "issetugid");
+    int rc = mprotect((void *)((uintptr_t)addr & ~(uintptr_t)0xfff), 0x2000, PROT_WRITE|PROT_READ|PROT_EXEC);
+    if (!rc)
+        ASMAtomicWriteU32((volatile uint32_t *)addr, 0xccc3c031); /* xor eax, eax; ret; int3 */
+}
+#endif /* DARWIN + AMD64 */
 
 static void QtMessageOutput (QtMsgType type, const char *msg)
 {
@@ -174,17 +225,17 @@ static void showHelp()
     dflt = "image";
 #endif
 
-    RTPrintf("Sun xVM VirtualBox Graphical User Interface "VBOX_VERSION_STRING"\n"
+    RTPrintf("Sun VirtualBox Graphical User Interface "VBOX_VERSION_STRING"\n"
             "(C) 2005-2009 Sun Microsystems, Inc.\n"
             "All rights reserved.\n"
             "\n"
             "Usage:\n"
-            "  -startvm <vmname|UUID>     start a VM by specifying its UUID or name\n"
-            "  -rmode %-19s select different render mode (default is %s)\n"
+            "  --startvm <vmname|UUID>    start a VM by specifying its UUID or name\n"
+            "  --rmode %-18s select different render mode (default is %s)\n"
 # ifdef VBOX_WITH_DEBUGGER_GUI
-            "  -dbg                       enable the GUI debug menu\n"
-            "  -debug                     like -dbg and show debug windows at VM startup\n"
-            "  -no-debug                  disable the GUI debug menu and debug windows\n"
+            "  --dbg                      enable the GUI debug menu\n"
+            "  --debug                    like --dbg and show debug windows at VM startup\n"
+            "  --no-debug                 disable the GUI debug menu and debug windows\n"
             "\n"
             "The following environment variables are evaluated:\n"
             "  VBOX_GUI_DBG_ENABLED       enable the GUI debug menu if set\n"
@@ -200,10 +251,13 @@ static void showHelp()
 extern "C" DECLEXPORT(int) TrustedMain (int argc, char **argv, char ** /*envp*/)
 {
     LogFlowFuncEnter();
+# if defined(RT_OS_DARWIN) && defined(RT_ARCH_AMD64)
+    ShutUpAppKit();
+# endif
 
 #ifdef Q_WS_WIN
     /* Initialize COM early, before QApplication calls OleInitialize(), to
-     * make sure we enter the multi threded apartment instead of a single
+     * make sure we enter the multi threaded apartment instead of a single
      * threaded one. Note that this will make some non-threadsafe system
      * services that use OLE and require STA (such as Drag&Drop) not work
      * anymore, however it's still better because otherwise VBox will not work
@@ -260,6 +314,14 @@ extern "C" DECLEXPORT(int) TrustedMain (int argc, char **argv, char ** /*envp*/)
         if (QString (qVersion()).startsWith ("4.3") &&
             qobject_cast <QCleanlooksStyle*> (QApplication::style()))
             QApplication::setStyle (new QPlastiqueStyle);
+
+#ifdef Q_OS_SOLARIS
+        /* Solaris have some issue with cleanlooks style which leads to application
+         * crash in case of using it on Qt4.4 version, lets make the same substitute */
+        if (QString (qVersion()).startsWith ("4.4") &&
+            qobject_cast <QCleanlooksStyle*> (QApplication::style()))
+            QApplication::setStyle (new QPlastiqueStyle);
+#endif
 
 #ifdef Q_WS_X11
         /* This patch is not used for now on Solaris & OpenSolaris because
@@ -333,7 +395,7 @@ extern "C" DECLEXPORT(int) TrustedMain (int argc, char **argv, char ** /*envp*/)
             QMessageBox::critical (
                 0, QApplication::tr ("Incompatible Qt Library Error"),
                 msg, QMessageBox::Abort, 0);
-            qFatal (msg.toAscii().constData());
+            qFatal ("%s", msg.toAscii().constData());
         }
 #endif
 
@@ -384,6 +446,11 @@ extern "C" DECLEXPORT(int) TrustedMain (int argc, char **argv, char ** /*envp*/)
             }
             else
             {
+                /* Check for BETA version */
+                QString vboxVersion (vboxGlobal().virtualBox().GetVersion());
+                if (vboxVersion.contains ("BETA"))
+                    vboxProblem().showBETAWarning();
+
                 vboxGlobal().setMainWindow (&vboxGlobal().selectorWnd());
 #ifdef VBOX_GUI_WITH_SYSTRAY
                 if (vboxGlobal().trayIconInstall())
@@ -438,17 +505,61 @@ int main (int argc, char **argv, char **envp)
     bool fInitSUPLib = false;
     for (int i = 1; i < argc; i++)
     {
-        if (!::strcmp (argv[i], "-startvm" ))
+        if (    !::strcmp(argv[i], "--startvm")
+            ||  !::strcmp(argv[i], "-startvm"))
         {
             fInitSUPLib = true;
             break;
         }
     }
 
+    int rc;
     if (!fInitSUPLib)
-        RTR3Init();
+        rc = RTR3Init();
     else
-        RTR3InitAndSUPLib();
+        rc = RTR3InitAndSUPLib();
+    if (RT_FAILURE(rc))
+    {
+        QApplication a (argc, &argv[0]);
+        QString msgTitle = QApplication::tr ("VirtualBox - Runtime Error");
+        QString msgText = "<html>";
+
+        switch (rc)
+        {
+            case VERR_VM_DRIVER_NOT_INSTALLED:
+                msgText += QApplication::tr (
+                        "<b>Cannot access the kernel driver!</b><br/><br/>");
+# ifdef RT_OS_LINUX
+                msgText += g_QStrHintLinuxNoDriver;
+# else
+                msgText += g_QStrHintOtherNoDriver;
+# endif
+                break;
+# ifdef RT_OS_LINUX
+            case VERR_NO_MEMORY:
+                msgText += g_QStrHintLinuxNoMemory;
+                break;
+# endif
+# if 0 /** @todo Enable after 2.2.0 (/ NLS unfreeze). */
+            case VERR_VM_DRIVER_NOT_ACCESSIBLE:
+                msgText += QApplication::tr ("Kernel driver not accessible");
+                break;
+# endif
+            default:
+                msgText += QApplication::tr (
+                        "Unknown %2 error during initialization of the Runtime"
+                        ).arg (rc);
+                break;
+        }
+        msgText += "</html>";
+        QMessageBox::critical (
+                               0,                      /* parent */
+                               msgTitle,
+                               msgText,
+                               QMessageBox::Abort,     /* button0 */
+                               0);                     /* button1 */
+        return 1;
+    }
 
     return TrustedMain (argc, argv, envp);
 }
@@ -463,6 +574,10 @@ int main (int argc, char **argv, char **envp)
  */
 extern "C" DECLEXPORT(void) TrustedError (const char *pszWhere, SUPINITOP enmWhat, int rc, const char *pszMsgFmt, va_list va)
 {
+# if defined(RT_OS_DARWIN) && defined(RT_ARCH_AMD64)
+    ShutUpAppKit();
+# endif
+
     /*
      * Init the Qt application object. This is a bit hackish as we
      * don't have the argument vector handy.
@@ -484,24 +599,23 @@ extern "C" DECLEXPORT(void) TrustedError (const char *pszWhere, SUPINITOP enmWha
     switch (enmWhat)
     {
         case kSupInitOp_Driver:
-            msgText += QApplication::tr (
-#ifdef RT_OS_LINUX
-            "The VirtualBox Linux kernel driver (vboxdrv) is either not loaded or "
-            "there is a permission problem with /dev/vboxdrv. Re-setup the kernel "
-            "module by executing<br/><br/>"
-            "  <font color=blue>'/etc/init.d/vboxdrv setup'</font><br/><br/>"
-            "as root. Users of Ubuntu or Fedora should install the DKMS package "
-            "at first. This package keeps track of Linux kernel changes and "
-            "recompiles the vboxdrv kernel module if necessary."
-#else
-            "Make sure the kernel module has been loaded successfully."
-#endif
-            );
+# ifdef RT_OS_LINUX
+            msgText += g_QStrHintLinuxNoDriver;
+# else
+            msgText += g_QStrHintOtherNoDriver;
+# endif
             break;
+# ifdef RT_OS_LINUX
         case kSupInitOp_IPRT:
+            if (rc == VERR_NO_MEMORY)
+                msgText += g_QStrHintLinuxNoMemory;
+            else
+# endif
+                msgText += g_QStrHintReinstall;
+            break;
         case kSupInitOp_Integrity:
         case kSupInitOp_RootCheck:
-            msgText += QApplication::tr ("It may help to reinstall VirtualBox."); /* hope this isn't (C), (TM) or (R) Microsoft support ;-) */
+            msgText += g_QStrHintReinstall;
             break;
         default:
             /* no hints here */
@@ -509,16 +623,16 @@ extern "C" DECLEXPORT(void) TrustedError (const char *pszWhere, SUPINITOP enmWha
     }
     msgText += "</html>";
 
-#ifdef RT_OS_LINUX
+# ifdef RT_OS_LINUX
     sleep(2);
-#endif
+# endif
     QMessageBox::critical (
         0,                      /* parent */
         msgTitle,               /* title */
         msgText,                /* text */
         QMessageBox::Abort,     /* button0 */
         0);                     /* button1 */
-    qFatal (msgText.toAscii().constData());
+    qFatal ("%s", msgText.toAscii().constData());
 }
 
 #endif /* VBOX_WITH_HARDENING */

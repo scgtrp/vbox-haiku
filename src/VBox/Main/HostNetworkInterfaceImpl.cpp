@@ -25,6 +25,10 @@
 #include "Logging.h"
 #include "netif.h"
 
+#ifndef RT_OS_WINDOWS
+#include <arpa/inet.h>
+#endif /* RT_OS_WINDOWS */
+
 // constructor / destructor
 /////////////////////////////////////////////////////////////////////////////
 
@@ -81,10 +85,11 @@ HRESULT HostNetworkInterface::updateConfig ()
     int rc = NetIfGetConfig(this, &info);
     if(RT_SUCCESS(rc))
     {
-        m.IPAddress = info.IPAddress.u;
-        m.networkMask = info.IPNetMask.u;
-        m.IPV6Address = composeIPv6Address(&info.IPv6Address);
-        m.IPV6NetworkMaskPrefixLength = composeIPv6PrefixLenghFromAddress(&info.IPv6NetMask);
+        m.realIPAddress = m.IPAddress = info.IPAddress.u;
+        m.realNetworkMask = m.networkMask = info.IPNetMask.u;
+        m.dhcpEnabled = info.bDhcpEnabled;
+        m.realIPV6Address = m.IPV6Address = composeIPv6Address(&info.IPv6Address);
+        m.realIPV6PrefixLength = m.IPV6NetworkMaskPrefixLength = composeIPv6PrefixLenghFromAddress(&info.IPv6NetMask);
         m.hardwareAddress = composeHardwareAddress(&info.MACAddress);
 #ifdef RT_OS_WINDOWS
         m.mediumType = (HostNetworkInterfaceMediumType)info.enmMediumType;
@@ -123,10 +128,11 @@ HRESULT HostNetworkInterface::init (Bstr aInterfaceName, HostNetworkInterfaceTyp
     unconst (mGuid) = pIf->Uuid;
     mIfType = ifType;
 
-    m.IPAddress = pIf->IPAddress.u;
-    m.networkMask = pIf->IPNetMask.u;
-    m.IPV6Address = composeIPv6Address(&pIf->IPv6Address);
-    m.IPV6NetworkMaskPrefixLength = composeIPv6PrefixLenghFromAddress(&pIf->IPv6NetMask);
+    m.realIPAddress = m.IPAddress = pIf->IPAddress.u;
+    m.realNetworkMask = m.networkMask = pIf->IPNetMask.u;
+    m.realIPV6Address = m.IPV6Address = composeIPv6Address(&pIf->IPv6Address);
+    m.realIPV6PrefixLength = m.IPV6NetworkMaskPrefixLength = composeIPv6PrefixLenghFromAddress(&pIf->IPv6NetMask);
+    m.dhcpEnabled = pIf->bDhcpEnabled;
     m.hardwareAddress = composeHardwareAddress(&pIf->MACAddress);
 #ifdef RT_OS_WINDOWS
     m.mediumType = (HostNetworkInterfaceMediumType)pIf->enmMediumType;
@@ -182,6 +188,18 @@ STDMETHODIMP HostNetworkInterface::COMGETTER(Id) (OUT_GUID aGuid)
     return S_OK;
 }
 
+STDMETHODIMP HostNetworkInterface::COMGETTER(DhcpEnabled) (BOOL *aDhcpEnabled)
+{
+    CheckComArgOutPointerValid(aDhcpEnabled);
+
+    AutoCaller autoCaller (this);
+    CheckComRCReturnRC (autoCaller.rc());
+
+    *aDhcpEnabled = m.dhcpEnabled;
+
+    return S_OK;
+}
+
 
 /**
  * Returns the IP address of the host network interface.
@@ -189,16 +207,33 @@ STDMETHODIMP HostNetworkInterface::COMGETTER(Id) (OUT_GUID aGuid)
  * @returns COM status code
  * @param   aIPAddress address of result pointer
  */
-STDMETHODIMP HostNetworkInterface::COMGETTER(IPAddress) (ULONG *aIPAddress)
+STDMETHODIMP HostNetworkInterface::COMGETTER(IPAddress) (BSTR *aIPAddress)
 {
     CheckComArgOutPointerValid(aIPAddress);
 
     AutoCaller autoCaller (this);
     CheckComRCReturnRC (autoCaller.rc());
 
-    *aIPAddress = m.IPAddress;
+    if (m.IPAddress == 0)
+    {
+        Bstr(VBOXNET_IPV4ADDR_DEFAULT).detachTo(aIPAddress);
+        return S_OK;
+    }
 
-    return S_OK;
+    in_addr tmp;
+#if defined(RT_OS_WINDOWS)
+    tmp.S_un.S_addr = m.IPAddress;
+#else
+    tmp.s_addr = m.IPAddress;
+#endif
+    char *addr = inet_ntoa(tmp);
+    if(addr)
+    {
+        Bstr(addr).detachTo(aIPAddress);
+        return S_OK;
+    }
+
+    return E_FAIL;
 }
 
 /**
@@ -207,23 +242,43 @@ STDMETHODIMP HostNetworkInterface::COMGETTER(IPAddress) (ULONG *aIPAddress)
  * @returns COM status code
  * @param   aNetworkMask address of result pointer
  */
-STDMETHODIMP HostNetworkInterface::COMGETTER(NetworkMask) (ULONG *aNetworkMask)
+STDMETHODIMP HostNetworkInterface::COMGETTER(NetworkMask) (BSTR *aNetworkMask)
 {
     CheckComArgOutPointerValid(aNetworkMask);
 
     AutoCaller autoCaller (this);
     CheckComRCReturnRC (autoCaller.rc());
 
-    *aNetworkMask = m.networkMask;
+    if (m.networkMask == 0)
+    {
+        Bstr(VBOXNET_IPV4MASK_DEFAULT).detachTo(aNetworkMask);
+        return S_OK;
+    }
 
-    return S_OK;
+    in_addr tmp;
+#if defined(RT_OS_WINDOWS)
+    tmp.S_un.S_addr = m.networkMask;
+#else
+    tmp.s_addr = m.networkMask;
+#endif
+    char *addr = inet_ntoa(tmp);
+    if(addr)
+    {
+        Bstr(addr).detachTo(aNetworkMask);
+        return S_OK;
+    }
+
+    return E_FAIL;
 }
 
 STDMETHODIMP HostNetworkInterface::COMGETTER(IPV6Supported) (BOOL *aIPV6Supported)
 {
     CheckComArgOutPointerValid(aIPV6Supported);
-
+#if defined(RT_OS_WINDOWS)
+    *aIPV6Supported = FALSE;
+#else
     *aIPV6Supported = TRUE;
+#endif
 
     return S_OK;
 }
@@ -337,7 +392,20 @@ STDMETHODIMP HostNetworkInterface::COMGETTER(InterfaceType) (HostNetworkInterfac
 
 }
 
-STDMETHODIMP HostNetworkInterface::EnableStaticIpConfig (ULONG aIPAddress, ULONG aNetworkMask)
+STDMETHODIMP HostNetworkInterface::COMGETTER(NetworkName) (BSTR *aNetworkName)
+{
+    AutoCaller autoCaller (this);
+    CheckComRCReturnRC (autoCaller.rc());
+
+    Utf8Str utf8Name("HostInterfaceNetworking-");
+    utf8Name.append(Utf8Str(mInterfaceName)) ;
+    Bstr netName(utf8Name);
+    netName.detachTo (aNetworkName);
+
+    return S_OK;
+}
+
+STDMETHODIMP HostNetworkInterface::EnableStaticIpConfig (IN_BSTR aIPAddress, IN_BSTR aNetMask)
 {
 #ifndef VBOX_WITH_HOSTNETIF_API
     return E_NOTIMPL;
@@ -345,13 +413,57 @@ STDMETHODIMP HostNetworkInterface::EnableStaticIpConfig (ULONG aIPAddress, ULONG
     AutoCaller autoCaller (this);
     CheckComRCReturnRC (autoCaller.rc());
 
-    int rc = NetIfEnableStaticIpConfig(this, aIPAddress, aNetworkMask);
-    if (RT_FAILURE(rc))
+    if (Bstr(aIPAddress).isEmpty())
     {
-        LogRel(("Failed to EnableStaticIpConfigV6 with rc=%Vrc\n", rc));
-        return rc == VERR_NOT_IMPLEMENTED ? E_NOTIMPL : E_FAIL;
+        if (m.IPAddress)
+        {
+            int rc = NetIfEnableStaticIpConfig(mVBox, this, m.IPAddress, 0, 0);
+            if (RT_SUCCESS(rc))
+            {
+                m.realIPAddress = 0;
+                if (FAILED(mVBox->SetExtraData(Bstr(Utf8StrFmt("HostOnly/%ls/IPAddress", mInterfaceName.raw())), Bstr(""))))
+                    return E_FAIL;
+                if (FAILED(mVBox->SetExtraData(Bstr(Utf8StrFmt("HostOnly/%ls/IPNetMask", mInterfaceName.raw())), Bstr(""))))
+                    return E_FAIL;
+                return S_OK;
+            }
+        }
+        else
+            return S_OK;
     }
-    return S_OK;
+
+    ULONG ip, mask;
+    ip = inet_addr(Utf8Str(aIPAddress).raw());
+    if(ip != INADDR_NONE)
+    {
+        if (Bstr(aNetMask).isEmpty())
+            mask = 0xFFFFFF;
+        else
+            mask = inet_addr(Utf8Str(aNetMask).raw());
+        if(mask != INADDR_NONE)
+        {
+            if (m.realIPAddress == ip && m.realNetworkMask == mask)
+                return S_OK;
+            int rc = NetIfEnableStaticIpConfig(mVBox, this, m.IPAddress, ip, mask);
+            if (RT_SUCCESS(rc))
+            {
+                m.realIPAddress   = ip;
+                m.realNetworkMask = mask;
+                if (FAILED(mVBox->SetExtraData(Bstr(Utf8StrFmt("HostOnly/%ls/IPAddress", mInterfaceName.raw())), Bstr(aIPAddress))))
+                    return E_FAIL;
+                if (FAILED(mVBox->SetExtraData(Bstr(Utf8StrFmt("HostOnly/%ls/IPNetMask", mInterfaceName.raw())), Bstr(aNetMask))))
+                    return E_FAIL;
+                return S_OK;
+            }
+            else
+            {
+                LogRel(("Failed to EnableStaticIpConfig with rc=%Vrc\n", rc));
+                return rc == VERR_NOT_IMPLEMENTED ? E_NOTIMPL : E_FAIL;
+            }
+
+        }
+    }
+    return E_FAIL;
 #endif
 }
 
@@ -368,11 +480,28 @@ STDMETHODIMP HostNetworkInterface::EnableStaticIpConfigV6 (IN_BSTR aIPV6Address,
     AutoCaller autoCaller (this);
     CheckComRCReturnRC (autoCaller.rc());
 
-    int rc = NetIfEnableStaticIpConfigV6(this, aIPV6Address, aIPV6MaskPrefixLength);
-    if (RT_FAILURE(rc))
+    int rc = S_OK;
+    if (m.realIPV6Address != aIPV6Address || m.realIPV6PrefixLength != aIPV6MaskPrefixLength)
     {
-        LogRel(("Failed to EnableStaticIpConfigV6 with rc=%Vrc\n", rc));
-        return rc == VERR_NOT_IMPLEMENTED ? E_NOTIMPL : E_FAIL;
+        if (aIPV6MaskPrefixLength == 0)
+            aIPV6MaskPrefixLength = 64;
+        rc = NetIfEnableStaticIpConfigV6(mVBox, this, m.IPV6Address, aIPV6Address, aIPV6MaskPrefixLength);
+        if (RT_FAILURE(rc))
+        {
+            LogRel(("Failed to EnableStaticIpConfigV6 with rc=%Vrc\n", rc));
+            return rc == VERR_NOT_IMPLEMENTED ? E_NOTIMPL : E_FAIL;
+        }
+        else
+        {
+            m.realIPV6Address = aIPV6Address;
+            m.realIPV6PrefixLength = aIPV6MaskPrefixLength;
+            if (FAILED(mVBox->SetExtraData(Bstr(Utf8StrFmt("HostOnly/%ls/IPV6Address", mInterfaceName.raw())), Bstr(aIPV6Address))))
+                return E_FAIL;
+            if (FAILED(mVBox->SetExtraData(Bstr(Utf8StrFmt("HostOnly/%ls/IPV6NetMask", mInterfaceName.raw())), 
+                                           Bstr(Utf8StrFmt("%u", aIPV6MaskPrefixLength)))))
+                return E_FAIL;
+        }
+
     }
     return S_OK;
 #endif
@@ -386,10 +515,28 @@ STDMETHODIMP HostNetworkInterface::EnableDynamicIpConfig ()
     AutoCaller autoCaller (this);
     CheckComRCReturnRC (autoCaller.rc());
 
-    int rc = NetIfEnableDynamicIpConfig(this);
+    int rc = NetIfEnableDynamicIpConfig(mVBox, this);
     if (RT_FAILURE(rc))
     {
-        LogRel(("Failed to EnableStaticIpConfigV6 with rc=%Vrc\n", rc));
+        LogRel(("Failed to EnableDynamicIpConfig with rc=%Vrc\n", rc));
+        return rc == VERR_NOT_IMPLEMENTED ? E_NOTIMPL : E_FAIL;
+    }
+    return S_OK;
+#endif
+}
+
+STDMETHODIMP HostNetworkInterface::DhcpRediscover ()
+{
+#ifndef VBOX_WITH_HOSTNETIF_API
+    return E_NOTIMPL;
+#else
+    AutoCaller autoCaller (this);
+    CheckComRCReturnRC (autoCaller.rc());
+
+    int rc = NetIfDhcpRediscover(mVBox, this);
+    if (RT_FAILURE(rc))
+    {
+        LogRel(("Failed to DhcpRediscover with rc=%Vrc\n", rc));
         return rc == VERR_NOT_IMPLEMENTED ? E_NOTIMPL : E_FAIL;
     }
     return S_OK;
@@ -398,22 +545,39 @@ STDMETHODIMP HostNetworkInterface::EnableDynamicIpConfig ()
 
 HRESULT HostNetworkInterface::setVirtualBox(VirtualBox *pVBox)
 {
+    HRESULT hrc;
     AutoCaller autoCaller (this);
     CheckComRCReturnRC (autoCaller.rc());
     mVBox = pVBox;
 
-    return S_OK;
-}
+    /* If IPv4 address hasn't been initialized */
+    if (m.IPAddress == 0)
+    {
+        Bstr tmpAddr, tmpMask;
+        hrc = mVBox->GetExtraData(Bstr(Utf8StrFmt("HostOnly/%ls/IPAddress", mInterfaceName.raw())), tmpAddr.asOutParam());
+        hrc = mVBox->GetExtraData(Bstr(Utf8StrFmt("HostOnly/%ls/IPNetMask", mInterfaceName.raw())), tmpMask.asOutParam());
+        if (tmpAddr.isEmpty())
+            tmpAddr = Bstr(VBOXNET_IPV4ADDR_DEFAULT);
+        if (tmpMask.isEmpty())
+            tmpMask = Bstr(VBOXNET_IPV4MASK_DEFAULT);
+        m.IPAddress = inet_addr(Utf8Str(tmpAddr).raw());
+        m.networkMask = inet_addr(Utf8Str(tmpMask).raw());
+    }
 
-HRESULT HostNetworkInterface::getVirtualBox(VirtualBox **ppVBox)
-{
-    AutoCaller autoCaller (this);
-    CheckComRCReturnRC (autoCaller.rc());
+    if (m.IPV6Address.isEmpty())
+    {
+        Bstr tmpPrefixLen;
+        hrc = mVBox->GetExtraData(Bstr(Utf8StrFmt("HostOnly/%ls/IPV6Address", mInterfaceName.raw())), m.IPV6Address.asOutParam());
+        if (!m.IPV6Address.isEmpty())
+        {
+            hrc = mVBox->GetExtraData(Bstr(Utf8StrFmt("HostOnly/%ls/IPV6PrefixLen", mInterfaceName.raw())), tmpPrefixLen.asOutParam());
+            if (SUCCEEDED(hrc) && !tmpPrefixLen.isEmpty())
+                m.IPV6NetworkMaskPrefixLength = Utf8Str(tmpPrefixLen).toUInt32();
+            else
+                m.IPV6NetworkMaskPrefixLength = 64;
+        }
+    }
 
-    if (!ppVBox)
-        return E_INVALIDARG;
-
-    *ppVBox = mVBox;
     return S_OK;
 }
 

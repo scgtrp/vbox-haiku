@@ -241,6 +241,7 @@ VirtualBox_QT_MOCHDRS = \
 	include/VBoxFilePathSelectorWidget.h \
 	include/VBoxOSTypeSelectorButton.h \
 	include/VBoxOSTypeSelectorWidget.h \
+	include/VBoxLineTextEdit.h \
 	include/VBoxUtils.h \
 	include/VBoxGlobalSettings.h \
 	include/VBoxGlobal.h \
@@ -250,6 +251,7 @@ VirtualBox_QT_MOCHDRS = \
 	include/VBoxConsoleWnd.h \
 	include/VBoxConsoleView.h \
 	include/VBoxProblemReporter.h \
+	include/VBoxProgressDialog.h \
 	include/VBoxDownloaderWgt.h \
 	include/VBoxAboutDlg.h \
 	include/VBoxCloseVMDlg.h \
@@ -271,6 +273,7 @@ VirtualBox_QT_MOCHDRS = \
 	include/VBoxVMSettingsFD.h \
 	include/VBoxVMSettingsAudio.h \
 	include/VBoxVMSettingsNetwork.h \
+	include/VBoxVMSettingsNetworkDetails.h \
 	include/VBoxVMSettingsSerial.h \
 	include/VBoxVMSettingsParallel.h \
 	include/VBoxVMSettingsUSB.h \
@@ -282,16 +285,21 @@ VirtualBox_QT_MOCHDRS = \
 	include/VBoxGLSettingsInput.h \
 	include/VBoxGLSettingsUpdate.h \
 	include/VBoxGLSettingsLanguage.h \
+	include/VBoxGLSettingsNetwork.h \
+	include/VBoxGLSettingsNetworkDetails.h \
 	include/VBoxSettingsDialog.h \
 	include/VBoxSettingsDialogSpecific.h \
 	include/VBoxSettingsPage.h \
 	include/VBoxSettingsSelector.h \
+	include/VBoxApplianceEditorWgt.h \
 	include/VBoxImportApplianceWgt.h \
 	include/VBoxImportApplianceWzd.h \
+	include/VBoxExportApplianceWgt.h \
 	include/VBoxExportApplianceWzd.h
 
 # Sources containing local definitions of classes that use the Q_OBJECT macro.
 VirtualBox_QT_MOCSRCS = \
+	src/QIMessageBox.cpp \
 	src/VBoxSelectorWnd.cpp \
 	src/VBoxConsoleWnd.cpp \
 	src/VBoxMediaManagerDlg.cpp
@@ -321,11 +329,14 @@ VirtualBox_SOURCES = \
 	src/VBoxFilePathSelectorWidget.cpp \
 	src/VBoxOSTypeSelectorButton.cpp \
 	src/VBoxOSTypeSelectorWidget.cpp \
+	src/VBoxLineTextEdit.cpp \
 	src/VBoxDefs.cpp \
 	src/VBoxGlobalSettings.cpp \
 	src/VBoxGlobal.cpp \
 	src/VBoxMediaComboBox.cpp \
 	src/VBoxProblemReporter.cpp \
+	src/VBoxProgressDialog.cpp \
+	src/VBoxHelpActions.cpp \
 	src/VBoxSelectorWnd.cpp \
 	src/VBoxConsoleView.cpp \
 	src/VBoxConsoleWnd.cpp \
@@ -350,6 +361,7 @@ VirtualBox_SOURCES = \
 	src/VBoxVMSettingsFD.cpp \
 	src/VBoxVMSettingsAudio.cpp \
 	src/VBoxVMSettingsNetwork.cpp \
+	src/VBoxVMSettingsNetworkDetails.cpp \
 	src/VBoxVMSettingsSerial.cpp \
 	src/VBoxVMSettingsParallel.cpp \
 	src/VBoxVMSettingsUSB.cpp \
@@ -361,13 +373,17 @@ VirtualBox_SOURCES = \
 	src/VBoxGLSettingsInput.cpp \
 	src/VBoxGLSettingsUpdate.cpp \
 	src/VBoxGLSettingsLanguage.cpp \
+	src/VBoxGLSettingsNetwork.cpp \
+	src/VBoxGLSettingsNetworkDetails.cpp \
 	src/VBoxSettingsDialog.cpp \
 	src/VBoxSettingsDialogSpecific.cpp \
 	src/VBoxSettingsSelector.cpp \
 	src/VBoxMediaManagerDlg.cpp \
 	src/VBoxMedium.cpp \
+	src/VBoxApplianceEditorWgt.cpp \
 	src/VBoxImportApplianceWgt.cpp \
 	src/VBoxImportApplianceWzd.cpp \
+	src/VBoxExportApplianceWgt.cpp \
 	src/VBoxExportApplianceWzd.cpp
 
 ifeq ($(filter-out freebsd linux netbsd openbsd solaris,$(KBUILD_TARGET)),) # X11
@@ -392,7 +408,7 @@ endif
 
 VirtualBox_SOURCES.win += \
 	src/VBoxFBDDRAW.cpp \
-	$(PATH_VirtualBox)/VirtualBox.rc
+	src/win/VirtualBox.rc
 
 VirtualBox_SOURCES.darwin = \
 	src/darwin/DarwinKeyboard.cpp \
@@ -496,14 +512,16 @@ $(VBOX_VIRTUALBOX4_OUT_DIR)/VirtualBoxBrand.qrc: \
 
 ifeq ($(KBUILD_TARGET),win)
 #
-# On Windows we'll have to generate/edit the resource file.
+# On Windows we'll have to generate/edit part of the resource file.
 # The IDI_ICON1 name is Qt specific.
 #
-$$(PATH_VirtualBox)/VirtualBox.rc: $(PATH_SUB_CURRENT)/Makefile.kmk $(VBOX_WINDOWS_ICON_FILE) | $$(dir $$@)
-	$(RM) -f $@
-	$(APPEND) $@ 'IDI_ICON1 ICON "$(subst /,\\,$(VBOX_WINDOWS_ICON_FILE))"'
+src/win/VirtualBox.rc_INCS  = $(PATH_VirtualBox)
+src/win/VirtualBox.rc_DEPS  = $(PATH_VirtualBox)/VirtualBox-icon.rc
+src/win/VirtualBox.rc_CLEAN = $(PATH_VirtualBox)/VirtualBox-icon.rc
 
-VirtualBox_CLEAN.win += $$(PATH_VirtualBox)/VirtualBox.rc
+$$(PATH_VirtualBox)/VirtualBox-icon.rc: $(MAKEFILE_CURRENT) $(VBOX_WINDOWS_ICON_FILE) | $$(dir $$@)
+	$(APPEND) -t $@ 'IDI_ICON1 ICON "$(subst /,\\,$(VBOX_WINDOWS_ICON_FILE))"'
+
 endif # win
 
 

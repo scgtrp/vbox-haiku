@@ -53,6 +53,7 @@ class Progress;
 class ProgressCollection;
 class Host;
 class SystemProperties;
+class DHCPServer;
 
 #ifdef RT_OS_WINDOWS
 class SVCHlpClient;
@@ -124,7 +125,7 @@ public:
     STDMETHOD(COMGETTER(SettingsFormatVersion)) (BSTR *aSettingsFormatVersion);
     STDMETHOD(COMGETTER(Host)) (IHost **aHost);
     STDMETHOD(COMGETTER(SystemProperties)) (ISystemProperties **aSystemProperties);
-    STDMETHOD(COMGETTER(Machines2)) (ComSafeArrayOut (IMachine *, aMachines));
+    STDMETHOD(COMGETTER(Machines)) (ComSafeArrayOut (IMachine *, aMachines));
     STDMETHOD(COMGETTER(HardDisks)) (ComSafeArrayOut (IHardDisk *, aHardDisks));
     STDMETHOD(COMGETTER(DVDImages)) (ComSafeArrayOut (IDVDImage *, aDVDImages));
     STDMETHOD(COMGETTER(FloppyImages)) (ComSafeArrayOut (IFloppyImage *, aFloppyImages));
@@ -132,6 +133,7 @@ public:
     STDMETHOD(COMGETTER(GuestOSTypes)) (ComSafeArrayOut (IGuestOSType *, aGuestOSTypes));
     STDMETHOD(COMGETTER(SharedFolders)) (ComSafeArrayOut (ISharedFolder *, aSharedFolders));
     STDMETHOD(COMGETTER(PerformanceCollector)) (IPerformanceCollector **aPerformanceCollector);
+    STDMETHOD(COMGETTER(DHCPServers)) (ComSafeArrayOut (IDHCPServer *, aDHCPServers));
 
     /* IVirtualBox methods */
 
@@ -148,7 +150,7 @@ public:
 
     STDMETHOD(CreateHardDisk)(IN_BSTR aFormat, IN_BSTR aLocation,
                                IHardDisk **aHardDisk);
-    STDMETHOD(OpenHardDisk) (IN_BSTR aLocation, IHardDisk **aHardDisk);
+    STDMETHOD(OpenHardDisk) (IN_BSTR aLocation, AccessMode_T accessMode, IHardDisk **aHardDisk);
     STDMETHOD(GetHardDisk) (IN_GUID aId, IHardDisk **aHardDisk);
     STDMETHOD(FindHardDisk) (IN_BSTR aLocation, IHardDisk **aHardDisk);
 
@@ -182,6 +184,12 @@ public:
 
     STDMETHOD(SaveSettings)();
     STDMETHOD(SaveSettingsWithBackup) (BSTR *aBakFileName);
+
+//    STDMETHOD(CreateDHCPServerForInterface) (/*IHostNetworkInterface * aIinterface, */IDHCPServer ** aServer);
+    STDMETHOD(CreateDHCPServer) (IN_BSTR aName, IDHCPServer ** aServer);
+//    STDMETHOD(FindDHCPServerForInterface) (IHostNetworkInterface * aIinterface, IDHCPServer ** aServer);
+    STDMETHOD(FindDHCPServerByNetworkName) (IN_BSTR aName, IDHCPServer ** aServer);
+    STDMETHOD(RemoveDHCPServer) (IDHCPServer * aServer);
 
     /* public methods only for internal purposes */
 
@@ -364,6 +372,7 @@ private:
     typedef std::list <ComObjPtr <DVDImage> > DVDImageList;
     typedef std::list <ComObjPtr <FloppyImage> > FloppyImageList;
     typedef std::list <ComObjPtr <SharedFolder> > SharedFolderList;
+    typedef std::list <ComObjPtr <DHCPServer> > DHCPServerList;
 
     typedef std::map <Guid, ComObjPtr<HardDisk> > HardDiskMap;
 
@@ -382,8 +391,14 @@ private:
 
     HRESULT loadMachines (const settings::Key &aGlobal);
     HRESULT loadMedia (const settings::Key &aGlobal);
+    HRESULT loadNetservices (const settings::Key &aGlobal);
 
     HRESULT registerMachine (Machine *aMachine);
+
+    HRESULT registerDHCPServer(DHCPServer *aDHCPServer,
+                                         bool aSaveRegistry = true);
+    HRESULT unregisterDHCPServer(DHCPServer *aDHCPServer,
+                                         bool aSaveRegistry = true);
 
     HRESULT lockConfig();
     HRESULT unlockConfig();
@@ -431,6 +446,7 @@ private:
         DVDImageList mDVDImages;
         FloppyImageList mFloppyImages;
         SharedFolderList mSharedFolders;
+        DHCPServerList mDHCPServers;
 
         /// @todo NEWMEDIA do we really need this map? Used only in
         /// find() it seems

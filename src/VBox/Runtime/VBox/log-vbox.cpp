@@ -4,7 +4,7 @@
  */
 
 /*
- * Copyright (C) 2006-2007 Sun Microsystems, Inc.
+ * Copyright (C) 2006-2009 Sun Microsystems, Inc.
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -27,7 +27,6 @@
  * Clara, CA 95054 USA or visit http://www.sun.com if you need
  * additional information or have any questions.
  */
-
 
 /** @page pg_rtlog      Runtime - Logging
  *
@@ -186,6 +185,7 @@ RTDECL(PRTLOGGER) RTLogDefaultInit(void)
      */
     static volatile uint32_t fInitializing = 0;
     PRTLOGGER pLogger;
+    int rc;
 
     if (g_pLogger || !ASMAtomicCmpXchgU32(&fInitializing, 1, 0))
         return g_pLogger;
@@ -298,10 +298,10 @@ RTDECL(PRTLOGGER) RTLogDefaultInit(void)
     RTTIMESPEC TimeSpec;
     RTTIME Time;
     RTTimeExplode(&Time, RTTimeNow(&TimeSpec));
-    int rc = RTLogCreate(&pLogger, 0, NULL, "VBOX_LOG", RT_ELEMENTS(g_apszGroups), &g_apszGroups[0], RTLOGDEST_FILE,
-                         "./%04d-%02d-%02d-%02d-%02d-%02d.%03d-%s-%d.log",
-                         Time.i32Year, Time.u8Month, Time.u8MonthDay, Time.u8Hour, Time.u8Minute, Time.u8Second, Time.u32Nanosecond / 10000000,
-                         RTPathFilename(szExecName), RTProcSelf());
+    rc = RTLogCreate(&pLogger, 0, NULL, "VBOX_LOG", RT_ELEMENTS(g_apszGroups), &g_apszGroups[0], RTLOGDEST_FILE,
+                     "./%04d-%02d-%02d-%02d-%02d-%02d.%03d-%s-%d.log",
+                     Time.i32Year, Time.u8Month, Time.u8MonthDay, Time.u8Hour, Time.u8Minute, Time.u8Second, Time.u32Nanosecond / 10000000,
+                     RTPathFilename(szExecName), RTProcSelf());
     if (RT_SUCCESS(rc))
     {
         /*
@@ -378,13 +378,13 @@ RTDECL(PRTLOGGER) RTLogDefaultInit(void)
 
 # else  /* IN_GUEST_R3  */
     /* The user destination is backdoor logging. */
-    int rc = RTLogCreate(&pLogger, 0, NULL, "VBOX_LOG",
-                         RT_ELEMENTS(g_apszGroups), &g_apszGroups[0],
-                         RTLOGDEST_USER, "VBox.log");
+    rc = RTLogCreate(&pLogger, 0, NULL, "VBOX_LOG",
+                     RT_ELEMENTS(g_apszGroups), &g_apszGroups[0],
+                     RTLOGDEST_USER, "VBox.log");
 # endif /* IN_GUEST_R3 */
 
 #else /* IN_RING0 */
-    int rc = RTLogCreate(&pLogger, 0, NULL, "VBOX_LOG", RT_ELEMENTS(g_apszGroups), &g_apszGroups[0],
+    rc = RTLogCreate(&pLogger, 0, NULL, "VBOX_LOG", RT_ELEMENTS(g_apszGroups), &g_apszGroups[0],
 # ifdef LOG_TO_BACKDOOR  /** @todo look at guest ring 0 logging */
                          RTLOGDEST_USER,
 # else
@@ -402,7 +402,8 @@ RTDECL(PRTLOGGER) RTLogDefaultInit(void)
          * that do differ (like Darwin), STDOUT is the kernel log.
          */
 # if 0 /*defined(DEBUG_bird) && !defined(IN_GUEST)*/
-        RTLogGroupSettings(pLogger, "all=~0 -default.l6.l5.l4.l3");
+        //RTLogGroupSettings(pLogger, "all=~0 -default.l6.l5.l4.l3");
+        RTLogGroupSettings(pLogger, "all=0 pgm*=~0 gmm=~0");
         RTLogFlags(pLogger, "enabled unbuffered pid tid");
         pLogger->fDestFlags |= RTLOGDEST_DEBUGGER | RTLOGDEST_STDOUT;
 # endif
@@ -417,11 +418,11 @@ RTDECL(PRTLOGGER) RTLogDefaultInit(void)
         pLogger->fDestFlags |= RTLOGDEST_DEBUGGER;
 # endif
 # if defined(DEBUG_aleksey)  /* Guest ring-0 as well */
-        RTLogGroupSettings(pLogger, "+net_tap_drv.e.l.f+net_flt_drv.e.l.f+srv_intnet.e.l.f");
+        RTLogGroupSettings(pLogger, "+net_adp_drv.e.l.f+net_flt_drv.e.l.f+srv_intnet.e.l.f");
         RTLogFlags(pLogger, "enabled unbuffered");
         pLogger->fDestFlags |= RTLOGDEST_DEBUGGER | RTLOGDEST_STDOUT;
 # endif
-# if defined(DEBUG_misha)  /* Guest ring-0 as well */
+# if 0 /* defined(DEBUG_misha) */ /* Guest ring-0 as well */
         RTLogGroupSettings(pLogger, "+net_flt_drv.e.l.f.l2+srv_intnet.e.l.f");
         RTLogFlags(pLogger, "enabled unbuffered");
         pLogger->fDestFlags |= RTLOGDEST_DEBUGGER;

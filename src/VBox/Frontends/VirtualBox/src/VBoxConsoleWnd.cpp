@@ -1281,8 +1281,6 @@ void VBoxConsoleWnd::closeEvent (QCloseEvent *e)
     static const char *kPowerOff = "powerOff";
     static const char *kDiscardCurState = "discardCurState";
 
-    bool isACPIEnabled = csession.GetConsole().GetGuestEnteredACPIMode();
-
     if (!console)
     {
         e->accept();
@@ -1315,6 +1313,8 @@ void VBoxConsoleWnd::closeEvent (QCloseEvent *e)
     {
         /* start with ignore the close event */
         e->ignore();
+
+        bool isACPIEnabled = csession.GetConsole().GetGuestEnteredACPIMode();
 
         bool success = true;
 
@@ -1600,7 +1600,7 @@ void VBoxConsoleWnd::retranslateUi()
 #ifdef VBOX_OSE
     caption_prefix = tr ("VirtualBox OSE");
 #else
-    caption_prefix = tr ("Sun xVM VirtualBox");
+    caption_prefix = tr ("Sun VirtualBox");
 #endif
 
     /*
@@ -1906,9 +1906,12 @@ void VBoxConsoleWnd::updateAppearanceOf (int element)
              hda != vec.end(); ++ hda)
         {
             CHardDisk hd = hda->GetHardDisk();
+            const QString ctlName = hda->GetController();
+            CStorageController ctl = cmachine.GetStorageControllerByName(ctlName);
+
             data += QString ("<br><nobr><b>%1 %2</b>: %3</nobr>")
-                .arg (vboxGlobal().toString (hda->GetBus(), hda->GetChannel()))
-                .arg (vboxGlobal().toString (hda->GetBus(), hda->GetChannel(),
+                .arg (vboxGlobal().toString (ctl.GetBus(), hda->GetPort()))
+                .arg (vboxGlobal().toString (ctl.GetBus(), hda->GetPort(),
                                              hda->GetDevice()))
                 .arg (QDir::convertSeparators (hd.GetLocation()));
             hasDisks = true;

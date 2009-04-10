@@ -157,7 +157,7 @@ endif
 
 $(REM_MOD)_SOURCES.debug  += \
 	Sun/testmath.c
-$(REM_MOD)_SOURCES.win.x86 = $(REM_MOD).def
+$(REM_MOD)_SOURCES.win.x86 = $(PATH_VBoxREMImp)/VBoxREMWin.def
 ifndef VBOX_USE_REM2
  $(REM_MOD)_POST_CMDS      = $(VBOX_SIGN_IMAGE_CMDS)
 endif
@@ -250,8 +250,10 @@ VBoxREMImp_TEMPLATE        = VBOXR3
 VBoxREMImp_NAME            = VBoxREM
  endif
 VBoxREMImp_INST            = $(INST_LIB)
-VBoxREMImp_SOURCES.win     = VBoxREM.def
+VBoxREMImp_SOURCES.win     = $(PATH_VBoxREMImp)/VBoxREMWin.def
+VBoxREMImp_CLEAN.win       = $(PATH_VBoxREMImp)/VBoxREMWin.def
 VBoxREMImp_SOURCES.os2     = $(PATH_VBoxREMImp)/VBoxREMOS2.def
+VBoxREMImp_CLEAN.os2       = $(PATH_VBoxREMImp)/VBoxREMOS2.def
  ifn1of ($(KBUILD_TARGET), os2 win)
 VBoxREMImp_SOURCES         = $(PATH_VBoxREMImp)/VBoxREMImp.c
 VBoxREMImp_CLEAN           = $(PATH_VBoxREMImp)/VBoxREMImp.c
@@ -280,6 +282,9 @@ $$(PATH_VBoxREMImp)/VBoxREMOS2.def: $(VBOX_PATH_RECOMPILER_SRC)/VBoxREM.def $(MA
 		--output $@ \
 		$<
 
+$$(PATH_VBoxREMImp)/VBoxREMWin.def: $(VBOX_PATH_RECOMPILER_SRC)/VBoxREM.def $(MAKEFILE_CURRENT) | $$(dir $$@)
+	$(CP) -f $< $@
+
 
 #
 # The math testcase as a standalone program for testing and debugging purposes.
@@ -295,3 +300,4 @@ testmath_SOURCES        = Sun/testmath.c
 
 
 include $(KBUILD_PATH)/subfooter.kmk
+

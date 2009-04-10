@@ -10,7 +10,7 @@
  */
 
 /*
- * Copyright (C) 2006-2007 Sun Microsystems, Inc.
+ * Copyright (C) 2006-2009 Sun Microsystems, Inc.
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -431,7 +431,7 @@ extern "C" DECLEXPORT(int) TrustedMain (int argc, char **argv, char **envp)
 #endif
     int rc = VINF_SUCCESS;
 
-    RTPrintf("Sun xVM VirtualBox Simple SDL GUI built %s %s\n", __DATE__, __TIME__);
+    RTPrintf("Sun VirtualBox Simple SDL GUI built %s %s\n", __DATE__, __TIME__);
 
     // less than one parameter is not possible
     if (argc < 2)
@@ -1106,19 +1106,22 @@ DECLCALLBACK(void) setVMErrorCallback(PVM pVM, void *pvUser, int rc, RT_SRC_POS_
  *
  * @param   pVM         The VM handle.
  * @param   pvUser      The user argument.
- * @param   fFata       Wheather it is a fatal error or not.
+ * @param   fFlags      The action flags. See VMSETRTERR_FLAGS_*.
  * @param   pszErrorId  Error ID string.
  * @param   pszError    Error message format string.
- * @param   args        Error message arguments.
+ * @param   va          Error message arguments.
  * @thread EMT.
  */
-DECLCALLBACK(void) setVMRuntimeErrorCallback(PVM pVM, void *pvUser, bool fFatal,
+DECLCALLBACK(void) setVMRuntimeErrorCallback(PVM pVM, void *pvUser, uint32_t fFlags,
                                              const char *pszErrorId,
-                                             const char *pszFormat, va_list args)
+                                             const char *pszFormat, va_list va)
 {
     va_list va2;
-    va_copy(va2, args); /* Have to make a copy here or GCC will break. */
-    RTPrintf("%s: %s!\n%N!\n", fFatal ? "Error" : "Warning", pszErrorId, pszFormat, &va2);
+    va_copy(va2, va); /* Have to make a copy here or GCC/AMD64 will break. */
+    RTPrintf("%s: %s!\n%N!\n",
+             fFlags & VMSETRTERR_FLAGS_FATAL ? "Error" : "Warning",
+             pszErrorId, pszFormat, &va2);
+    RTStrmFlush(g_pStdErr);
     va_end(va2);
 }
 
@@ -1680,13 +1683,17 @@ static DECLCALLBACK(int) vboxbfeConfigConstructor(PVM pVM, void *pvUser)
         {
             rc = CFGMR3InsertString(pCfg, "Format",       "SPF");                   UPDATE_RC();
         }
-        else if (!strcmp(RTPathExt(g_pszHdaFile), ".vdi"))
-        {
-            rc = CFGMR3InsertString(pCfg, "Format",       "VDI");                   UPDATE_RC();
-        }
         else
         {
-            rc = CFGMR3InsertString(pCfg, "Format",       "VMDK");                  UPDATE_RC();
+            char *pcExt = RTPathExt(g_pszHdaFile);
+            if ((pcExt) && (!strcmp(pcExt, ".vdi")))
+            {
+                rc = CFGMR3InsertString(pCfg, "Format",       "VDI");               UPDATE_RC();
+            }
+            else
+            {
+                rc = CFGMR3InsertString(pCfg, "Format",       "VMDK");              UPDATE_RC();
+            }
         }
     }
 
@@ -1707,13 +1714,17 @@ static DECLCALLBACK(int) vboxbfeConfigConstructor(PVM pVM, void *pvUser)
         {
             rc = CFGMR3InsertString(pCfg, "Format",       "SPF");                   UPDATE_RC();
         }
-        else if (!strcmp(RTPathExt(g_pszHdbFile), ".vdi"))
-        {
-            rc = CFGMR3InsertString(pCfg, "Format",       "VDI");                   UPDATE_RC();
-        }
         else
         {
-            rc = CFGMR3InsertString(pCfg, "Format",       "VMDK");                  UPDATE_RC();
+            char *pcExt = RTPathExt(g_pszHdbFile);
+            if ((pcExt) && (!strcmp(pcExt, ".vdi")))
+            {
+                rc = CFGMR3InsertString(pCfg, "Format",       "VDI");               UPDATE_RC();
+            }
+            else
+            {
+                rc = CFGMR3InsertString(pCfg, "Format",       "VMDK");              UPDATE_RC();
+            }
         }
     }
 

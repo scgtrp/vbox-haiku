@@ -34,6 +34,8 @@
 #include <algorithm>
 #include <functional>
 
+#include "Performance.h"
+
 static Bstr gMetricNames[] =
 {
     "CPU/Load/User",
@@ -436,7 +438,7 @@ PerformanceCollector::QueryMetricsData (ComSafeArrayIn (IN_BSTR, metricNames),
         retScales[i] = (*it)->getScale();
         retSequenceNumbers[i] = sequenceNumber;
         retLengths[i] = length;
-        retIndices[i] = flatIndex;
+        retIndices[i] = (ULONG)flatIndex;
         flatIndex += length;
     }
 
@@ -514,7 +516,7 @@ void PerformanceCollector::unregisterMetricsFor (const ComPtr <IUnknown> &aObjec
 
 /* static */
 void PerformanceCollector::staticSamplerCallback (RTTIMERLR hTimerLR, void *pvUser,
-                                                  uint64_t iTick)
+                                                  uint64_t /* iTick */)
 {
     AssertReturnVoid (pvUser != NULL);
     PerformanceCollector *collector = static_cast <PerformanceCollector *> (pvUser);

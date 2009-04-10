@@ -132,7 +132,9 @@ static void bootp_reply(PNATState pData, struct bootp_t *bp)
     struct mbuf *m;
     struct bootp_t *rbp;
     struct sockaddr_in saddr, daddr;
+#ifndef VBOX_WITH_MULTI_DNS
     struct in_addr dns_addr_dhcp;
+#endif
     int dhcp_msg_type, val;
     uint8_t *q;
     struct in_addr requested_ip; /* the requested IP in DHCPREQUEST */
@@ -272,6 +274,8 @@ static void bootp_reply(PNATState pData, struct bootp_t *bp)
     {
 #ifdef VBOX_WITH_MULTI_DNS
         struct dns_entry *de = NULL;
+        struct dns_domain_entry *dd = NULL;
+        int added = 0;
 #endif
         uint32_t lease_time = htonl(LEASE_TIME);
         uint32_t netmask = htonl(pData->netmask);
@@ -284,7 +288,7 @@ static void bootp_reply(PNATState pData, struct bootp_t *bp)
         FILL_BOOTP_EXT(q, RFC1533_DNS, 4, &dns_addr_dhcp.s_addr);
 #else
 # ifdef VBOX_WITH_SLIRP_DNS_PROXY
-        if (pData->use_dns_proxy) 
+        if (pData->use_dns_proxy)
         {
             uint32_t addr = htonl(ntohl(special_addr.s_addr) | CTL_DNS);
             FILL_BOOTP_EXT(q, RFC1533_DNS, 4, &addr);
@@ -294,6 +298,18 @@ static void bootp_reply(PNATState pData, struct bootp_t *bp)
         LIST_FOREACH(de, &pData->dns_list_head, de_list)
         {
             FILL_BOOTP_EXT(q, RFC1533_DNS, 4, &de->de_addr.s_addr);
+        }
+        LIST_FOREACH(dd, &pData->dns_domain_list_head, dd_list)
+        {
+            
+            if (dd->dd_pszDomain == NULL)
+                continue;
+            if (added != 0) 
+                FILL_BOOTP_EXT(q, RFC1533_DOMAINNAME, 1, ","); /* never meet valid separator here in RFC1533*/
+            else
+                added = 1;
+            val = (int)strlen(dd->dd_pszDomain);
+            FILL_BOOTP_EXT(q, RFC1533_DOMAINNAME, val, dd->dd_pszDomain);
         }
 #endif
 
@@ -305,11 +321,13 @@ static void bootp_reply(PNATState pData, struct bootp_t *bp)
             FILL_BOOTP_EXT(q, RFC1533_HOSTNAME, val, slirp_hostname);
         }
 
+#ifndef VBOX_WITH_MULTI_DNS
         if (pData->pszDomain && pData->fPassDomain)
         {
             val = (int)strlen(pData->pszDomain);
             FILL_BOOTP_EXT(q, RFC1533_DOMAINNAME, val, pData->pszDomain);
         }
+#endif
     }
     *q++ = RFC1533_END;
 

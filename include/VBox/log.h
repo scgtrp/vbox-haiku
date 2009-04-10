@@ -255,8 +255,6 @@ typedef enum LOGGROUP
     LOG_GROUP_PDM_QUEUE,
     /** PGM group. */
     LOG_GROUP_PGM,
-    /** PGMCACHE group. */
-    LOG_GROUP_PGMCACHE,
     /** PGM physical group. */
     LOG_GROUP_PGM_PHYS,
     /** PGM physical access group. */
@@ -279,6 +277,8 @@ typedef enum LOGGROUP
     LOG_GROUP_REM_RUN,
     /** SELM group. */
     LOG_GROUP_SELM,
+    /** Shared clipboard host service group. */
+    LOG_GROUP_SHARED_CLIPBOARD,
     /** Chromium OpenGL host service group. */
     LOG_GROUP_SHARED_CROPENGL,
     /** Shared folders host service group. */
@@ -438,7 +438,6 @@ typedef enum LOGGROUP
     "PDM_LDR",      \
     "PDM_QUEUE",    \
     "PGM",          \
-    "PGMCACHE",     \
     "PGM_PHYS",     \
     "PGM_PHYS_ACCESS",\
     "PGM_POOL",     \
@@ -450,6 +449,7 @@ typedef enum LOGGROUP
     "REM_PRINTF",   \
     "REM_RUN",      \
     "SELM",         \
+    "SHARED_CLIPBOARD",\
     "SHARED_CROPENGL",\
     "SHARED_FOLDERS",\
     "SHARED_OPENGL",\

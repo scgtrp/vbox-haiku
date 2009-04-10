@@ -54,6 +54,11 @@
  */
 
 #include <linux/autoconf.h>
+#include <linux/version.h>
+#include <linux/module.h>
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 27)
+
 #include "drm/drmP.h"
 #include "vboxvideo_drm.h"
 
@@ -103,5 +108,7 @@ module_exit(vboxvideo_exit);
 
 MODULE_AUTHOR(DRIVER_AUTHOR);
 MODULE_DESCRIPTION(DRIVER_DESC);
-MODULE_LICENSE("GPL and additional rights");
 
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 27) */
+
+MODULE_LICENSE("GPL and additional rights");

@@ -221,13 +221,19 @@ OSStatus darwinRegionHandler (EventHandlerCallRef aInHandlerCallRef, EventRef aI
 enum
 {
     /* Event classes */
-    kEventClassVBox        = 'vbox',
+    kEventClassVBox         = 'vbox',
     /* Event kinds */
-    kEventVBoxShowWindow   = 'swin',
-    kEventVBoxMoveWindow   = 'mwin',
-    kEventVBoxResizeWindow = 'rwin',
-    kEventVBoxUpdateDock   = 'udck'
+    kEventVBoxShowWindow    = 'swin',
+    kEventVBoxHideWindow    = 'hwin',
+    kEventVBoxMoveWindow    = 'mwin',
+    kEventVBoxResizeWindow  = 'rwin',
+    kEventVBoxDisposeWindow = 'dwin',
+    kEventVBoxUpdateDock    = 'udck',
+    kEventVBoxUpdateContext = 'uctx',
+    kEventVBoxBoundsChanged = 'bchg'
 };
+
+void PostBoundsChanged (const QRect& rect);
 OSStatus darwinOverlayWindowHandler (EventHandlerCallRef aInHandlerCallRef, EventRef aInEvent, void *aInUserData);
 
 bool darwinIsMenuOpen (void);

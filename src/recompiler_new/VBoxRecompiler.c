@@ -143,6 +143,10 @@ static STAMCOUNTER    gStatSelOutOfSync[6];
 static STAMCOUNTER    gStatSelOutOfSyncStateBack[6];
 static STAMCOUNTER    gStatFlushTBs;
 #endif
+/* in exec.c */
+extern uint32_t       tlb_flush_count;
+extern uint32_t       tb_flush_count;
+extern uint32_t       tb_phys_invalidate_count;
 
 /*
  * Global stuff.
@@ -213,6 +217,9 @@ static const DBGCCMD    g_aCmds[] =
 };
 #endif
 
+/** Prologue code, must be in lower 4G to simplify jumps to/from generated code. */
+uint8_t *code_gen_prologue;
+
 
 /*******************************************************************************
 *   Internal Functions                                                         *
@@ -230,9 +237,6 @@ AssertCompile(RT_SIZEOFMEMB(REM, Env) <= REM_ENV_SIZE);
 AssertCompile(RT_SIZEOFMEMB(REM, Env) <= REM_ENV_SIZE);
 #endif
 
-
-/** Prologue code, must be in lower 4G to simplify jumps to/from generated code. */
-uint8_t *code_gen_prologue;
 
 /**
  * Initializes the REM.
@@ -379,16 +383,20 @@ REMR3DECL(int) REMR3Init(PVM pVM)
     STAM_REG(pVM, &gStatSelOutOfSync[4],    STAMTYPE_COUNTER, "/REM/State/SelOutOfSync/FS",        STAMUNIT_OCCURENCES,     "FS out of sync");
     STAM_REG(pVM, &gStatSelOutOfSync[5],    STAMTYPE_COUNTER, "/REM/State/SelOutOfSync/GS",        STAMUNIT_OCCURENCES,     "GS out of sync");
 
-    STAM_REG(pVM, &gStatSelOutOfSyncStateBack[0],    STAMTYPE_COUNTER, "/REM/StateBack/SelOutOfSync/ES",        STAMUNIT_OCCURENCES,     "ES out of sync");
-    STAM_REG(pVM, &gStatSelOutOfSyncStateBack[1],    STAMTYPE_COUNTER, "/REM/StateBack/SelOutOfSync/CS",        STAMUNIT_OCCURENCES,     "CS out of sync");
-    STAM_REG(pVM, &gStatSelOutOfSyncStateBack[2],    STAMTYPE_COUNTER, "/REM/StateBack/SelOutOfSync/SS",        STAMUNIT_OCCURENCES,     "SS out of sync");
-    STAM_REG(pVM, &gStatSelOutOfSyncStateBack[3],    STAMTYPE_COUNTER, "/REM/StateBack/SelOutOfSync/DS",        STAMUNIT_OCCURENCES,     "DS out of sync");
-    STAM_REG(pVM, &gStatSelOutOfSyncStateBack[4],    STAMTYPE_COUNTER, "/REM/StateBack/SelOutOfSync/FS",        STAMUNIT_OCCURENCES,     "FS out of sync");
-    STAM_REG(pVM, &gStatSelOutOfSyncStateBack[5],    STAMTYPE_COUNTER, "/REM/StateBack/SelOutOfSync/GS",        STAMUNIT_OCCURENCES,     "GS out of sync");
+    STAM_REG(pVM, &gStatSelOutOfSyncStateBack[0],   STAMTYPE_COUNTER,   "/REM/StateBack/SelOutOfSync/ES",   STAMUNIT_OCCURENCES, "ES out of sync");
+    STAM_REG(pVM, &gStatSelOutOfSyncStateBack[1],   STAMTYPE_COUNTER,   "/REM/StateBack/SelOutOfSync/CS",   STAMUNIT_OCCURENCES, "CS out of sync");
+    STAM_REG(pVM, &gStatSelOutOfSyncStateBack[2],   STAMTYPE_COUNTER,   "/REM/StateBack/SelOutOfSync/SS",   STAMUNIT_OCCURENCES, "SS out of sync");
+    STAM_REG(pVM, &gStatSelOutOfSyncStateBack[3],   STAMTYPE_COUNTER,   "/REM/StateBack/SelOutOfSync/DS",   STAMUNIT_OCCURENCES, "DS out of sync");
+    STAM_REG(pVM, &gStatSelOutOfSyncStateBack[4],   STAMTYPE_COUNTER,   "/REM/StateBack/SelOutOfSync/FS",   STAMUNIT_OCCURENCES, "FS out of sync");
+    STAM_REG(pVM, &gStatSelOutOfSyncStateBack[5],   STAMTYPE_COUNTER,   "/REM/StateBack/SelOutOfSync/GS",   STAMUNIT_OCCURENCES, "GS out of sync");
 
-    /** @todo missing /REM/Tb*Count stats */
+    STAM_REG(pVM, &pVM->rem.s.Env.StatTbFlush,      STAMTYPE_PROFILE,   "/REM/TbFlush",     STAMUNIT_TICKS_PER_CALL, "profiling tb_flush().");
+#endif /* VBOX_WITH_STATISTICS */
 
-#endif
+    STAM_REL_REG(pVM, &tb_flush_count,              STAMTYPE_U32_RESET, "/REM/TbFlushCount",                STAMUNIT_OCCURENCES, "tb_flush() calls");
+    STAM_REL_REG(pVM, &tb_phys_invalidate_count,    STAMTYPE_U32_RESET, "/REM/TbPhysInvldCount",            STAMUNIT_OCCURENCES, "tb_phys_invalidate() calls");
+    STAM_REL_REG(pVM, &tlb_flush_count,             STAMTYPE_U32_RESET, "/REM/TlbFlushCount",               STAMUNIT_OCCURENCES, "tlb_flush() calls");
+
 
 #ifdef DEBUG_ALL_LOGGING
     loglevel = ~0;
@@ -497,6 +505,63 @@ static int remR3InitPhysRamSizeAndDirtyMap(PVM pVM, bool fGuarded)
  */
 REMR3DECL(int) REMR3Term(PVM pVM)
 {
+#ifdef VBOX_WITH_STATISTICS
+    /*
+     * Statistics.
+     */
+    STAM_DEREG(pVM, &gStatExecuteSingleInstr);
+    STAM_DEREG(pVM, &gStatCompilationQEmu);
+    STAM_DEREG(pVM, &gStatRunCodeQEmu);
+    STAM_DEREG(pVM, &gStatTotalTimeQEmu);
+    STAM_DEREG(pVM, &gStatTimers);
+    STAM_DEREG(pVM, &gStatTBLookup);
+    STAM_DEREG(pVM, &gStatIRQ);
+    STAM_DEREG(pVM, &gStatRawCheck);
+    STAM_DEREG(pVM, &gStatMemRead);
+    STAM_DEREG(pVM, &gStatMemWrite);
+    STAM_DEREG(pVM, &gStatHCVirt2GCPhys);
+    STAM_DEREG(pVM, &gStatGCPhys2HCVirt);
+
+    STAM_DEREG(pVM, &gStatCpuGetTSC);
+
+    STAM_DEREG(pVM, &gStatRefuseTFInhibit);
+    STAM_DEREG(pVM, &gStatRefuseVM86);
+    STAM_DEREG(pVM, &gStatRefusePaging);
+    STAM_DEREG(pVM, &gStatRefusePAE);
+    STAM_DEREG(pVM, &gStatRefuseIOPLNot0);
+    STAM_DEREG(pVM, &gStatRefuseIF0);
+    STAM_DEREG(pVM, &gStatRefuseCode16);
+    STAM_DEREG(pVM, &gStatRefuseWP0);
+    STAM_DEREG(pVM, &gStatRefuseRing1or2);
+    STAM_DEREG(pVM, &gStatRefuseCanExecute);
+    STAM_DEREG(pVM, &gStatFlushTBs);
+
+    STAM_DEREG(pVM, &gStatREMGDTChange);
+    STAM_DEREG(pVM, &gStatREMLDTRChange);
+    STAM_DEREG(pVM, &gStatREMIDTChange);
+    STAM_DEREG(pVM, &gStatREMTRChange);
+
+    STAM_DEREG(pVM, &gStatSelOutOfSync[0]);
+    STAM_DEREG(pVM, &gStatSelOutOfSync[1]);
+    STAM_DEREG(pVM, &gStatSelOutOfSync[2]);
+    STAM_DEREG(pVM, &gStatSelOutOfSync[3]);
+    STAM_DEREG(pVM, &gStatSelOutOfSync[4]);
+    STAM_DEREG(pVM, &gStatSelOutOfSync[5]);
+
+    STAM_DEREG(pVM, &gStatSelOutOfSyncStateBack[0]);
+    STAM_DEREG(pVM, &gStatSelOutOfSyncStateBack[1]);
+    STAM_DEREG(pVM, &gStatSelOutOfSyncStateBack[2]);
+    STAM_DEREG(pVM, &gStatSelOutOfSyncStateBack[3]);
+    STAM_DEREG(pVM, &gStatSelOutOfSyncStateBack[4]);
+    STAM_DEREG(pVM, &gStatSelOutOfSyncStateBack[5]);
+
+    STAM_DEREG(pVM, &pVM->rem.s.Env.StatTbFlush);
+#endif /* VBOX_WITH_STATISTICS */
+
+    STAM_REL_DEREG(pVM, &tb_flush_count);
+    STAM_REL_DEREG(pVM, &tb_phys_invalidate_count);
+    STAM_REL_DEREG(pVM, &tlb_flush_count);
+
     return VINF_SUCCESS;
 }
 
@@ -536,11 +601,12 @@ REMR3DECL(void) REMR3Reset(PVM pVM)
  */
 static DECLCALLBACK(int) remR3Save(PVM pVM, PSSMHANDLE pSSM)
 {
+    PREM pRem = &pVM->rem.s;
+
     /*
      * Save the required CPU Env bits.
      * (Not much because we're never in REM when doing the save.)
      */
-    PREM pRem = &pVM->rem.s;
     LogFlow(("remR3Save:\n"));
     Assert(!pRem->fInREM);
     SSMR3PutU32(pSSM,   pRem->Env.hflags);
@@ -739,6 +805,11 @@ REMR3DECL(int) REMR3Step(PVM pVM)
             case EXCP_RC:
                 rc = pVM->rem.s.rc;
                 pVM->rem.s.rc = VERR_INTERNAL_ERROR;
+                break;
+            case EXCP_EXECUTE_RAW:
+            case EXCP_EXECUTE_HWACC:
+                /** @todo: is it correct? No! */
+                rc = VINF_SUCCESS;
                 break;
             default:
                 AssertReleaseMsgFailed(("This really shouldn't happen, rc=%d!\n", rc));
@@ -1499,9 +1570,10 @@ void remR3FlushTLB(CPUState *env, bool fGlobal)
  */
 void remR3ChangeCpuMode(CPUState *env)
 {
-    int rc;
-    PVM pVM = env->pVM;
-    PCPUMCTX pCtx;
+    PVM         pVM = env->pVM;
+    uint64_t    efer;
+    PCPUMCTX    pCtx;
+    int         rc;
 
     /*
      * When we're replaying loads or restoring a saved
@@ -1523,14 +1595,21 @@ void remR3ChangeCpuMode(CPUState *env)
     pCtx->cr4 = env->cr[4];
 
 #ifdef TARGET_X86_64
-    rc = PGMChangeMode(pVM, env->cr[0], env->cr[4], env->efer);
-    if (rc != VINF_SUCCESS)
-        cpu_abort(env, "PGMChangeMode(, %RX64, %RX64, %RX64) -> %Rrc\n", env->cr[0], env->cr[4], env->efer, rc);
+    efer = env->efer;
 #else
-    rc = PGMChangeMode(pVM, env->cr[0], env->cr[4], 0);
-    if (rc != VINF_SUCCESS)
-        cpu_abort(env, "PGMChangeMode(, %RX64, %RX64, %RX64) -> %Rrc\n", env->cr[0], env->cr[4], 0LL, rc);
+    efer = 0;
 #endif
+    rc = PGMChangeMode(pVM, env->cr[0], env->cr[4], efer);
+    if (rc != VINF_SUCCESS)
+    {
+        if (rc >= VINF_EM_FIRST && rc <= VINF_EM_LAST)
+        {
+            Log(("PGMChangeMode(, %RX64, %RX64, %RX64) -> %Rrc -> remR3RaiseRC\n", env->cr[0], env->cr[4], efer, rc));
+            remR3RaiseRC(env->pVM, rc);
+        }
+        else
+            cpu_abort(env, "PGMChangeMode(, %RX64, %RX64, %RX64) -> %Rrc\n", env->cr[0], env->cr[4], efer, rc);
+    }
 }
 
 
@@ -2732,18 +2811,12 @@ REMR3DECL(void) REMR3NotifyPhysRamRegister(PVM pVM, RTGCPHYS GCPhys, RTGCPHYS cb
     Assert(RT_ALIGN_T(GCPhys, PAGE_SIZE, RTGCPHYS) == GCPhys);
     Assert(cb);
     Assert(RT_ALIGN_Z(cb, PAGE_SIZE) == cb);
-#ifdef VBOX_WITH_NEW_PHYS_CODE
     AssertMsg(fFlags == REM_NOTIFY_PHYS_RAM_FLAGS_RAM || fFlags == REM_NOTIFY_PHYS_RAM_FLAGS_MMIO2, ("#x\n", fFlags));
-#endif
 
     /*
      * Base ram? Update GCPhysLastRam.
      */
-#ifdef VBOX_WITH_NEW_PHYS_CODE
     if (fFlags & REM_NOTIFY_PHYS_RAM_FLAGS_RAM)
-#else
-    if (!GCPhys)
-#endif
     {
         if (GCPhys + (cb - 1) > pVM->rem.s.GCPhysLastRam)
         {
@@ -2758,78 +2831,11 @@ REMR3DECL(void) REMR3NotifyPhysRamRegister(PVM pVM, RTGCPHYS GCPhys, RTGCPHYS cb
     Assert(!pVM->rem.s.fIgnoreAll);
     pVM->rem.s.fIgnoreAll = true;
 
-#ifdef VBOX_WITH_NEW_PHYS_CODE
-    cpu_register_physical_memory(GCPhys, cb, GCPhys);
-#else
-    if (!GCPhys)
-        cpu_register_physical_memory(GCPhys, cb, GCPhys | IO_MEM_RAM_MISSING);
-    else
-    {
-        if (fFlags & MM_RAM_FLAGS_RESERVED)
-            cpu_register_physical_memory(GCPhys, cb, IO_MEM_UNASSIGNED);
-        else
-            cpu_register_physical_memory(GCPhys, cb, GCPhys);
-    }
-#endif
-    Assert(pVM->rem.s.fIgnoreAll);
-    pVM->rem.s.fIgnoreAll = false;
-}
-
-#ifndef VBOX_WITH_NEW_PHYS_CODE
-
-/**
- * Notification about a successful PGMR3PhysRegisterChunk() call.
- *
- * @param   pVM         VM handle.
- * @param   GCPhys      The physical address the RAM.
- * @param   cb          Size of the memory.
- * @param   pvRam       The HC address of the RAM.
- * @param   fFlags      Flags of the MM_RAM_FLAGS_* defines.
- */
-REMR3DECL(void) REMR3NotifyPhysRamChunkRegister(PVM pVM, RTGCPHYS GCPhys, RTUINT cb, RTHCUINTPTR pvRam, unsigned fFlags)
-{
-    Log(("REMR3NotifyPhysRamChunkRegister: GCPhys=%RGp cb=%d pvRam=%p fFlags=%d\n", GCPhys, cb, pvRam, fFlags));
-    VM_ASSERT_EMT(pVM);
-
-    /*
-     * Validate input - we trust the caller.
-     */
-    Assert(pvRam);
-    Assert(RT_ALIGN(pvRam, PAGE_SIZE) == pvRam);
-    Assert(RT_ALIGN_T(GCPhys, PAGE_SIZE, RTGCPHYS) == GCPhys);
-    Assert(cb == PGM_DYNAMIC_CHUNK_SIZE);
-    Assert(fFlags == 0 /* normal RAM */);
-    Assert(!pVM->rem.s.fIgnoreAll);
-    pVM->rem.s.fIgnoreAll = true;
     cpu_register_physical_memory(GCPhys, cb, GCPhys);
     Assert(pVM->rem.s.fIgnoreAll);
     pVM->rem.s.fIgnoreAll = false;
 }
 
-
-/**
- *  Grows dynamically allocated guest RAM.
- *  Will raise a fatal error if the operation fails.
- *
- * @param   physaddr    The physical address.
- */
-void remR3GrowDynRange(unsigned long physaddr) /** @todo Needs fixing for MSC... */
-{
-    int rc;
-    PVM pVM = cpu_single_env->pVM;
-    const RTGCPHYS GCPhys = physaddr;
-
-    LogFlow(("remR3GrowDynRange %RGp\n", (RTGCPTR)physaddr));
-    rc = PGM3PhysGrowRange(pVM, &GCPhys);
-    if (RT_SUCCESS(rc))
-        return;
-
-    LogRel(("\nUnable to allocate guest RAM chunk at %RGp\n", (RTGCPTR)physaddr));
-    cpu_abort(cpu_single_env, "Unable to allocate guest RAM chunk at %RGp\n", (RTGCPTR)physaddr);
-    AssertFatalFailed();
-}
-
-#endif /* !VBOX_WITH_NEW_PHYS_CODE */
 
 /**
  * Notification about a successful MMR3PhysRomRegister() call.

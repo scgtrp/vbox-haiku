@@ -156,19 +156,18 @@ int main(int argc, char* argv[])
             std::cout << "Not enough arguments for \"" << pcszMode << "\" mode.\n";
         else
         {
-            _vbox__IVirtualBox_USCOREgetMachines2 req;
+            _vbox__IVirtualBox_USCOREgetMachines req;
             req._USCOREthis = argv[2];
-            _vbox__IVirtualBox_USCOREgetMachines2Response resp;
+            _vbox__IVirtualBox_USCOREgetMachinesResponse resp;
 
-            if (!(soaprc = soap_call___vbox__IVirtualBox_USCOREgetMachines2(&soap,
+            if (!(soaprc = soap_call___vbox__IVirtualBox_USCOREgetMachines(&soap,
                                                                 pcszArgEndpoint,
                                                                 NULL,
                                                                 &req,
                                                                 &resp)))
             {
-                unsigned int i,
-                            c = resp.returnval.size();
-                for (i = 0;
+                size_t c = resp.returnval.size();
+                for (size_t i = 0;
                      i < c;
                      ++i)
                 {
@@ -231,11 +230,10 @@ int main(int argc, char* argv[])
                                                            &req,
                                                            &resp)))
         {
-            unsigned int i,
-                         c = resp.returnval.size();
-            for(i = 0;
-                i < c;
-                ++i)
+            size_t c = resp.returnval.size();
+            for (size_t i = 0;
+                 i < c;
+                 ++i)
             {
                 std::cout << "DVD drive " << i << ": objref " << resp.returnval[i] << "\n";
             }

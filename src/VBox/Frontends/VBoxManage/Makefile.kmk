@@ -34,11 +34,13 @@ ifdef VBOX_ONLY_DOCS
 else # !VBOX_ONLY_DOCS
  VBoxManage_TEMPLATE   = VBOXMAINCLIENTEXE
  VBoxManage_DEFS      += \
+ 	$(if $(VBOX_WITH_VBOXSDL), VBOX_WITH_VBOXSDL) \
  	$(if $(VBOX_WITH_VRDP), VBOX_WITH_VRDP) \
  	$(if $(VBOX_WITH_ALSA), VBOX_WITH_ALSA) \
  	$(if $(VBOX_WITH_PULSE),VBOX_WITH_PULSE) \
  	$(if $(VBOX_WITH_E1000),VBOX_WITH_E1000) \
  	$(if $(VBOX_WITH_AHCI), VBOX_WITH_AHCI) \
+ 	$(if $(VBOX_WITH_SCSI), VBOX_WITH_SCSI) \
  	$(if $(VBOX_WITH_GUEST_PROPS),VBOX_WITH_GUEST_PROPS) \
  	$(if $(VBOX_WITH_HOSTNETIF_API), VBOX_WITH_HOSTNETIF_API)
  VBoxManage_DEFS.win   = _WIN32_WINNT=0x0500
@@ -58,6 +60,7 @@ endif
  	VBoxManageUSB.cpp \
  	VBoxInternalManage.cpp \
  	VBoxManageHostonly.cpp \
+ 	VBoxManageDHCPServer.cpp \
  	$(if $(VBOX_WITH_GUEST_PROPS),VBoxManageGuestProp.cpp) \
  	VBoxManageSVN.cpp
 endif # !VBOX_ONLY_DOCS

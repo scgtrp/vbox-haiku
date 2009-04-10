@@ -13,6 +13,7 @@
 #include "cr_environment.h"
 #include "cr_process.h"
 #include "cr_rand.h"
+#include "cr_netserver.h"
 #include "stub.h"
 #include <stdlib.h>
 #include <string.h>
@@ -20,8 +21,6 @@
 #ifndef WINDOWS
 #include <sys/types.h>
 #include <unistd.h>
-#else
-#include "cr_netserver.h"
 #endif
 #ifdef CHROMIUM_THREADSAFE
 #include "cr_threads.h"
@@ -219,7 +218,9 @@ static void stubSPUTearDown(void)
     crSPUUnloadChain(stub.spu);
     stub.spu = NULL;
 
+#ifndef Linux
     crUnloadOpenGL();
+#endif
 
     crNetTearDown();
 
@@ -237,7 +238,14 @@ static void stubSPUTearDown(void)
 static void stubSPUSafeTearDown(void)
 {
 #ifdef CHROMIUM_THREADSAFE
-    CRmutex *mutex = &stub.mutex;
+    CRmutex *mutex;
+#endif
+
+    if (!stub_initialized) return;
+    stub_initialized = 0;
+
+#ifdef CHROMIUM_THREADSAFE
+    mutex = &stub.mutex;
     crLockMutex(mutex);
 #endif
     crDebug("stubSPUSafeTearDown");
@@ -509,7 +517,6 @@ stubInit(void)
 
     if (stub_initialized)
         return true;
-    stub_initialized = 1;
     
     stubInitVars();
 
@@ -517,6 +524,26 @@ stubInit(void)
     app_id = crGetenv( "CR_APPLICATION_ID_NUMBER" );
 
     crNetInit( NULL, NULL );
+
+#ifndef WINDOWS
+    {
+        CRNetServer ns;
+
+        ns.name = "vboxhgcm://host:0";
+        ns.buffer_size = 1024;
+        crNetServerConnect(&ns);
+        if (!ns.conn)
+        {
+            crWarning("Failed to connect to host. Make sure 3D acceleration is enabled for this VM.");
+            return false;
+        }
+        else
+        {
+            crNetFreeConnection(ns.conn);
+        }
+    }
+#endif
+
     strcpy(response, "3 0 array 1 feedback 2 pack");
     spuchain = crStrSplit( response, " " );
     num_spus = crStrToInt( spuchain[0] );
@@ -541,7 +568,6 @@ stubInit(void)
 
     // spu chain load failed somewhere
     if (!stub.spu) {
-        stub_initialized = 0;
         return false;
     }
 
@@ -554,9 +580,10 @@ stubInit(void)
     /* we need to plug one special stub function into the dispatch table */
     glim.GetChromiumParametervCR = stub_GetChromiumParametervCR;
 
+#if !defined(VBOX_NO_NATIVEGL)
     /* Load pointers to native OpenGL functions into stub.nativeDispatch */
     stubInitNativeDispatch();
-
+#endif
 
 /*crDebug("stub init");
 raise(SIGINT);*/
@@ -570,6 +597,7 @@ raise(SIGINT);*/
     stub.bShmInitFailed = GL_FALSE;
 #endif
 
+    stub_initialized = 1;
     return true;
 }
 

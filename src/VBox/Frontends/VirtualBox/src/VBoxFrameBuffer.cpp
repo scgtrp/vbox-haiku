@@ -51,6 +51,7 @@ VBoxFrameBuffer::VBoxFrameBuffer (VBoxConsoleView *aView)
 #endif
 {
     AssertMsg (mView, ("VBoxConsoleView must not be null\n"));
+    mWinId = (mView && mView->viewport()) ? (ULONG64) mView->viewport()->winId() : 0;
 }
 
 VBoxFrameBuffer::~VBoxFrameBuffer()
@@ -141,7 +142,7 @@ STDMETHODIMP VBoxFrameBuffer::COMGETTER(WinId) (ULONG64 *winId)
 {
     if (!winId)
         return E_POINTER;
-    *winId = (mView && mView->viewport()) ? (ULONG64) mView->viewport()->winId() : 0;
+    *winId = mWinId;
     return S_OK;
 }
 
@@ -384,6 +385,7 @@ void VBoxQImageFrameBuffer::resizeEvent (VBoxResizeEvent *re)
 
     bool remind = false;
     bool fallback = false;
+    ulong bitsPerLine = re->bytesPerLine() * 8;
 
     /* check if we support the pixel format and can use the guest VRAM directly */
     if (re->pixelFormat() == FramebufferPixelFormat_FOURCC_RGB)
@@ -411,16 +413,22 @@ void VBoxQImageFrameBuffer::resizeEvent (VBoxResizeEvent *re)
 
         if (!fallback)
         {
-            /* QImage only supports 32-bit aligned scan lines */
-            fallback = re->bytesPerLine() !=
-                ((mWdt * re->bitsPerPixel() + 31) / 32) * 4;
-            Assert (!fallback);
-            if (!fallback)
-            {
-                mImg = QImage ((uchar *) re->VRAM(), mWdt, mHgt, format);
-                mPixelFormat = FramebufferPixelFormat_FOURCC_RGB;
-                mUsesGuestVRAM = true;
-            }
+            /* QImage only supports 32-bit aligned scan lines... */
+            Assert ((re->bytesPerLine() & 3) == 0);
+            fallback = ((re->bytesPerLine() & 3) != 0);
+        }
+        if (!fallback)
+        {
+            /* ...and the scan lines ought to be a whole number of pixels. */
+            Assert ((bitsPerLine & (re->bitsPerPixel() - 1)) == 0);
+            fallback = ((bitsPerLine & (re->bitsPerPixel() - 1)) != 0);
+        }
+        if (!fallback)
+        {
+            ulong virtWdt = bitsPerLine / re->bitsPerPixel();
+            mImg = QImage ((uchar *) re->VRAM(), virtWdt, mHgt, format);
+            mPixelFormat = FramebufferPixelFormat_FOURCC_RGB;
+            mUsesGuestVRAM = true;
         }
     }
     else

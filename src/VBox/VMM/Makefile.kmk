@@ -70,7 +70,7 @@ VMMR3_SOURCES   = \
 	MMHeap.cpp \
 	MMHyper.cpp \
 	MMPagePool.cpp \
-	MMPhys.cpp \
+	MMUkHeap.cpp \
 	PDM.cpp \
 	PDMDevice.cpp \
 	PDMDevHlp.cpp \

@@ -512,9 +512,9 @@ typedef struct GMM
      * Used as a hint to avoid scanning the whole bitmap. */
     uint32_t            idChunkPrev;
     /** Chunk ID allocation bitmap.
-     * Bits of allocated IDs are set, free ones are cleared.
+     * Bits of allocated IDs are set, free ones are clear.
      * The NIL id (0) is marked allocated. */
-    uint32_t            bmChunkId[(GMM_CHUNKID_LAST + 32) >> 10];
+    uint32_t            bmChunkId[(GMM_CHUNKID_LAST + 1 + 31) / 32];
 } GMM;
 /** Pointer to the GMM instance. */
 typedef GMM *PGMM;
@@ -741,7 +741,7 @@ GMMR0DECL(void) GMMR0CleanupVM(PGVM pGVM)
      * request has been serviced.
      */
     if (    pGVM->gmm.s.enmPolicy > GMMOCPOLICY_INVALID
-        ||  pGVM->gmm.s.enmPolicy < GMMOCPOLICY_END)
+        &&  pGVM->gmm.s.enmPolicy < GMMOCPOLICY_END)
     {
         /*
          * If it's the last VM around, we can skip walking all the chunk looking
@@ -1318,6 +1318,8 @@ DECLINLINE(void) gmmR0LinkChunk(PGMMCHUNK pChunk, PGMMCHUNKFREESET pSet)
         pChunk->pFreePrev = NULL;
         unsigned iList = (pChunk->cFree - 1) >> GMM_CHUNK_FREE_SET_SHIFT;
         pChunk->pFreeNext = pSet->apLists[iList];
+        if (pChunk->pFreeNext)
+            pChunk->pFreeNext->pFreePrev = pChunk;
         pSet->apLists[iList] = pChunk;
 
         pSet->cPages += pChunk->cFree;
@@ -1333,8 +1335,8 @@ DECLINLINE(void) gmmR0LinkChunk(PGMMCHUNK pChunk, PGMMCHUNKFREESET pSet)
  */
 static void gmmR0FreeChunkId(PGMM pGMM, uint32_t idChunk)
 {
-    Assert(idChunk != NIL_GMM_CHUNKID);
-    Assert(ASMBitTest(&pGMM->bmChunkId[0], idChunk));
+    AssertReturnVoid(idChunk != NIL_GMM_CHUNKID);
+    AssertMsg(ASMBitTest(&pGMM->bmChunkId[0], idChunk), ("%#x\n", idChunk));
     ASMAtomicBitClear(&pGMM->bmChunkId[0], idChunk);
 }
 
@@ -1369,7 +1371,10 @@ static uint32_t gmmR0AllocateChunkId(PGMM pGMM)
     {
         idChunk = ASMBitNextClear(&pGMM->bmChunkId[0], GMM_CHUNKID_LAST + 1, idChunk);
         if (idChunk > NIL_GMM_CHUNKID)
+        {
+            AssertMsgReturn(!ASMAtomicBitTestAndSet(&pGMM->bmChunkId[0], idChunk), ("%#x\n", idChunk), NIL_GMM_CHUNKID);
             return pGMM->idChunkPrev = idChunk;
+        }
     }
 
     /*
@@ -1377,8 +1382,8 @@ static uint32_t gmmR0AllocateChunkId(PGMM pGMM)
      * We're not racing anyone, so there is no need to expect failures or have restart loops.
      */
     idChunk = ASMBitFirstClear(&pGMM->bmChunkId[0], GMM_CHUNKID_LAST + 1);
-    AssertMsgReturn(idChunk > NIL_GMM_CHUNKID, ("%d\n", idChunk), NIL_GVM_HANDLE);
-    AssertMsgReturn(!ASMAtomicBitTestAndSet(&pGMM->bmChunkId[0], idChunk), ("%d\n", idChunk), NIL_GVM_HANDLE);
+    AssertMsgReturn(idChunk > NIL_GMM_CHUNKID, ("%#x\n", idChunk), NIL_GVM_HANDLE);
+    AssertMsgReturn(!ASMAtomicBitTestAndSet(&pGMM->bmChunkId[0], idChunk), ("%#x\n", idChunk), NIL_GMM_CHUNKID);
 
     return pGMM->idChunkPrev = idChunk;
 }
@@ -1460,6 +1465,8 @@ static int gmmR0AllocateOneChunk(PGMM pGMM, PGMMCHUNKFREESET pSet)
         if (RT_FAILURE(rc))
             RTR0MemObjFree(MemObj, false /* fFreeMappings */);
     }
+    /** @todo Check that RTR0MemObjAllocPhysNC always returns VERR_NO_MEMORY on
+     *        allocation failure. */
     return rc;
 }
 
@@ -1530,9 +1537,11 @@ static void gmmR0AllocatePage(PGMM pGMM, uint32_t hGVM, PGMMCHUNK pChunk, PGMMPA
     const uint32_t iPage = pChunk->iFreeHead;
     AssertReleaseMsg(iPage < RT_ELEMENTS(pChunk->aPages), ("%d\n", iPage));
     PGMMPAGE pPage = &pChunk->aPages[iPage];
-    Log3(("pPage=%x iPage=%#x iFreeHead=%#x iNext=%#x u2State=%d\n", pPage, iPage, pChunk->iFreeHead, pPage->Free.iNext, pPage->Common.u2State));
     Assert(GMM_PAGE_IS_FREE(pPage));
     pChunk->iFreeHead = pPage->Free.iNext;
+    Log3(("A pPage=%p iPage=%#x/%#x u2State=%d iFreeHead=%#x iNext=%#x\n",
+          pPage, iPage, (pChunk->Core.Key << GMM_CHUNKID_SHIFT) | iPage,
+          pPage->Common.u2State, pChunk->iFreeHead, pPage->Free.iNext));
 
     /* make the page private. */
     pPage->u = 0;
@@ -1826,7 +1835,7 @@ GMMR0DECL(int) GMMR0AllocateHandyPages(PVM pVM, uint32_t cPagesToUpdate, uint32_
                     }
                     else
                     {
-                        Log(("GMMR0AllocateHandyPages: #%#x/%#x: Not private!\n", iPage, paPages[iPage].idPage));
+                        Log(("GMMR0AllocateHandyPages: #%#x/%#x: Not private! %.*Rhxs\n", iPage, paPages[iPage].idPage, sizeof(*pPage), pPage));
                         rc = VERR_GMM_PAGE_NOT_PRIVATE;
                         break;
                     }
@@ -1993,6 +2002,8 @@ GMMR0DECL(int) GMMR0AllocatePagesReq(PVM pVM, PGMMALLOCATEPAGESREQ pReq)
  */
 static void gmmR0FreeChunk(PGMM pGMM, PGMMCHUNK pChunk)
 {
+    Assert(pChunk->Core.Key != NIL_GMM_CHUNKID);
+
     /*
      * If there are current mappings of the chunk, then request the
      * VMs to unmap them. Reposition the chunk in the free list so
@@ -2021,7 +2032,7 @@ static void gmmR0FreeChunk(PGMM pGMM, PGMMCHUNK pChunk)
             PAVLU32NODECORE pCore = RTAvlU32Remove(&pGMM->pChunks, pChunk->Core.Key);
             Assert(pCore == &pChunk->Core); NOREF(pCore);
 
-            PGMMCHUNKTLBE pTlbe = &pGMM->ChunkTLB.aEntries[GMM_CHUNKTLB_IDX(pCore->Key)];
+            PGMMCHUNKTLBE pTlbe = &pGMM->ChunkTLB.aEntries[GMM_CHUNKTLB_IDX(pChunk->Core.Key)];
             if (pTlbe->pChunk == pChunk)
             {
                 pTlbe->idChunk = NIL_GMM_CHUNKID;
@@ -2055,10 +2066,14 @@ static void gmmR0FreeChunk(PGMM pGMM, PGMMCHUNK pChunk)
  *
  * @param   pGMM        Pointer to the GMM instance data.
  * @param   pChunk      Pointer to the chunk this page belongs to.
+ * @param   idPage      The Page ID.
  * @param   pPage       Pointer to the page.
  */
-static void gmmR0FreePageWorker(PGMM pGMM, PGMMCHUNK pChunk, PGMMPAGE pPage)
+static void gmmR0FreePageWorker(PGMM pGMM, PGMMCHUNK pChunk, uint32_t idPage, PGMMPAGE pPage)
 {
+    Log3(("F pPage=%p iPage=%#x/%#x u2State=%d iFreeHead=%#x\n",
+          pPage, pPage - &pChunk->aPages[0], idPage, pPage->Common.u2State, pChunk->iFreeHead)); NOREF(idPage);
+
     /*
      * Put the page on the free list.
      */
@@ -2094,7 +2109,8 @@ static void gmmR0FreePageWorker(PGMM pGMM, PGMMCHUNK pChunk, PGMMPAGE pPage)
          */
         if (RT_UNLIKELY(   pChunk->cFree == GMM_CHUNK_NUM_PAGES
                         && pChunk->pFreeNext
-                        && pChunk->pFreePrev))
+                        && pChunk->pFreePrev
+                        && !pGMM->fLegacyMode))
             gmmR0FreeChunk(pGMM, pChunk);
     }
 }
@@ -2120,7 +2136,7 @@ DECLINLINE(void) gmmR0FreeSharedPage(PGMM pGMM, uint32_t idPage, PGMMPAGE pPage)
     pChunk->cShared--;
     pGMM->cAllocatedPages--;
     pGMM->cSharedPages--;
-    gmmR0FreePageWorker(pGMM, pChunk, pPage);
+    gmmR0FreePageWorker(pGMM, pChunk, idPage, pPage);
 }
 
 
@@ -2141,7 +2157,7 @@ DECLINLINE(void) gmmR0FreePrivatePage(PGMM pGMM, uint32_t idPage, PGMMPAGE pPage
 
     pChunk->cPrivate--;
     pGMM->cAllocatedPages--;
-    gmmR0FreePageWorker(pGMM, pChunk, pPage);
+    gmmR0FreePageWorker(pGMM, pChunk, idPage, pPage);
 }
 
 

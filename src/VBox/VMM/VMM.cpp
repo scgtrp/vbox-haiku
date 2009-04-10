@@ -360,9 +360,6 @@ static void vmmR3InitRegisterStats(PVM pVM)
     STAM_REG(pVM, &pVM->vmm.s.StatRZCallPGMPoolGrow,        STAMTYPE_COUNTER, "/VMM/RZCallR3/PGMPoolGrow",      STAMUNIT_OCCURENCES, "Number of VMMCALLHOST_PGM_POOL_GROW calls.");
     STAM_REG(pVM, &pVM->vmm.s.StatRZCallPGMMapChunk,        STAMTYPE_COUNTER, "/VMM/RZCallR3/PGMMapChunk",      STAMUNIT_OCCURENCES, "Number of VMMCALLHOST_PGM_MAP_CHUNK calls.");
     STAM_REG(pVM, &pVM->vmm.s.StatRZCallPGMAllocHandy,      STAMTYPE_COUNTER, "/VMM/RZCallR3/PGMAllocHandy",    STAMUNIT_OCCURENCES, "Number of VMMCALLHOST_PGM_ALLOCATE_HANDY_PAGES calls.");
-#ifndef VBOX_WITH_NEW_PHYS_CODE
-    STAM_REG(pVM, &pVM->vmm.s.StatRZCallPGMGrowRAM,         STAMTYPE_COUNTER, "/VMM/RZCallR3/PGMGrowRAM",       STAMUNIT_OCCURENCES, "Number of VMMCALLHOST_PGM_RAM_GROW_RANGE calls.");
-#endif
     STAM_REG(pVM, &pVM->vmm.s.StatRZCallRemReplay,          STAMTYPE_COUNTER, "/VMM/RZCallR3/REMReplay",        STAMUNIT_OCCURENCES, "Number of VMMCALLHOST_REM_REPLAY_HANDLER_NOTIFICATIONS calls.");
     STAM_REG(pVM, &pVM->vmm.s.StatRZCallLogFlush,           STAMTYPE_COUNTER, "/VMM/RZCallR3/VMMLogFlush",      STAMUNIT_OCCURENCES, "Number of VMMCALLHOST_VMM_LOGGER_FLUSH calls.");
     STAM_REG(pVM, &pVM->vmm.s.StatRZCallVMSetError,         STAMTYPE_COUNTER, "/VMM/RZCallR3/VMSetError",       STAMUNIT_OCCURENCES, "Number of VMMCALLHOST_VM_SET_ERROR calls.");
@@ -1407,15 +1404,6 @@ static int vmmR3ServiceCallHostRequest(PVM pVM)
             pVM->vmm.s.rcCallHost = PGMR3PhysAllocateHandyPages(pVM);
             break;
         }
-#ifndef VBOX_WITH_NEW_PHYS_CODE
-
-        case VMMCALLHOST_PGM_RAM_GROW_RANGE:
-        {
-            const RTGCPHYS GCPhys = pVM->vmm.s.u64CallHostArg;
-            pVM->vmm.s.rcCallHost = PGM3PhysGrowRange(pVM, &GCPhys);
-            break;
-        }
-#endif
 
         /*
          * Acquire the PGM lock.
@@ -1457,8 +1445,7 @@ static int vmmR3ServiceCallHostRequest(PVM pVM)
          * Set the VM runtime error message.
          */
         case VMMCALLHOST_VM_SET_RUNTIME_ERROR:
-            VMR3SetRuntimeErrorWorker(pVM);
-            pVM->vmm.s.rcCallHost = VINF_SUCCESS;
+            pVM->vmm.s.rcCallHost = VMR3SetRuntimeErrorWorker(pVM);
             break;
 
         /*
@@ -1534,6 +1521,8 @@ static DECLCALLBACK(void) vmmR3InfoFF(PVM pVM, PCDBGFINFOHLP pHlp, const char *p
     PRINT_FLAG(VM_FF_RESET);
     PRINT_FLAG(VM_FF_PGM_SYNC_CR3);
     PRINT_FLAG(VM_FF_PGM_SYNC_CR3_NON_GLOBAL);
+    PRINT_FLAG(VM_FF_PGM_NEED_HANDY_PAGES);
+    PRINT_FLAG(VM_FF_PGM_NO_MEMORY);
     PRINT_FLAG(VM_FF_TRPM_SYNC_IDT);
     PRINT_FLAG(VM_FF_SELM_SYNC_TSS);
     PRINT_FLAG(VM_FF_SELM_SYNC_GDT);
@@ -1542,6 +1531,7 @@ static DECLCALLBACK(void) vmmR3InfoFF(PVM pVM, PCDBGFINFOHLP pHlp, const char *p
     PRINT_FLAG(VM_FF_CSAM_SCAN_PAGE);
     PRINT_FLAG(VM_FF_CSAM_PENDING_ACTION);
     PRINT_FLAG(VM_FF_TO_R3);
+    PRINT_FLAG(VM_FF_REM_HANDLER_NOTIFY);
     PRINT_FLAG(VM_FF_DEBUG_SUSPEND);
     if (f)
         pHlp->pfnPrintf(pHlp, "%s\n    Unknown bits: %#RX32\n", c ? "," : "", f);

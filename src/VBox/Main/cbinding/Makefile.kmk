@@ -32,17 +32,24 @@ XpComCSamples_MODE = a+r,u+rw
 XpComCSamples_INST = \
 	$(INST_SDK)bindings/xpcom/cbinding/samples/
 XpComCSamples_SOURCES = \
-	tstLinuxC.c \
-	tstdlOpen.c \
-	makefile.tstLinuxC=>Makefile
+	tstXPCOMCGlue.c \
+	makefile.tstXPCOMCGlue=>Makefile
+
+INSTALLS += XpComCGlue
+XpComCGlue_MODE = a+r,u+rw
+XpComCGlue_INST = \
+	$(INST_SDK)bindings/xpcom/cbinding/
+XpComCGlue_SOURCES = \
+	VBoxXPCOMCGlue.c \
+	VBoxXPCOMCGlue.h
 
 INSTALLS += XpComCHeaders
 XpComCHeaders_MODE = a+r,u+rw
 XpComCHeaders_INST = $(INST_SDK)bindings/xpcom/include/
 XpComCHeaders_SOURCES = \
-	$(XpComCHeaders_0_OUTDIR)/VirtualBox_CXPCOM.h
+	$(XpComCHeaders_0_OUTDIR)/VBoxCAPI_v2_2.h
 
-$$(XpComCHeaders_0_OUTDIR)/VirtualBox_CXPCOM.h: \
+$$(XpComCHeaders_0_OUTDIR)/VBoxCAPI_v2_2.h: \
 		$(PATH_SUB_CURRENT)/xpcidl.xsl \
 		$(VBOX_XIDL_FILE) \
 		| $$(dir $$@)
@@ -61,7 +68,7 @@ if !defined(VBOX_ONLY_SDK) && defined(VBOX_WITH_XPCOM)
  VBoxXPCOMC_SOURCES = \
  	VBoxXPCOMC.cpp
  VBoxXPCOMC_INTERMEDIATES = \
- 	$(VBOX_PATH_SDK)/bindings/xpcom/include/VirtualBox_CXPCOM.h
+ 	$(VBOX_PATH_SDK)/bindings/xpcom/include/VBoxCAPI_v2_2.h
  endif
 
  #
@@ -73,51 +80,24 @@ if !defined(VBOX_ONLY_SDK) && defined(VBOX_WITH_XPCOM)
  VBoxXPCOMCGlue_SOURCES = \
  	VBoxXPCOMCGlue.c
  VBoxXPCOMCGlue_INTERMEDIATES = \
- 	$(VBOX_PATH_SDK)/bindings/xpcom/include/VirtualBox_CXPCOM.h
+ 	$(VBOX_PATH_SDK)/bindings/xpcom/include/VBoxCAPI_v2_2.h
 
  if defined(VBOX_WITH_TESTCASES) && "$(KBUILD_TARGET)" != "darwin"
   #
   # The testcase (also in samples).
-  #
-  PROGRAMS += tstXPCOMC
-  tstXPCOMC_TEMPLATE = VBOXR3EXE
-  tstXPCOMC_INCS = \
-  	$(VBOX_PATH_SDK)/bindings/xpcom/include \
-  	$(VBOX_PATH_SDK)/bindings/xpcom/include/nsprpub
-  tstXPCOMC_INTERMEDIATES = \
-  	$(VBOX_PATH_SDK)/bindings/xpcom/include/VirtualBox_CXPCOM.h
-  tstXPCOMC_SOURCES = \
-  	tstLinuxC.c
-  tstXPCOMC_LIBS = \
-  	$(VBoxXPCOMC_1_TARGET)
-
-  #
   # C testcase using the dynamic glue.
   #
   PROGRAMS += tstXPCOMCGlue
   tstXPCOMCGlue_TEMPLATE = VBOXR3EXE
   tstXPCOMCGlue_INCS = \
-  	$(VBOX_PATH_SDK)/bindings/xpcom/include \
-  	$(VBOX_PATH_SDK)/bindings/xpcom/include/nsprpub
+  	$(VBOX_PATH_SDK)/bindings/xpcom/include
   tstXPCOMCGlue_INTERMEDIATES = \
-  	$(VBOX_PATH_SDK)/bindings/xpcom/include/VirtualBox_CXPCOM.h
+  	$(VBOX_PATH_SDK)/bindings/xpcom/include/VBoxCAPI_v2_2.h
   tstXPCOMCGlue_SOURCES = \
   	tstXPCOMCGlue.c
   tstXPCOMCGlue_LIBS = \
   	$(VBoxXPCOMCGlue_1_TARGET)
 
-  #
-  # The testcase (also in samples).
-  #
-  PROGRAMS += tstXPCOMCDynLink
-  tstXPCOMCDynLink_TEMPLATE = VBOXR3EXE
-  tstXPCOMCDynLink_INCS = \
-  	$(VBOX_PATH_SDK)/bindings/xpcom/include \
-  	$(VBOX_PATH_SDK)/bindings/xpcom/include/nsprpub
-  tstXPCOMCDynLink_INTERMEDIATES = \
-  	$(VBOX_PATH_SDK)/bindings/xpcom/include/VirtualBox_CXPCOM.h
-  tstXPCOMCDynLink_SOURCES = \
-  	tstdlOpen.c
  endif
 
 endif # ! VBOX_ONLY_SDK

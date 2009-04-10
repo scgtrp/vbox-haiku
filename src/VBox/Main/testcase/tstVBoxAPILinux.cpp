@@ -115,7 +115,7 @@ void listVMs(IVirtualBox *virtualBox)
     IMachine **machines = NULL;
     PRUint32 machineCnt = 0;
 
-    rc = virtualBox->GetMachines2(&machineCnt, &machines);
+    rc = virtualBox->GetMachines(&machineCnt, &machines);
     if (NS_SUCCEEDED(rc))
     {
         /*
@@ -313,8 +313,9 @@ void createVM(IVirtualBox *virtualBox)
          * a dynamically expanding image.
          */
         nsCOMPtr <IProgress> progress;
-        rc = hardDisk->CreateDynamicStorage(100,                                // size in megabytes
-                                            getter_AddRefs(progress));          // optional progress object
+        rc = hardDisk->CreateBaseStorage(100,                                // size in megabytes
+                                         HardDiskVariant_Standard,
+                                         getter_AddRefs(progress));          // optional progress object
         if (NS_FAILED(rc))
         {
             printf("Failed creating hard disk image! rc=%08X\n", rc);
@@ -344,9 +345,9 @@ void createVM(IVirtualBox *virtualBox)
                 nsID *vdiUUID = nsnull;
                 hardDisk->GetId(&vdiUUID);
                 rc = machine->AttachHardDisk(*vdiUUID,
-                                             StorageBus::IDE, // controler identifier
-                                             0,               // channel number on the controller
-                                             0);              // device number on the controller
+                                             NS_LITERAL_STRING("IDE").get(), // controler identifier
+                                             0,                              // channel number on the controller
+                                             0);                             // device number on the controller
                 nsMemory::Free(vdiUUID);
                 if (NS_FAILED(rc))
                 {

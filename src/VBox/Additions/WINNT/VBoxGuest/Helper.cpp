@@ -1,7 +1,8 @@
 /** @file
- *
  * VBoxGuest -- VirtualBox Win32 guest support driver
- *
+ */
+
+/*
  * Copyright (C) 2006-2007 Sun Microsystems, Inc.
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
@@ -22,6 +23,7 @@
 #include "VBoxGuest_Internal.h"
 #include "Helper.h"
 #include <VBox/err.h>
+#include <VBox/log.h>
 #include <VBox/VBoxGuestLib.h>
 
 #ifdef ALLOC_PRAGMA
@@ -244,3 +246,4 @@ NTSTATUS hlpVBoxReportGuestInfo (PVBOXGUESTDEVEXT pDevExt)
 
     return RT_FAILURE(rc) ? STATUS_UNSUCCESSFUL : STATUS_SUCCESS;
 }
+

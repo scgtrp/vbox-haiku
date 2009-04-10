@@ -23,14 +23,10 @@
 #ifndef __VBoxImportApplianceWgt_h__
 #define __VBoxImportApplianceWgt_h__
 
-#include "VBoxImportApplianceWgt.gen.h"
-#include "QIWithRetranslateUI.h"
+/* VBox includes */
+#include "VBoxApplianceEditorWgt.h"
 
-class CAppliance;
-class VirtualSystemModel;
-
-class VBoxImportApplianceWgt : public QIWithRetranslateUI<QWidget>,
-                               public Ui::VBoxImportApplianceWgt
+class VBoxImportApplianceWgt : public VBoxApplianceEditorWgt
 {
     Q_OBJECT;
 
@@ -38,32 +34,10 @@ public:
     VBoxImportApplianceWgt (QWidget *aParent);
 
     bool setFile (const QString& aFile);
+    void prepareImport();
     bool import();
 
-    bool isValid() const { return mAppliance != NULL; }
-
-    static int minGuestRAM() { return mMinGuestRAM; }
-    static int maxGuestRAM() { return mMaxGuestRAM; }
-    static int minGuestCPUCount() { return mMinGuestCPUCount; }
-    static int maxGuestCPUCount() { return mMaxGuestCPUCount; }
-
-public slots:
-    void restoreDefaults();
-
-protected:
-    void retranslateUi();
-
-private:
-    static void initSystemSettings();
-
-    /* Private member vars */
-    CAppliance *mAppliance;
-    VirtualSystemModel *mModel;
-
-    static int mMinGuestRAM;
-    static int mMaxGuestRAM;
-    static int mMinGuestCPUCount;
-    static int mMaxGuestCPUCount;
+    QList < QPair <QString, QString> > licenseAgreements() const;
 };
 
 #endif /* __VBoxImportApplianceWgt_h__ */

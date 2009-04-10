@@ -30,43 +30,6 @@
 #include <QObject>
 
 class VBoxMedium;
-class QAction;
-class QMenu;
-
-// VBoxHelpActions class
-////////////////////////////////////////////////////////////////////////////////
-
-/**
- * Help Menu action container.
- *
- * Contains actions for all help menu items and methods to insert them to a
- * QMenu and to perform NLS string translation.
- *
- * Instances of this class are to be created as members of QWidget classes that
- * need a Help menu. The containing class usually passes itself as an argument
- * to the #setup() method and then calls #addTo() to add actions to its Help
- * menu. The #retranslateUi() method is called when it is necessary to
- * re-translate all action NLS according to the current language.
- */
-struct VBoxHelpActions
-{
-    VBoxHelpActions()
-        : contentsAction (NULL), webAction (NULL)
-        , resetMessagesAction (NULL), registerAction (NULL)
-        , updateAction (NULL), aboutAction (NULL)
-        {}
-
-    void setup (QObject *aParent);
-    void addTo (QMenu *aMenu);
-    void retranslateUi();
-
-    QAction *contentsAction;
-    QAction *webAction;
-    QAction *resetMessagesAction;
-    QAction *registerAction;
-    QAction *updateAction;
-    QAction *aboutAction;
-};
 
 // VBoxProblemReporter class
 ////////////////////////////////////////////////////////////////////////////////
@@ -174,8 +137,7 @@ public:
                           const QString &aCancelText = QString::null) const
     {
         return messageOkCancel (aParent, aType, aMessage, QString::null,
-                                aAutoConfirmId, aOkText, aCancelText);
-    }
+                                aAutoConfirmId, aOkText, aCancelText); }
 
     bool showModalProgressDialog (CProgress &aProgress, const QString &aTitle,
                                   QWidget *aParent, int aMinDuration = 2000);
@@ -184,8 +146,13 @@ public:
 
     /* Generic problem handlers */
     bool askForOverridingFileIfExists (const QString& path, QWidget *aParent = NULL) const;
+    bool askForOverridingFilesIfExists (const QStringList& aPaths, QWidget *aParent = NULL) const;
+
+    void cannotDeleteFile (const QString& path, QWidget *aParent = NULL) const;
 
     /* Special problem handlers */
+    void showBETAWarning();
+
 #ifdef Q_WS_X11
     void cannotFindLicenseFiles (const QString &aPath);
     void cannotOpenLicenseFile (QWidget *aParent, const QString &aPath);
@@ -237,6 +204,7 @@ public:
     bool warnAboutVirtNotEnabled();
 
     void cannotSetSnapshotFolder (const CMachine &aMachine, const QString &aPath);
+    bool askAboutSnapshotAndStateDiscarding();
     void cannotDiscardSnapshot (const CConsole &aConsole,
                                 const QString &aSnapshotName);
     void cannotDiscardSnapshot (const CProgress &aProgress,
@@ -268,7 +236,8 @@ public:
     void cannotDeleteHardDiskStorage (QWidget *aParent, const CHardDisk &aHD,
                                       const CProgress &aProgress);
 
-    int confirmDetachSATASlots (QWidget *aParent);
+    int confirmDetachAddControllerSlots (QWidget *aParent) const;
+    int confirmChangeAddControllerSlots (QWidget *aParent) const;
     int confirmRunNewHDWzdOrVDM (QWidget* aParent);
 
     void cannotCreateHardDiskStorage (QWidget *aParent, const CVirtualBox &aVBox,
@@ -298,16 +267,15 @@ public:
     void cannotGetMediaAccessibility (const VBoxMedium &aMedium);
 
 #if defined Q_WS_WIN
-    void cannotCreateHostInterface (const CHost &host, const QString &name,
-                                    QWidget *parent = 0);
-    void cannotCreateHostInterface (const CProgress &progress, const QString &name,
-                                    QWidget *parent = 0);
-    void cannotRemoveHostInterface (const CHost &host,
-                                    const CHostNetworkInterface &iface,
-                                    QWidget *parent = 0);
-    void cannotRemoveHostInterface (const CProgress &progress,
-                                    const CHostNetworkInterface &iface,
-                                    QWidget *parent = 0);
+    int confirmDeletingHostInterface (const QString &aName, QWidget *aParent = 0);
+    void cannotCreateHostInterface (const CHost &aHost, QWidget *aParent = 0);
+    void cannotCreateHostInterface (const CProgress &aProgress, QWidget *aParent = 0);
+    void cannotRemoveHostInterface (const CHost &aHost,
+                                    const CHostNetworkInterface &aIface,
+                                    QWidget *aParent = 0);
+    void cannotRemoveHostInterface (const CProgress &aProgress,
+                                    const CHostNetworkInterface &aIface,
+                                    QWidget *aParent = 0);
 #endif
 
     void cannotAttachUSBDevice (const CConsole &console, const QString &device);
@@ -377,6 +345,7 @@ public:
     void cannotImportAppliance (const CProgress &aProgress, CAppliance *aAppliance, QWidget *aParent = NULL) const;
 
     void cannotExportAppliance (CAppliance *aAppliance, QWidget *aParent = NULL) const;
+    void cannotExportAppliance (const CMachine &aMachine, CAppliance *aAppliance, QWidget *aParent = NULL) const;
     void cannotExportAppliance (const CProgress &aProgress, CAppliance *aAppliance, QWidget *aParent = NULL) const;
 
     void showRuntimeError (const CConsole &console, bool fatal,

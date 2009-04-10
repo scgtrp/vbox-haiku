@@ -328,6 +328,7 @@ void crVBoxServerAddClient(uint32_t u32ClientID)
 
     newClient->spu_id = 0;
     newClient->currentCtx = cr_server.DummyContext;
+    newClient->currentContextNumber = -1;
     newClient->conn = crNetAcceptClient(cr_server.protocol, NULL,
                                         cr_server.tcpip_port,
                                         cr_server.mtu, 0);
@@ -360,7 +361,7 @@ void crVBoxServerRemoveClient(uint32_t u32ClientID)
     pClient->conn->Disconnect(pClient->conn);
 
     /* Let server clear client from the queue */
-    crServerServiceClients();
+    crServerDeleteClient(pClient);
 }
 
 void crVBoxServerClientWrite(uint32_t u32ClientID, uint8_t *pBuffer, uint32_t cbBuffer)

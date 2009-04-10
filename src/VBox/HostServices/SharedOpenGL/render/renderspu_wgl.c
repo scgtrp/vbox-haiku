@@ -312,10 +312,11 @@ bSetupPixelFormatNormal( HDC hdc, GLbitfield visAttribs )
 static BOOL
 bSetupPixelFormat( HDC hdc, GLbitfield visAttribs )
 {
-    if (render_spu.ws.wglChoosePixelFormatEXT) 
-        return bSetupPixelFormatEXT( hdc, visAttribs );
-    else
-        return bSetupPixelFormatNormal( hdc, visAttribs );
+    /* According to http://www.opengl.org/resources/faq/technical/mswindows.htm
+       we shouldn't be using wgl functions to setup pixel formats unless we're loading ICD driver.
+       In particular, bSetupPixelFormatEXT bugs with Intel drivers.
+     */
+    bSetupPixelFormatNormal(hdc, visAttribs);
 }
 
 GLboolean renderspu_SystemCreateWindow( VisualInfo *visual, GLboolean showIt, WindowInfo *window )
@@ -850,14 +851,18 @@ void renderspu_SystemMakeCurrent( WindowInfo *window, GLint nativeWindow, Contex
             }
 
             if (!context->hRC) {
-                context->hRC = render_spu.ws.wglCreateContext( context->visual->device_context );
+                context->hRC = render_spu.ws.wglCreateContext(context->visual->device_context);
                 if (!context->hRC)
                 {
                     crError( "Render SPU: (MakeCurrent) Couldn't create the context for the window (error 0x%x)", GetLastError() );
                 }
             }
 
-            render_spu.ws.wglMakeCurrent( window->device_context, context->hRC );
+            if (!render_spu.ws.wglMakeCurrent(window->device_context, context->hRC))
+            {
+                DWORD err = GetLastError();
+                crError("Render SPU: (MakeCurrent) failed to make 0x%x, 0x%x current with 0x%x error.", window->device_context, context->hRC, err);
+            }
         }
 
     }

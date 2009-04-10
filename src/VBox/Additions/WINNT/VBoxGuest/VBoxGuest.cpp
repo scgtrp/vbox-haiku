@@ -41,8 +41,9 @@
 #include <VBoxGuestInternal.h>
 
 #ifdef TARGET_NT4
-/* XP DDK #defines ExFreePool to ExFreePoolWithTag. The latter does not exist on NT4, so...
- * The same for ExAllocatePool.
+/*
+ * XP DDK #defines ExFreePool to ExFreePoolWithTag. The latter does not exist
+ * on NT4, so... The same for ExAllocatePool.
  */
 #undef ExAllocatePool
 #undef ExFreePool
@@ -66,7 +67,6 @@ static NTSTATUS VBoxGuestDeviceControl(PDEVICE_OBJECT pDevObj, PIRP pIrp);
 static NTSTATUS VBoxGuestSystemControl(PDEVICE_OBJECT pDevObj, PIRP pIrp);
 static NTSTATUS VBoxGuestShutdown(PDEVICE_OBJECT pDevObj, PIRP pIrp);
 static NTSTATUS VBoxGuestNotSupportedStub(PDEVICE_OBJECT pDevObj, PIRP pIrp);
-static VOID     VBoxGuestBugCheckCallback(PVOID pszBuffer, ULONG ulLength);
 static VOID     vboxWorkerThread(PVOID context);
 static VOID     reserveHypervisorMemory(PVBOXGUESTDEVEXT pDevExt);
 static VOID     vboxIdleThread(PVOID context);
@@ -241,29 +241,8 @@ static NTSTATUS VBoxGuestAddDevice(PDRIVER_OBJECT pDrvObj, PDEVICE_OBJECT pDevOb
     }
 #endif
 
-    /*
-     * Setup bugcheck callback routine ASAP.
-     */
-#if 0 /** @todo r=bird: The 3rd and 4th parameters aren't according to spec and
-       * pcBugcheckBuffer isn't initialized anywhere. (Figuring out what it's
-       * good for is also nice.) Either explain why the spec is wrong in the
-       * comment above or fix it. Also pc should be pch if you wish to keep it
-       * a char pointer. */
-    RtlZeroMemory(pDevExt->szDriverName, sizeof(pDevExt->szDriverName));
-    KeInitializeCallbackRecord(&pDevExt->bugcheckRecord);
-
-    if (FALSE == KeRegisterBugCheckCallback(&pDevExt->bugcheckRecord,
-                                            &VBoxGuestBugCheckCallback,
-                                            pDevExt->pcBugcheckBuffer,
-                                            sizeof(&pDevExt->szDriverName),
-                                            pDevExt->szDriverName))
-    {
-        dprintf(("VBoxGuest::VBoxGuestAddDevice: Could not register bugcheck callback routine!\n"));
-    }
-    else
-    {
-        dprintf(("VBoxGuest::VBoxGuestAddDevice: Bugcheck callback registered.\n"));
-    }
+#ifdef VBOX_WITH_GUEST_BUGCHECK_DETECTION
+    hlpRegisterBugCheckCallback(pDevExt); /* ignore failure! */
 #endif
 
     /* Driver is ready now. */
@@ -308,11 +287,8 @@ void VBoxGuestUnload(PDRIVER_OBJECT pDrvObj)
 
     VBoxCleanupMemBalloon(pDevExt);
 
-#if 0 /** @todo r=bird: code temporarily disabled. Btw. it would be a good idea not to
-       * try deregister it if we didn't successfully register it in the first place... */
-    /* Unregister bugcheck callback. */
-    if (FALSE == KeDeregisterBugCheckCallback(&pDevExt->bugcheckRecord))
-        dprintf(("VBoxGuest::VBoxGuestUnload: Unregistering bugcheck callback routine failed!\n"));
+#ifdef VBOX_WITH_GUEST_BUGCHECK_DETECTION
+    hlpDeregisterBugCheckCallback(pDevExt); /* ignore failure! */
 #endif
 
     /*
@@ -1542,21 +1518,6 @@ BOOLEAN VBoxGuestIsrHandler(PKINTERRUPT interrupt, PVOID serviceContext)
     return fIRQTaken;
 }
 
-VOID VBoxGuestBugCheckCallback(PVOID pszBuffer, ULONG ulLength)
-{
-/** @todo r=bird: The buffer is the 3rd argument of the registration call
- *        according to the spec and ulLength is the 4th... so either the spec
- *        is wrong of this code dosn't make sense... */
-    LogRelBackdoor(("Windows bluescreen detected! "));
-    if (pszBuffer)
-    {
-        LogRelBackdoor(("Additional information: %s\n", (char*)pszBuffer));
-    }
-    else LogRelBackdoor(("No additional information given.\n"));
-
-    /* @todo Notify the host somehow over DevVMM. */
-}
-
 /**
  * Worker thread to do periodic things such as notify other
  * drivers of events.
@@ -1735,7 +1696,7 @@ VOID reserveHypervisorMemory(PVBOXGUESTDEVEXT pDevExt)
                     RT_ALIGN_P(pDevExt->hypervisorMapping, 0x400000)));
 
             /* align at 4MB */
-            req->hypervisorStart = (RTGCPTR)RT_ALIGN_P(pDevExt->hypervisorMapping, 0x400000);
+            req->hypervisorStart = (uintptr_t)RT_ALIGN_P(pDevExt->hypervisorMapping, 0x400000);
 
             req->header.requestType = VMMDevReq_SetHypervisorInfo;
             req->header.rc          = VERR_GENERAL_FAILURE;

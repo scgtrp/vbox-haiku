@@ -1237,14 +1237,16 @@ bool VBoxMediaManagerDlg::releaseMediumFrom (const VBoxMedium &aMedium,
                 CHardDiskAttachment hda = vec [i];
                 if (hda.GetHardDisk().GetId() == aMedium.id())
                 {
-                    machine.DetachHardDisk(hda.GetBus(),
-                                           hda.GetChannel(),
+                    machine.DetachHardDisk(hda.GetController(),
+                                           hda.GetPort(),
                                            hda.GetDevice());
                     if (!machine.isOk())
                     {
+                        CStorageController ctl = machine.GetStorageControllerByName(hda.GetController());
+
                         vboxProblem().cannotDetachHardDisk (
-                            this, machine, aMedium.location(), hda.GetBus(),
-                            hda.GetChannel(), hda.GetDevice());
+                            this, machine, aMedium.location(), ctl.GetBus(),
+                            hda.GetPort(), hda.GetDevice());
                         success = false;
                         break;
                     }
@@ -1542,7 +1544,7 @@ void VBoxMediaManagerDlg::addMediumToList (const QString &aLocation,
     {
         case VBoxDefs::MediaType_HardDisk:
         {
-            CHardDisk hd = mVBox.OpenHardDisk(aLocation);
+            CHardDisk hd = mVBox.OpenHardDisk(aLocation, KAccessMode_ReadWrite);
             if (mVBox.isOk())
             {
                 medium = VBoxMedium (CMedium (hd),

@@ -1,18 +1,18 @@
 /******************************Module*Header*******************************\
 *
-* Copyright (C) 2006-2007 Sun Microsystems, Inc.
-*
-* This file is part of VirtualBox Open Source Edition (OSE), as
-* available from http://www.virtualbox.org. This file is free software;
-* you can redistribute it and/or modify it under the terms of the GNU
-* General Public License (GPL) as published by the Free Software
-* Foundation, in version 2 as it comes in the "COPYING" file of the
-* VirtualBox OSE distribution. VirtualBox OSE is distributed in the
-* hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
-*
-* Please contact Sun Microsystems, Inc., 4150 Network Circle, Santa
-* Clara, CA 95054 USA or visit http://www.sun.com if you need
-* additional information or have any questions.
+ * Copyright (C) 2006-2007 Sun Microsystems, Inc.
+ *
+ * This file is part of VirtualBox Open Source Edition (OSE), as
+ * available from http://www.virtualbox.org. This file is free software;
+ * you can redistribute it and/or modify it under the terms of the GNU
+ * General Public License (GPL) as published by the Free Software
+ * Foundation, in version 2 as it comes in the "COPYING" file of the
+ * VirtualBox OSE distribution. VirtualBox OSE is distributed in the
+ * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
+ *
+ * Please contact Sun Microsystems, Inc., 4150 Network Circle, Santa
+ * Clara, CA 95054 USA or visit http://www.sun.com if you need
+ * additional information or have any questions.
 */
 /*
 * Based in part on Microsoft DDK sample code
@@ -68,6 +68,7 @@ static void vboxInitVBoxVideo (PPDEV ppdev, const VIDEO_MEMORY_INFORMATION *pMem
 
     ULONG iDevice;
     uint32_t u32DisplayInfoSize;
+    uint32_t u32MinVBVABufferSize;
 
 #ifndef VBOX_WITH_HGSMI
     QUERYDISPLAYINFORESULT DispInfo;
@@ -84,6 +85,7 @@ static void vboxInitVBoxVideo (PPDEV ppdev, const VIDEO_MEMORY_INFORMATION *pMem
     {
         iDevice = DispInfo.iDevice;
         u32DisplayInfoSize = DispInfo.u32DisplayInfoSize;
+        u32MinVBVABufferSize = 0; /* In old mode the buffer is not used at all. */
     }
 #else
     QUERYHGSMIRESULT info;
@@ -99,7 +101,8 @@ static void vboxInitVBoxVideo (PPDEV ppdev, const VIDEO_MEMORY_INFORMATION *pMem
     if (ppdev->bHGSMISupported)
     {
         iDevice = info.iDevice;
-        u32DisplayInfoSize = 4096; /* In HGSMI mode the display driver decides about the size. */
+        u32DisplayInfoSize = info.u32DisplayInfoSize;
+        u32MinVBVABufferSize = info.u32MinVBVABufferSize;
     }
 #endif /* VBOX_WITH_HGSMI */
 
@@ -136,7 +139,11 @@ static void vboxInitVBoxVideo (PPDEV ppdev, const VIDEO_MEMORY_INFORMATION *pMem
             
             /* Use minimum 64K and maximum the cbFrameBuffer for the VBVA buffer. */
             for (ppdev->layout.cbVBVABuffer = ppdev->layout.cbFrameBuffer;
+#ifndef VBOX_WITH_HGSMI
                  ppdev->layout.cbVBVABuffer >= 0x10000;
+#else
+                 ppdev->layout.cbVBVABuffer >= u32MinVBVABufferSize;
+#endif /* VBOX_WITH_HGSMI */
                  ppdev->layout.cbVBVABuffer /= 2)
             {
                 if (ppdev->layout.cbVBVABuffer < cbAvailable)

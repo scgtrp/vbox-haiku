@@ -28,9 +28,9 @@
 #include <iprt/env.h>
 #include <VBox/log.h>
 
-#include "VirtualBox_XPCOM.h"
-#include "VirtualBox_CXPCOM.h"
+#include "VBoxCAPI_v2_2.h"
 #include "VBox/com/com.h"
+#include "VBox/version.h"
 
 using namespace std;
 
@@ -39,31 +39,33 @@ static IVirtualBox         *Ivirtualbox;
 static nsIServiceManager   *serviceManager;
 static nsIComponentManager *manager;
 
-VBOXXPCOMC_DECL(int)
+static void VBoxComUninitialize(void);
+
+static int
 VBoxUtf16ToUtf8(const PRUnichar *pwszString, char **ppszString)
 {
     return RTUtf16ToUtf8(pwszString, ppszString);
 }
 
-VBOXXPCOMC_DECL(int)
+static int
 VBoxUtf8ToUtf16(const char *pszString, PRUnichar **ppwszString)
 {
     return RTStrToUtf16(pszString, ppwszString);
 }
 
-VBOXXPCOMC_DECL(void)
+static void
 VBoxUtf16Free(PRUnichar *pwszString)
 {
     RTUtf16Free(pwszString);
 }
 
-VBOXXPCOMC_DECL(void)
+static void
 VBoxUtf8Free(char *pszString)
 {
     RTStrFree(pszString);
 }
 
-VBOXXPCOMC_DECL(void)
+static void
 VBoxComUnallocMem(void *ptr)
 {
     if (ptr)
@@ -72,19 +74,7 @@ VBoxComUnallocMem(void *ptr)
     }
 }
 
-VBOXXPCOMC_DECL(int)
-VBoxSetEnv(const char *pszVar, const char *pszValue)
-{
-    return RTEnvSet(pszVar, pszValue);
-}
-
-VBOXXPCOMC_DECL(const char *)
-VBoxGetEnv(const char *pszVar)
-{
-    return RTEnvGet(pszVar);
-}
-
-VBOXXPCOMC_DECL(void)
+static void
 VBoxComInitialize(IVirtualBox **virtualBox, ISession **session)
 {
     nsresult rc;
@@ -138,7 +128,7 @@ VBoxComInitialize(IVirtualBox **virtualBox, ISession **session)
     Log(("Cbinding: ISession object created.\n"));
 }
 
-VBOXXPCOMC_DECL(void)
+static void
 VBoxComUninitialize(void)
 {
     if (Session)
@@ -153,6 +143,15 @@ VBoxComUninitialize(void)
     Log(("Cbinding: Cleaned up the created IVirtualBox and ISession Objects.\n"));
 }
 
+static uint32_t
+VBoxVersion(void)
+{
+    uint32_t version = 0;
+
+    version = (VBOX_VERSION_MAJOR * 1000 * 1000) + (VBOX_VERSION_MINOR * 1000) + (VBOX_VERSION_BUILD);
+
+    return version;
+}
 
 VBOXXPCOMC_DECL(PCVBOXXPCOM)
 VBoxGetXPCOMCFunctions(unsigned uVersion)
@@ -163,6 +162,8 @@ VBoxGetXPCOMCFunctions(unsigned uVersion)
         sizeof(VBOXXPCOMC),
         VBOX_XPCOMC_VERSION,
 
+        VBoxVersion,
+
         VBoxComInitialize,
         VBoxComUninitialize,
 
@@ -172,9 +173,6 @@ VBoxGetXPCOMCFunctions(unsigned uVersion)
 
         VBoxUtf16ToUtf8,
         VBoxUtf8ToUtf16,
-
-        VBoxGetEnv,
-        VBoxSetEnv,
 
         VBOX_XPCOMC_VERSION
     };

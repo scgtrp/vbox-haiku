@@ -180,6 +180,7 @@ static int vmmR0InitVM(PVM pVM, uint32_t uSvnRev)
     if (uSvnRev != VMMGetSvnRev())
     {
         LogRel(("VMMR0InitVM: Revision mismatch, r3=%d r0=%d\n", uSvnRev, VMMGetSvnRev()));
+        SUPR0Printf("VMMR0InitVM: Revision mismatch, r3=%d r0=%d\n", uSvnRev, VMMGetSvnRev());
         return VERR_VERSION_MISMATCH;
     }
     if (    !VALID_PTR(pVM)
@@ -456,11 +457,6 @@ static void vmmR0RecordRC(PVM pVM, int rc)
                 case VMMCALLHOST_PGM_ALLOCATE_HANDY_PAGES:
                     STAM_COUNTER_INC(&pVM->vmm.s.StatRZCallPGMAllocHandy);
                     break;
-#ifndef VBOX_WITH_NEW_PHYS_CODE
-                case VMMCALLHOST_PGM_RAM_GROW_RANGE:
-                    STAM_COUNTER_INC(&pVM->vmm.s.StatRZCallPGMGrowRAM);
-                    break;
-#endif
                 case VMMCALLHOST_REM_REPLAY_HANDLER_NOTIFICATIONS:
                     STAM_COUNTER_INC(&pVM->vmm.s.StatRZCallRemReplay);
                     break;
@@ -553,11 +549,13 @@ VMMR0DECL(void) VMMR0EntryFast(PVM pVM, unsigned idCpu, VMMR0OPERATION enmOperat
                 int rc;
                 bool fVTxDisabled;
 
+#ifndef VBOX_WITH_2X_4GB_ADDR_SPACE_IN_R0
                 if (RT_UNLIKELY(!PGMGetHyperCR3(pVM)))
                 {
                     pVM->vmm.s.iLastGZRc = VERR_PGM_NO_CR3_SHADOW_ROOT;
                     return;
                 }
+#endif
 
                 /* We might need to disable VT-x if the active switcher turns off paging. */
                 rc = HWACCMR0EnterSwitcher(pVM, &fVTxDisabled);
@@ -797,8 +795,10 @@ static int vmmR0EntryExWorker(PVM pVM, VMMR0OPERATION enmOperation, PSUPVMMR0REQ
             if (RT_UNLIKELY(pVM->vmm.s.fSwitcherDisabled))
                 return VERR_NOT_SUPPORTED;
 
+#ifndef VBOX_WITH_2X_4GB_ADDR_SPACE_IN_R0
             if (RT_UNLIKELY(!PGMGetHyperCR3(pVM)))
                 return VERR_PGM_NO_CR3_SHADOW_ROOT;
+#endif
 
             RTCCUINTREG fFlags = ASMIntDisableFlags();
 

@@ -53,6 +53,22 @@ void hlpVBoxUnmapVMMDevMemory (PVBOXGUESTDEVEXT pDevExt);
  * @return NT status code
  */
 NTSTATUS hlpVBoxReportGuestInfo (PVBOXGUESTDEVEXT pDevExt);
+
+#ifdef VBOX_WITH_GUEST_BUGCHECK_DETECTION
+/**
+ * Helper for registering the bugcheck callback rountine(s).
+ *
+ * @param pDevExt   VMMDev device extension
+ */
+void hlpRegisterBugCheckCallback (PVBOXGUESTDEVEXT pDevExt);
+
+/**
+ * Helper for deregistering the bugcheck callback rountine(s).
+ *
+ * @param pDevExt   VMMDev device extension
+ */
+void hlpDeregisterBugCheckCallback (PVBOXGUESTDEVEXT pDevExt);
+#endif
 }
 
 #endif // _H_VBOXGUESTHELPER

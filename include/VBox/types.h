@@ -547,6 +547,8 @@ typedef PDMDATASEG const *PCPDMDATASEG;
 
 /**
  * The current ROM page protection.
+ *
+ * @remarks This is part of the saved state.
  */
 typedef enum PGMROMPROT
 {
@@ -569,6 +571,29 @@ typedef enum PGMROMPROT
     /** The usual 32-bit type size hack. */
     PGMROMPROT_32BIT_HACK = 0x7fffffff
 } PGMROMPROT;
+
+
+/**
+ * Page mapping lock.
+ *
+ * @remarks This doesn't work in structures shared between
+ *          ring-3, ring-0 and/or GC.
+ */
+typedef struct PGMPAGEMAPLOCK
+{
+    /** @todo see PGMPhysIsPageMappingLockValid for possibly incorrect assumptions */
+#if defined(IN_RC) || defined(VBOX_WITH_2X_4GB_ADDR_SPACE_IN_R0)
+    /** Just a dummy for the time being. */
+    uint32_t    u32Dummy;
+#else
+    /** Pointer to the PGMPAGE. */
+    void       *pvPage;
+    /** Pointer to the PGMCHUNKR3MAP. */
+    void       *pvMap;
+#endif
+} PGMPAGEMAPLOCK;
+/** Pointer to a page mapping lock. */
+typedef PGMPAGEMAPLOCK *PPGMPAGEMAPLOCK;
 
 
 /** @} */

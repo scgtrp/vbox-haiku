@@ -188,43 +188,18 @@ struct VMPowerUpTask : public VMProgressTask
         : VMProgressTask (aConsole, aProgress, false /* aUsesVMPtr */)
         , mSetVMErrorCallback (NULL), mConfigConstructor (NULL), mStartPaused (false) {}
 
-    ~VMPowerUpTask()
-    {
-        /* No null output parameters in IPC*/
-        MediaState_T dummy;
-
-        /* we may be holding important error info on the current thread;
-         * preserve it */
-        ErrorInfoKeeper eik;
-
-        /* if the locked media list is not empty, treat as a failure and
-         * unlock all */
-        for (LockedMedia::const_iterator it = lockedMedia.begin();
-             it != lockedMedia.end(); ++ it)
-        {
-            if (it->second)
-                it->first->UnlockWrite (&dummy);
-            else
-                it->first->UnlockRead (&dummy);
-        }
-    }
-
     PFNVMATERROR mSetVMErrorCallback;
     PFNCFGMCONSTRUCTOR mConfigConstructor;
     Utf8Str mSavedStateFile;
     Console::SharedFolderDataMap mSharedFolders;
     bool mStartPaused;
 
-    /**
-     * Successfully locked media list. The 2nd value in the pair is true if the
-     * medium is locked for writing and false if locked for reading.
-     */
-    typedef std::list <std::pair <ComPtr <IMedium>, bool > > LockedMedia;
-    LockedMedia lockedMedia;
+    typedef std::list <ComPtr <IHardDisk> > HardDiskList;
+    HardDiskList hardDisks;
 
-    /** Media that need an accessibility check */
-    typedef std::list <ComPtr <IMedium> > Media;
-    Media mediaToCheck;
+    /* array of progress objects for hard disk reset operations */
+    typedef std::list <ComPtr <IProgress> > ProgressList;
+    ProgressList hardDiskProgresses;
 };
 
 struct VMSaveTask : public VMProgressTask
@@ -269,6 +244,7 @@ HRESULT Console::FinalConstruct()
     memset(mapFDLeds, 0, sizeof(mapFDLeds));
     memset(mapIDELeds, 0, sizeof(mapIDELeds));
     memset(mapSATALeds, 0, sizeof(mapSATALeds));
+    memset(mapSCSILeds, 0, sizeof(mapSCSILeds));
     memset(mapNetworkLeds, 0, sizeof(mapNetworkLeds));
     memset(&mapUSBLed, 0, sizeof(mapUSBLed));
     memset(&mapSharedFolderLed, 0, sizeof(mapSharedFolderLed));
@@ -1080,7 +1056,7 @@ HRESULT Console::doEnumerateGuestProperties (CBSTR aPatterns,
     Utf8Str utf8Patterns(aPatterns);
     parm[0].type = VBOX_HGCM_SVC_PARM_PTR;
     parm[0].u.pointer.addr = utf8Patterns.mutableRaw();
-    parm[0].u.pointer.size = utf8Patterns.length() + 1;
+    parm[0].u.pointer.size = (uint32_t)utf8Patterns.length() + 1;
 
     /*
      * Now things get slightly complicated.  Due to a race with the guest adding
@@ -1099,7 +1075,7 @@ HRESULT Console::doEnumerateGuestProperties (CBSTR aPatterns,
             return E_OUTOFMEMORY;
         parm[1].type = VBOX_HGCM_SVC_PARM_PTR;
         parm[1].u.pointer.addr = Utf8Buf.mutableRaw();
-        parm[1].u.pointer.size = cchBuf + 1024;
+        parm[1].u.pointer.size = (uint32_t)cchBuf + 1024;
         vrc = mVMMDev->hgcmHostCall ("VBoxGuestPropSvc", ENUM_PROPS_HOST, 3,
                                      &parm[0]);
         if (parm[2].type != VBOX_HGCM_SVC_PARM_32BIT)
@@ -1279,19 +1255,17 @@ STDMETHODIMP Console::COMGETTER(USBDevices) (ComSafeArrayOut (IUSBDevice *, aUSB
     return S_OK;
 }
 
-STDMETHODIMP Console::COMGETTER(RemoteUSBDevices) (IHostUSBDeviceCollection **aRemoteUSBDevices)
+STDMETHODIMP Console::COMGETTER(RemoteUSBDevices) (ComSafeArrayOut (IHostUSBDevice *, aRemoteUSBDevices))
 {
-    CheckComArgOutPointerValid(aRemoteUSBDevices);
+    CheckComArgOutSafeArrayPointerValid(aRemoteUSBDevices);
 
     AutoCaller autoCaller (this);
     CheckComRCReturnRC (autoCaller.rc());
 
     AutoReadLock alock (this);
 
-    ComObjPtr <RemoteUSBDeviceCollection> collection;
-    collection.createObject();
-    collection->init (mRemoteUSBDevices);
-    collection.queryInterfaceTo (aRemoteUSBDevices);
+    SafeIfaceArray <IHostUSBDevice> collection (mRemoteUSBDevices);
+    collection.detachTo (ComSafeArrayOutArg(aRemoteUSBDevices));
 
     return S_OK;
 }
@@ -1639,7 +1613,8 @@ STDMETHODIMP Console::GetGuestEnteredACPIMode(BOOL *aEntered)
 
     if (mMachineState != MachineState_Running)
         return setError (VBOX_E_INVALID_VM_STATE,
-            tr ("Invalid machine state: %d)"), mMachineState);
+            tr ("Invalid machine state %d when checking if the guest entered "
+                "the ACPI mode)"), mMachineState);
 
     /* protect mpVM */
     AutoVMCaller autoVMCaller (this);
@@ -1928,6 +1903,8 @@ STDMETHODIMP Console::GetDeviceActivity (DeviceType_T aDeviceType,
             SumLed.u32 |= readAndClearLed(mapIDELeds[3]);
             for (unsigned i = 0; i < RT_ELEMENTS(mapSATALeds); i++)
                 SumLed.u32 |= readAndClearLed(mapSATALeds[i]);
+            for (unsigned i = 0; i < RT_ELEMENTS(mapSCSILeds); i++)
+                SumLed.u32 |= readAndClearLed(mapSCSILeds[i]);
             break;
         }
 
@@ -3218,7 +3195,8 @@ HRESULT Console::onNetworkAdapterChange (INetworkAdapter *aNetworkAdapter)
             rc = aNetworkAdapter->COMGETTER(AdapterType)(&adapterType);
             AssertComRC(rc);
             if (adapterType == NetworkAdapterType_I82540EM ||
-                adapterType == NetworkAdapterType_I82543GC)
+                adapterType == NetworkAdapterType_I82543GC ||
+                adapterType == NetworkAdapterType_I82545EM)
                 cszAdapterName = "e1000";
 #endif
             int vrc = PDMR3QueryDeviceLun (mpVM, cszAdapterName,
@@ -3334,6 +3312,44 @@ HRESULT Console::onParallelPortChange (IParallelPort *aParallelPort)
 }
 
 /**
+ *  Called by IInternalSessionControl::OnStorageControllerChange().
+ *
+ *  @note Locks this object for writing.
+ */
+HRESULT Console::onStorageControllerChange ()
+{
+    LogFlowThisFunc (("\n"));
+
+    AutoCaller autoCaller (this);
+    AssertComRCReturnRC (autoCaller.rc());
+
+    AutoWriteLock alock (this);
+
+    /* Don't do anything if the VM isn't running */
+    if (!mpVM)
+        return S_OK;
+
+    HRESULT rc = S_OK;
+
+    /* protect mpVM */
+    AutoVMCaller autoVMCaller (this);
+    CheckComRCReturnRC (autoVMCaller.rc());
+
+    /* nothing to do so far */
+
+    /* notify console callbacks on success */
+    if (SUCCEEDED (rc))
+    {
+        CallbackList::iterator it = mCallbacks.begin();
+        while (it != mCallbacks.end())
+            (*it++)->OnStorageControllerChange ();
+    }
+
+    LogFlowThisFunc (("Leaving rc=%#x\n", rc));
+    return rc;
+}
+
+/**
  *  Called by IInternalSessionControl::OnVRDPServerChange().
  *
  *  @note Locks this object for writing.
@@ -3353,6 +3369,9 @@ HRESULT Console::onVRDPServerChange()
 
         rc = mVRDPServer->COMGETTER(Enabled) (&vrdpEnabled);
         ComAssertComRCRetRC (rc);
+
+        /* VRDP server may call this Console object back from other threads (VRDP INPUT or OUTPUT). */
+        alock.leave();
 
         if (vrdpEnabled)
         {
@@ -3374,6 +3393,8 @@ HRESULT Console::onVRDPServerChange()
         {
             mConsoleVRDPServer->Stop ();
         }
+
+        alock.enter();
     }
 
     /* notify console callbacks on success */
@@ -3654,7 +3675,7 @@ HRESULT Console::getGuestProperty (IN_BSTR aName, BSTR *aValue,
     /* To save doing a const cast, we use the mutableRaw() member. */
     parm[0].u.pointer.addr = Utf8Name.mutableRaw();
     /* The + 1 is the null terminator */
-    parm[0].u.pointer.size = Utf8Name.length() + 1;
+    parm[0].u.pointer.size = (uint32_t)Utf8Name.length() + 1;
     parm[1].type = VBOX_HGCM_SVC_PARM_PTR;
     parm[1].u.pointer.addr = pszBuffer;
     parm[1].u.pointer.size = sizeof(pszBuffer);
@@ -3719,7 +3740,7 @@ HRESULT Console::setGuestProperty (IN_BSTR aName, IN_BSTR aValue, IN_BSTR aFlags
     /* To save doing a const cast, we use the mutableRaw() member. */
     parm[0].u.pointer.addr = Utf8Name.mutableRaw();
     /* The + 1 is the null terminator */
-    parm[0].u.pointer.size = Utf8Name.length() + 1;
+    parm[0].u.pointer.size = (uint32_t)Utf8Name.length() + 1;
     Utf8Str Utf8Value = aValue;
     if (aValue != NULL)
     {
@@ -3727,7 +3748,7 @@ HRESULT Console::setGuestProperty (IN_BSTR aName, IN_BSTR aValue, IN_BSTR aFlags
         /* To save doing a const cast, we use the mutableRaw() member. */
         parm[1].u.pointer.addr = Utf8Value.mutableRaw();
         /* The + 1 is the null terminator */
-        parm[1].u.pointer.size = Utf8Value.length() + 1;
+        parm[1].u.pointer.size = (uint32_t)Utf8Value.length() + 1;
     }
     Utf8Str Utf8Flags = aFlags;
     if (aFlags != NULL)
@@ -3736,7 +3757,7 @@ HRESULT Console::setGuestProperty (IN_BSTR aName, IN_BSTR aValue, IN_BSTR aFlags
         /* To save doing a const cast, we use the mutableRaw() member. */
         parm[2].u.pointer.addr = Utf8Flags.mutableRaw();
         /* The + 1 is the null terminator */
-        parm[2].u.pointer.size = Utf8Flags.length() + 1;
+        parm[2].u.pointer.size = (uint32_t)Utf8Flags.length() + 1;
     }
     if ((aValue != NULL) && (aFlags != NULL))
         vrc = mVMMDev->hgcmHostCall ("VBoxGuestPropSvc", SET_PROP_HOST,
@@ -4381,26 +4402,22 @@ HRESULT Console::powerUp (IProgress **aProgress, bool aPaused)
                     savedStateFile.raw(), vrc);
     }
 
-    /* create an IProgress object to track progress of this operation */
-    ComObjPtr <Progress> progress;
-    progress.createObject();
+    /* create a progress object to track progress of this operation */
+    ComObjPtr <Progress> powerupProgress;
+    powerupProgress.createObject();
     Bstr progressDesc;
     if (mMachineState == MachineState_Saved)
         progressDesc = tr ("Restoring virtual machine");
     else
         progressDesc = tr ("Starting virtual machine");
-    rc = progress->init (static_cast <IConsole *> (this),
-                         progressDesc, FALSE /* aCancelable */);
+    rc = powerupProgress->init (static_cast <IConsole *> (this),
+                                progressDesc, FALSE /* aCancelable */);
     CheckComRCReturnRC (rc);
-
-    /* pass reference to caller if requested */
-    if (aProgress)
-        progress.queryInterfaceTo (aProgress);
 
     /* setup task object and thread to carry out the operation
      * asynchronously */
 
-    std::auto_ptr <VMPowerUpTask> task (new VMPowerUpTask (this, progress));
+    std::auto_ptr <VMPowerUpTask> task (new VMPowerUpTask (this, powerupProgress));
     ComAssertComRCRetRC (task->rc());
 
     task->mSetVMErrorCallback = setVMErrorCallback;
@@ -4410,17 +4427,7 @@ HRESULT Console::powerUp (IProgress **aProgress, bool aPaused)
     if (mMachineState == MachineState_Saved)
         task->mSavedStateFile = savedStateFile;
 
-    /* Lock all attached media in necessary mode. Note that until
-     * setMachineState() is called below, it is OUR responsibility to unlock
-     * media on failure (and VMPowerUpTask::lockedMedia is used for that). After
-     * the setMachineState() call, VBoxSVC (SessionMachine::setMachineState())
-     * will unlock all the media upon the appropriate state change. Note that
-     * media accessibility checks are performed on the powerup thread because
-     * they may block. */
-
-    MediaState_T mediaState;
-
-    /* lock all hard disks for writing and their parents for reading */
+    /* Reset differencing hard disks for which autoReset is true */
     {
         com::SafeIfaceArray <IHardDiskAttachment> atts;
         rc = mMachine->
@@ -4433,94 +4440,52 @@ HRESULT Console::powerUp (IProgress **aProgress, bool aPaused)
             rc = atts [i]->COMGETTER(HardDisk) (hardDisk.asOutParam());
             CheckComRCReturnRC (rc);
 
-            bool first = true;
+            /* save for later use on the powerup thread */
+            task->hardDisks.push_back (hardDisk);
 
-            while (!hardDisk.isNull())
+            /* needs autoreset? */
+            BOOL autoReset = FALSE;
+            rc = hardDisk->COMGETTER(AutoReset)(&autoReset);
+            CheckComRCReturnRC (rc);
+
+            if (autoReset)
             {
-                if (first)
-                {
-                    rc = hardDisk->LockWrite (&mediaState);
-                    CheckComRCReturnRC (rc);
-
-                    task->lockedMedia.push_back (VMPowerUpTask::LockedMedia::
-                                                 value_type (hardDisk, true));
-                    first = false;
-                }
-                else
-                {
-                    rc = hardDisk->LockRead (&mediaState);
-                    CheckComRCReturnRC (rc);
-
-                    task->lockedMedia.push_back (VMPowerUpTask::LockedMedia::
-                                                 value_type (hardDisk, false));
-                }
-
-                if (mediaState == MediaState_Inaccessible)
-                    task->mediaToCheck.push_back (hardDisk);
-
-                ComPtr <IHardDisk> parent;
-                rc = hardDisk->COMGETTER(Parent) (parent.asOutParam());
+                ComPtr <IProgress> resetProgress;
+                rc = hardDisk->Reset (resetProgress.asOutParam());
                 CheckComRCReturnRC (rc);
-                hardDisk = parent;
+
+                /* save for later use on the powerup thread */
+                task->hardDiskProgresses.push_back (resetProgress);
             }
         }
     }
-    /* lock the DVD image for reading if mounted */
-    {
-        ComPtr <IDVDDrive> drive;
-        rc = mMachine->COMGETTER(DVDDrive) (drive.asOutParam());
-        CheckComRCReturnRC (rc);
-
-        DriveState_T driveState;
-        rc = drive->COMGETTER(State) (&driveState);
-        CheckComRCReturnRC (rc);
-
-        if (driveState == DriveState_ImageMounted)
-        {
-            ComPtr <IDVDImage> image;
-            rc = drive->GetImage (image.asOutParam());
-            CheckComRCReturnRC (rc);
-
-            rc = image->LockRead (&mediaState);
-            CheckComRCReturnRC (rc);
-
-            task->lockedMedia.push_back (VMPowerUpTask::LockedMedia::
-                                         value_type (image, false));
-
-            if (mediaState == MediaState_Inaccessible)
-                task->mediaToCheck.push_back (image);
-        }
-    }
-    /* lock the floppy image for reading if mounted */
-    {
-        ComPtr <IFloppyDrive> drive;
-        rc = mMachine->COMGETTER(FloppyDrive) (drive.asOutParam());
-        CheckComRCReturnRC (rc);
-
-        DriveState_T driveState;
-        rc = drive->COMGETTER(State) (&driveState);
-        CheckComRCReturnRC (rc);
-
-        if (driveState == DriveState_ImageMounted)
-        {
-            ComPtr<IFloppyImage> image;
-            rc = drive->GetImage (image.asOutParam());
-            CheckComRCReturnRC (rc);
-
-            rc = image->LockRead (&mediaState);
-            CheckComRCReturnRC (rc);
-
-            task->lockedMedia.push_back (VMPowerUpTask::LockedMedia::
-                                         value_type (image, false));
-
-            if (mediaState == MediaState_Inaccessible)
-                task->mediaToCheck.push_back (image);
-        }
-    }
-    /* SUCCEEDED locking all media */
 
     rc = consoleInitReleaseLog (mMachine);
     CheckComRCReturnRC (rc);
+
+    /* pass the progress object to the caller if requested */
+    if (aProgress)
+    {
+        if (task->hardDiskProgresses.size() == 0)
+        {
+            /* there are no other operations to track, return the powerup
+             * progress only */
+            powerupProgress.queryInterfaceTo (aProgress);
+        }
+        else
+        {
+            /* create a combined progress object */
+            ComObjPtr <CombinedProgress> progress;
+            progress.createObject();
+            VMPowerUpTask::ProgressList progresses (task->hardDiskProgresses);
+            progresses.push_back (ComPtr <IProgress> (powerupProgress));
+            rc = progress->init (static_cast <IConsole *> (this),
+                                 progressDesc, progresses.begin(),
+                                 progresses.end());
+            AssertComRCReturnRC (rc);
+            progress.queryInterfaceTo (aProgress);
+        }
+    }
 
     int vrc = RTThreadCreate (NULL, Console::powerUpThread, (void *) task.get(),
                               0, RTTHREADTYPE_MAIN_WORKER, 0, "VMPowerUp");
@@ -4528,14 +4493,12 @@ HRESULT Console::powerUp (IProgress **aProgress, bool aPaused)
     ComAssertMsgRCRet (vrc, ("Could not create VMPowerUp thread (%Rrc)", vrc),
                        E_FAIL);
 
-    /* clear the locked media list to prevent unlocking on task destruction as
-     * we are not going to fail after this point */
-    task->lockedMedia.clear();
-
     /* task is now owned by powerUpThread(), so release it */
     task.release();
 
-    /* finally, set the state: no right to fail in this method afterwards! */
+    /* finally, set the state: no right to fail in this method afterwards
+     * since we've already started the thread and it is now responsible for
+     * any error reporting and appropriate state change! */
 
     if (mMachineState == MachineState_Saved)
         setMachineState (MachineState_Restoring);
@@ -4588,7 +4551,7 @@ HRESULT Console::powerDown (Progress *aProgress /*= NULL*/)
      * number of "advance percent count" comments in this method! */
     enum { StepCount = 7 };
     /* current step */
-    size_t step = 0;
+    ULONG step = 0;
 
     HRESULT rc = S_OK;
     int vrc = VINF_SUCCESS;
@@ -4653,7 +4616,7 @@ HRESULT Console::powerDown (Progress *aProgress /*= NULL*/)
 
     /* advance percent count */
     if (aProgress)
-        aProgress->notifyProgress (99 * (++ step) / StepCount );
+        aProgress->setCurrentOperationProgress(99 * (++ step) / StepCount );
 
 #ifdef VBOX_WITH_HGCM
 
@@ -4720,7 +4683,7 @@ HRESULT Console::powerDown (Progress *aProgress /*= NULL*/)
 
     /* advance percent count */
     if (aProgress)
-        aProgress->notifyProgress (99 * (++ step) / StepCount );
+        aProgress->setCurrentOperationProgress(99 * (++ step) / StepCount );
 
 # endif /* VBOX_WITH_GUEST_PROPS defined */
 
@@ -4740,7 +4703,7 @@ HRESULT Console::powerDown (Progress *aProgress /*= NULL*/)
 
     /* advance percent count */
     if (aProgress)
-        aProgress->notifyProgress (99 * (++ step) / StepCount );
+        aProgress->setCurrentOperationProgress(99 * (++ step) / StepCount );
 
 #endif /* VBOX_WITH_HGCM */
 
@@ -4771,7 +4734,7 @@ HRESULT Console::powerDown (Progress *aProgress /*= NULL*/)
 
     /* advance percent count */
     if (aProgress)
-        aProgress->notifyProgress (99 * (++ step) / StepCount );
+        aProgress->setCurrentOperationProgress(99 * (++ step) / StepCount );
 
     vrc = VINF_SUCCESS;
 
@@ -4800,7 +4763,7 @@ HRESULT Console::powerDown (Progress *aProgress /*= NULL*/)
 
     /* advance percent count */
     if (aProgress)
-        aProgress->notifyProgress (99 * (++ step) / StepCount );
+        aProgress->setCurrentOperationProgress(99 * (++ step) / StepCount );
 
     LogFlowThisFunc (("Ready for VM destruction.\n"));
 
@@ -4844,7 +4807,7 @@ HRESULT Console::powerDown (Progress *aProgress /*= NULL*/)
 
         /* advance percent count */
         if (aProgress)
-            aProgress->notifyProgress (99 * (++ step) / StepCount );
+            aProgress->setCurrentOperationProgress(99 * (++ step) / StepCount );
 
         if (VBOX_SUCCESS (vrc))
         {
@@ -4872,7 +4835,7 @@ HRESULT Console::powerDown (Progress *aProgress /*= NULL*/)
 
         /* advance percent count */
         if (aProgress)
-            aProgress->notifyProgress (99 * (++ step) / StepCount );
+            aProgress->setCurrentOperationProgress(99 * (++ step) / StepCount );
     }
     else
     {
@@ -5977,7 +5940,7 @@ Console::stateProgressCallback (PVM pVM, unsigned uPercent, void *pvUser)
 
     /* update the progress object */
     if (task->mProgress)
-        task->mProgress->notifyProgress (uPercent);
+        task->mProgress->setCurrentOperationProgress(uPercent);
 
     return VINF_SUCCESS;
 }
@@ -6025,29 +5988,30 @@ Console::setVMErrorCallback (PVM pVM, void *pvUser, int rc, RT_SRC_POS_DECL,
  *
  * @param   pVM             The VM handle.
  * @param   pvUser          The user argument.
- * @param   fFatal          Whether it is a fatal error or not.
- * @param   pszErrorID      Error ID string.
+ * @param   fFlags          The action flags. See VMSETRTERR_FLAGS_*.
+ * @param   pszErrorId      Error ID string.
  * @param   pszFormat       Error message format string.
- * @param   args            Error message arguments.
+ * @param   va              Error message arguments.
  * @thread EMT.
  */
 /* static */ DECLCALLBACK(void)
-Console::setVMRuntimeErrorCallback (PVM pVM, void *pvUser, bool fFatal,
-                                    const char *pszErrorID,
-                                    const char *pszFormat, va_list args)
+Console::setVMRuntimeErrorCallback (PVM pVM, void *pvUser, uint32_t fFlags,
+                                    const char *pszErrorId,
+                                    const char *pszFormat, va_list va)
 {
+    bool const fFatal = !!(fFlags & VMSETRTERR_FLAGS_FATAL);
     LogFlowFuncEnter();
 
     Console *that = static_cast <Console *> (pvUser);
     AssertReturnVoid (that);
 
-    Utf8Str message = Utf8StrFmtVA (pszFormat, args);
+    Utf8Str message = Utf8StrFmtVA (pszFormat, va);
 
     LogRel (("Console: VM runtime error: fatal=%RTbool, "
              "errorID=%s message=\"%s\"\n",
-             fFatal, pszErrorID, message.raw()));
+             fFatal, pszErrorId, message.raw()));
 
-    that->onRuntimeError (BOOL (fFatal), Bstr (pszErrorID), Bstr (message));
+    that->onRuntimeError (BOOL (fFatal), Bstr (pszErrorId), Bstr (message));
 
     LogFlowFuncLeave();
 }
@@ -6333,51 +6297,21 @@ DECLCALLBACK (int) Console::powerUpThread (RTTHREAD Thread, void *pvUser)
 
     try
     {
+        /* wait for auto reset ops to complete so that we can successfully lock
+         * the attached hard disks by calling LockMedia() below */
+        for (VMPowerUpTask::ProgressList::const_iterator
+             it = task->hardDiskProgresses.begin();
+             it != task->hardDiskProgresses.end(); ++ it)
         {
-            ErrorInfoKeeper eik (true /* aIsNull */);
-            MultiResult mrc (S_OK);
-
-            /* perform a check of inaccessible media deferred in PowerUp() */
-            for (VMPowerUpTask::Media::const_iterator
-                 it = task->mediaToCheck.begin();
-                 it != task->mediaToCheck.end(); ++ it)
-            {
-                MediaState_T mediaState;
-                rc = (*it)->COMGETTER(State) (&mediaState);
-                CheckComRCThrowRC (rc);
-
-                Assert (mediaState == MediaState_LockedRead ||
-                        mediaState == MediaState_LockedWrite);
-
-                /* Note that we locked the medium already, so use the error
-                 * value to see if there was an accessibility failure */
-
-                Bstr error;
-                rc = (*it)->COMGETTER(LastAccessError) (error.asOutParam());
-                CheckComRCThrowRC (rc);
-
-                if (!error.isNull())
-                {
-                    Bstr loc;
-                    rc = (*it)->COMGETTER(Location) (loc.asOutParam());
-                    CheckComRCThrowRC (rc);
-
-                    /* collect multiple errors */
-                    eik.restore();
-
-                    /* be in sync with MediumBase::setStateError() */
-                    Assert (!error.isEmpty());
-                    mrc = setError (E_FAIL,
-                        tr ("Medium '%ls' is not accessible. %ls"),
-                        loc.raw(), error.raw());
-
-                    eik.fetch();
-                }
-            }
-
-            eik.restore();
-            CheckComRCThrowRC ((HRESULT) mrc);
+            HRESULT rc2 = (*it)->WaitForCompletion (-1);
+            AssertComRC (rc2);
         }
+
+        /* lock attached media. This method will also check their
+         * accessibility. Note that the media will be unlocked automatically
+         * by SessionMachine::setMachineState() when the VM is powered down. */
+        rc = console->mControl->LockMedia();
+        CheckComRCThrowRC (rc);
 
 #ifdef VBOX_WITH_VRDP
 
@@ -6564,6 +6498,12 @@ DECLCALLBACK (int) Console::powerUpThread (RTTHREAD Thread, void *pvUser)
                 HRESULT rc2 = console->powerDown();
                 AssertComRC (rc2);
             }
+
+            /* Deregister the VMSetError callback. This is necessary as the
+             * pfnVMAtError() function passed to VMR3Create() is supposed to
+             * be sticky but our error callback isn't. */
+            VMR3AtErrorDeregister(pVM, task->mSetVMErrorCallback, task.get());
+            /** @todo register another VMSetError callback? */
         }
         else
         {
@@ -6656,12 +6596,16 @@ DECLCALLBACK (int) Console::powerUpThread (RTTHREAD Thread, void *pvUser)
 /**
  *  Reconfigures a VDI.
  *
- *  @param   pVM     The VM handle.
- *  @param   hda     The harddisk attachment.
- *  @param   phrc    Where to store com error - only valid if we return VERR_GENERAL_FAILURE.
+ *  @param   pVM           The VM handle.
+ *  @param   lInstance     The instance of the controller.
+ *  @param   enmController The type of the controller.
+ *  @param   hda           The harddisk attachment.
+ *  @param   phrc          Where to store com error - only valid if we return VERR_GENERAL_FAILURE.
  *  @return  VBox status code.
  */
-static DECLCALLBACK(int) reconfigureHardDisks(PVM pVM, IHardDiskAttachment *hda,
+static DECLCALLBACK(int) reconfigureHardDisks(PVM pVM, ULONG lInstance,
+                                              StorageControllerType_T enmController,
+                                              IHardDiskAttachment *hda,
                                               HRESULT *phrc)
 {
     LogFlowFunc (("pVM=%p hda=%p phrc=%p\n", pVM, hda, phrc));
@@ -6678,23 +6622,24 @@ static DECLCALLBACK(int) reconfigureHardDisks(PVM pVM, IHardDiskAttachment *hda,
      */
     ComPtr<IHardDisk> hardDisk;
     hrc = hda->COMGETTER(HardDisk)(hardDisk.asOutParam());                      H();
-    StorageBus_T enmBus;
-    hrc = hda->COMGETTER(Bus)(&enmBus);                                         H();
     LONG lDev;
     hrc = hda->COMGETTER(Device)(&lDev);                                        H();
-    LONG lChannel;
-    hrc = hda->COMGETTER(Channel)(&lChannel);                                   H();
+    LONG lPort;
+    hrc = hda->COMGETTER(Port)(&lPort);                                         H();
 
     int         iLUN;
     const char *pcszDevice = NULL;
+    bool        fSCSI = false;
 
-    switch (enmBus)
+    switch (enmController)
     {
-        case StorageBus_IDE:
+        case StorageControllerType_PIIX3:
+        case StorageControllerType_PIIX4:
+        case StorageControllerType_ICH6:
         {
-            if (lChannel >= 2 || lChannel < 0)
+            if (lPort >= 2 || lPort < 0)
             {
-                AssertMsgFailed(("invalid controller channel number: %d\n", lChannel));
+                AssertMsgFailed(("invalid controller channel number: %d\n", lPort));
                 return VERR_GENERAL_FAILURE;
             }
 
@@ -6704,19 +6649,33 @@ static DECLCALLBACK(int) reconfigureHardDisks(PVM pVM, IHardDiskAttachment *hda,
                 return VERR_GENERAL_FAILURE;
             }
 
-            iLUN = 2*lChannel + lDev;
+            iLUN = 2*lPort + lDev;
             pcszDevice = "piix3ide";
             break;
         }
-        case StorageBus_SATA:
+        case StorageControllerType_IntelAhci:
         {
-            iLUN = lChannel;
+            iLUN = lPort;
             pcszDevice = "ahci";
+            break;
+        }
+        case StorageControllerType_BusLogic:
+        {
+            iLUN = lPort;
+            pcszDevice = "buslogic";
+            fSCSI = true;
+            break;
+        }
+        case StorageControllerType_LsiLogic:
+        {
+            iLUN = lPort;
+            pcszDevice = "lsilogicscsi";
+            fSCSI = true;
             break;
         }
         default:
         {
-            AssertMsgFailed(("invalid disk controller type: %d\n", enmBus));
+            AssertMsgFailed(("invalid disk controller type: %d\n", enmController));
             return VERR_GENERAL_FAILURE;
         }
     }
@@ -6732,15 +6691,28 @@ static DECLCALLBACK(int) reconfigureHardDisks(PVM pVM, IHardDiskAttachment *hda,
     PCFGMNODE pLunL1;
     PCFGMNODE pLunL2;
 
-    pLunL1 = CFGMR3GetChildF(CFGMR3GetRoot(pVM), "Devices/%s/0/LUN#%d/AttachedDriver/", pcszDevice, iLUN);
+    /* SCSI has an extra driver between the device and the block driver. */
+    if (fSCSI)
+        pLunL1 = CFGMR3GetChildF(CFGMR3GetRoot(pVM), "Devices/%s/%u/LUN#%d/AttachedDriver/AttachedDriver/", pcszDevice, lInstance, iLUN);
+    else
+        pLunL1 = CFGMR3GetChildF(CFGMR3GetRoot(pVM), "Devices/%s/%u/LUN#%d/AttachedDriver/", pcszDevice, lInstance, iLUN);
 
     if (!pLunL1)
     {
-        PCFGMNODE pInst = CFGMR3GetChildF(CFGMR3GetRoot(pVM), "Devices/%s/0/", pcszDevice);
+        PCFGMNODE pInst = CFGMR3GetChildF(CFGMR3GetRoot(pVM), "Devices/%s/%u/", pcszDevice, lInstance);
         AssertReturn(pInst, VERR_INTERNAL_ERROR);
 
         PCFGMNODE pLunL0;
         rc = CFGMR3InsertNodeF(pInst, &pLunL0, "LUN#%d", iLUN);                     RC_CHECK();
+
+        if (fSCSI)
+        {
+            rc = CFGMR3InsertString(pLunL0, "Driver",              "SCSI");             RC_CHECK();
+            rc = CFGMR3InsertNode(pLunL0,   "Config", &pCfg);                           RC_CHECK();
+
+            rc = CFGMR3InsertNode(pLunL0,   "AttachedDriver", &pLunL0);                 RC_CHECK();
+        }
+
         rc = CFGMR3InsertString(pLunL0, "Driver",              "Block");            RC_CHECK();
         rc = CFGMR3InsertNode(pLunL0,   "Config", &pCfg);                           RC_CHECK();
         rc = CFGMR3InsertString(pCfg,   "Type",                "HardDisk");         RC_CHECK();
@@ -6971,13 +6943,33 @@ DECLCALLBACK (int) Console::saveStateThread (RTTHREAD Thread, void *pvUser)
             for (size_t i = 0; i < atts.size(); ++ i)
             {
                 PVMREQ pReq;
+                ComPtr<IStorageController> controller;
+                BSTR controllerName;
+                ULONG lInstance;
+                StorageControllerType_T enmController;
+
+                /*
+                 * We can't pass a storage controller object directly
+                 * (g++ complains about not being able to pass non POD types through '...')
+                 * so we have to query needed values here and pass them.
+                 */
+                rc = atts[i]->COMGETTER(Controller)(&controllerName);
+                if (FAILED (rc))
+                    break;
+
+                rc = that->mMachine->GetStorageControllerByName(controllerName, controller.asOutParam());
+                if (FAILED (rc))
+                    break;
+
+                rc = controller->COMGETTER(ControllerType)(&enmController);
+                rc = controller->COMGETTER(Instance)(&lInstance);
                 /*
                  *  don't leave the lock since reconfigureHardDisks isn't going
                  *  to access Console.
                  */
                 int vrc = VMR3ReqCall (that->mpVM, VMREQDEST_ANY, &pReq, RT_INDEFINITE_WAIT,
-                                       (PFNRT)reconfigureHardDisks, 3, that->mpVM,
-                                       atts [i], &rc);
+                                       (PFNRT)reconfigureHardDisks, 5, that->mpVM, lInstance,
+                                       enmController, atts [i], &rc);
                 if (VBOX_SUCCESS (rc))
                     rc = pReq->iStatus;
                 VMR3ReqFree (pReq);

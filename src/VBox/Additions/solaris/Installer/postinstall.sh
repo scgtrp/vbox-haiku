@@ -1,8 +1,8 @@
 #!/bin/sh
-# Sun xVM VirtualBox
+# Sun VirtualBox
 # VirtualBox postinstall script for Solaris.
 #
-# Copyright (C) 2008 Sun Microsystems, Inc.
+# Copyright (C) 2008-2009 Sun Microsystems, Inc.
 #
 # This file is part of VirtualBox Open Source Edition (OSE), as
 # available from http://www.virtualbox.org. This file is free software;
@@ -110,6 +110,7 @@ echo "Creating links..."
 /usr/sbin/installf -c none $PKGINST /usr/bin/VBoxService=$vboxadditions_path/VBox.sh s
 /usr/sbin/installf -c none $PKGINST /usr/bin/VBoxControl=$vboxadditions_path/VBox.sh s
 /usr/sbin/installf -c none $PKGINST /usr/bin/VBoxRandR=$vboxadditions_path/VBoxRandR.sh s
+/usr/sbin/installf -c none $PKGINST /usr/bin/VBoxClient-all=$vboxadditions_path/1099.vboxclient s
 
 # Install Xorg components to the required places
 xorgversion_long=`/usr/X11/bin/Xorg -version 2>&1 | grep "X Window System Version"`
@@ -193,8 +194,23 @@ else
 
     # Some distros like Indiana have no xorg.conf, deal with this
     if test ! -f '/etc/X11/xorg.conf' && test ! -f '/etc/X11/.xorg.conf'; then
-        /usr/sbin/removef $PKGINST $vboxadditions_path/solarix_xorg.conf 1>/dev/null
-        mv -f $vboxadditions_path/solaris_xorg.conf /etc/X11/.xorg.conf
+
+        # Xorg 1.3.x+ should use the modeline less Xorg confs while older should
+        # use ones with all the video modelines in place. Argh.
+        xorgconf_file="solaris_xorg_modeless.conf"
+        xorgconf_unfit="solaris_xorg.conf"
+        case "$xorgversion" in
+            7.1.* | 7.2.* | 6.9.* | 7.0.* )
+                xorgconf_file="solaris_xorg.conf"
+                xorgconf_unfit="solaris_xorg_modeless.conf"
+                ;;
+        esac
+
+        /usr/sbin/removef $PKGINST $vboxadditions_path/$xorgconf_file 1>/dev/null
+        mv -f $vboxadditions_path/$xorgconf_file /etc/X11/.xorg.conf
+
+        /usr/sbin/removef $PKGINST $vboxadditions_path/$xorgconf_unfit 1>/dev/null
+        rm -f $vboxadditions_path/$xorgconf_unfit
     fi
 
     $vboxadditions_path/x11config.pl
@@ -246,6 +262,18 @@ if test -f "$vboxadditions_path/$vboxfsmod"; then
     rm -f $vboxadditions_path/$vboxfsunused
 fi
 
+
+# 32-bit crogl opengl library replacement
+if test -f "/usr/lib/VBoxOGL.so"; then
+    cp -f /usr/X11/lib/mesa/libGL.so.1 /usr/X11/lib/mesa/libGL_original_.so.1
+    ln -sf /usr/lib/VBoxOGL.so /usr/X11/lib/mesa/libGL.so.1
+fi
+
+# 64-bit crogl opengl library replacement
+if test -f "/usr/lib/amd64/VBoxOGL.so"; then
+    cp -f /usr/X11/lib/mesa/amd64/libGL.so.1 /usr/X11/lib/mesa/amd64/libGL_original_.so.1
+    ln -sf /usr/lib/amd64/VBoxOGL.so /usr/X11/lib/mesa/amd64/libGL.so.1
+fi
 
 # Finalize
 /usr/sbin/removef -f $PKGINST

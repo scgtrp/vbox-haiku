@@ -36,6 +36,10 @@
 #include <QProcess>
 #include <QHash>
 
+#ifdef Q_WS_X11
+# include <sys/wait.h>
+#endif
+
 class QAction;
 class QLabel;
 class QToolButton;
@@ -226,6 +230,10 @@ public:
         if (firstShotReady)
             result = process.readAllStandardOutput();
         process.setProcessState (QProcess::NotRunning);
+#ifdef Q_WS_X11
+        int status;
+        waitpid(process.pid(), &status, 0);
+#endif
         return result;
     }
 
@@ -347,6 +355,24 @@ public:
         return KStorageBus (it.key());
     }
 
+    KStorageBus toStorageBusType (KStorageControllerType aControllerType) const
+    {
+        KStorageBus sb = KStorageBus_Null;
+        switch (aControllerType)
+        {
+            case KStorageControllerType_Null: sb = KStorageBus_Null; break;
+            case KStorageControllerType_PIIX3:
+            case KStorageControllerType_PIIX4:
+            case KStorageControllerType_ICH6: sb = KStorageBus_IDE; break;
+            case KStorageControllerType_IntelAhci: sb = KStorageBus_SATA; break;
+            case KStorageControllerType_LsiLogic:
+            case KStorageControllerType_BusLogic: sb = KStorageBus_SCSI; break;
+            default:
+              AssertMsgFailed (("toStorageBusType: %d not handled\n", aControllerType)); break;
+        }
+        return sb;
+    }
+
     QString toString (KStorageBus aBus, LONG aChannel) const;
     LONG toStorageChannel (KStorageBus aBus, const QString &aChannel) const;
 
@@ -408,19 +434,19 @@ public:
         return KClipboardMode (it.key());
     }
 
-    QString toString (KIDEControllerType t) const
+    QString toString (KStorageControllerType t) const
     {
-        AssertMsg (!mIDEControllerTypes.value (t).isNull(), ("No text for %d", t));
-        return mIDEControllerTypes.value (t);
+        AssertMsg (!mStorageControllerTypes.value (t).isNull(), ("No text for %d", t));
+        return mStorageControllerTypes.value (t);
     }
 
-    KIDEControllerType toIDEControllerType (const QString &s) const
+    KStorageControllerType toIDEControllerType (const QString &s) const
     {
         QULongStringHash::const_iterator it =
-            qFind (mIDEControllerTypes.begin(), mIDEControllerTypes.end(), s);
-        AssertMsg (it != mIDEControllerTypes.end(), ("No value for {%s}",
-                                                     s.toLatin1().constData()));
-        return KIDEControllerType (it.key());
+            qFind (mStorageControllerTypes.begin(), mStorageControllerTypes.end(), s);
+        AssertMsg (it != mStorageControllerTypes.end(), ("No value for {%s}",
+                                                         s.toLatin1().constData()));
+        return KStorageControllerType (it.key());
     }
 
     KVRDPAuthType toVRDPAuthType (const QString &s) const
@@ -730,6 +756,8 @@ public:
 #endif
     }
 
+    static QString documentsPath();
+
 signals:
 
     /**
@@ -876,7 +904,7 @@ private:
     QULongStringHash mNetworkAdapterTypes;
     QULongStringHash mNetworkAttachmentTypes;
     QULongStringHash mClipboardTypes;
-    QULongStringHash mIDEControllerTypes;
+    QULongStringHash mStorageControllerTypes;
     QULongStringHash mUSBDeviceStates;
 
     QString mUserDefinedPortName;

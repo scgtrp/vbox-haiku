@@ -54,7 +54,7 @@
  * @todo: This is a bad hack to prevent freezing the guest during high network
  *        activity. This needs to be fixed properly.
  */
-/*#define VBOX_NAT_DELAY_HACK*/
+#define VBOX_NAT_DELAY_HACK
 
 
 /*******************************************************************************
@@ -350,6 +350,7 @@ static DECLCALLBACK(int) drvNATAsyncIoThread(PPDMDRVINS pDrvIns, PPDMTHREAD pThr
     unsigned int cBreak = 0;
 # else /* RT_OS_WINDOWS */
     struct pollfd *polls = NULL;
+    unsigned int cPollNegRet;
 # endif /* !RT_OS_WINDOWS */
 
     LogFlow(("drvNATAsyncIoThread: pThis=%p\n", pThis));
@@ -386,7 +387,16 @@ static DECLCALLBACK(int) drvNATAsyncIoThread(PPDMDRVINS pDrvIns, PPDMTHREAD pThr
         polls[0].revents = 0;
 
         int cChangedFDs = poll(polls, nFDs + 1, ms ? ms : -1);
-        AssertRelease(cChangedFDs >= 0);
+        /* 2.6.23 + gdb -> hitting all the time. probably a bug in poll/ptrace/whatever. */
+        if (cChangedFDs < 0) 
+        {
+            if (cPollNegRet++ > 128)
+            {
+                cPollNegRet = 0;
+                LogRel(("Poll returns (%s) suppressed %d\n", strerror(errno), cPollNegRet));
+            }
+        }
+
         if (cChangedFDs >= 0)
         {
             slirp_select_poll(pThis->pNATState, &polls[1], nFDs);
@@ -396,13 +406,13 @@ static DECLCALLBACK(int) drvNATAsyncIoThread(PPDMDRVINS pDrvIns, PPDMTHREAD pThr
                 char ch[1];
                 size_t cbRead;
                 int counter = 0;
-                /* 
-                 * drvNATSend decoupled so we don't know how many times 
+                /*
+                 * drvNATSend decoupled so we don't know how many times
                  * device's thread sends before we've entered multiplex,
                  * so to avoid false alarm drain pipe here to the very end
                  *
-                 * @todo: Probably we should counter drvNATSend to count how 
-                 * deep pipe has been filed before drain. 
+                 * @todo: Probably we should counter drvNATSend to count how
+                 * deep pipe has been filed before drain.
                  *
                  * XXX:Make it reading exactly we need to drain the pipe.
                  */
@@ -563,7 +573,7 @@ void slirp_output(void *pvUser, const uint8_t *pu8Buf, int cb)
     {
         cDroppedPackets++;
     }
-    else 
+    else
     {
         LogRel(("NAT: %d messages suppressed about dropping package (couldn't allocate queue item)\n", cDroppedPackets));
         cDroppedPackets = 0;
@@ -842,10 +852,10 @@ static DECLCALLBACK(int) drvNATConstruct(PPDMDRVINS pDrvIns, PCFGMNODE pCfgHandl
     if (RT_FAILURE(rc) && rc != VERR_CFGM_VALUE_NOT_FOUND)
         return PDMDrvHlpVMSetError(pDrvIns, rc, RT_SRC_POS, N_("NAT#%d: configuration query for \"NextServer\" string failed"), pDrvIns->iInstance);
 #ifdef VBOX_WITH_SLIRP_DNS_PROXY
-    bool fDNSProxy;
-    rc = CFGMR3QueryBool(pCfgHandle, "DNSProxy", &fDNSProxy);
+    int fDNSProxy;
+    rc = CFGMR3QueryS32(pCfgHandle, "DNSProxy", &fDNSProxy);
     if (rc == VERR_CFGM_VALUE_NOT_FOUND)
-        fDNSProxy = false;
+        fDNSProxy = 0;
 #endif
 
     /*

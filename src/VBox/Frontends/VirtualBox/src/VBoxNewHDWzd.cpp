@@ -374,6 +374,7 @@ void VBoxNewHDWzd::updateSizeToolTip (quint64 aSizeB)
  */
 bool VBoxNewHDWzd::createHardDisk()
 {
+    KHardDiskVariant variant = KHardDiskVariant_Standard;
     QString loc = location();
 
     AssertReturn (!loc.isEmpty(), false);
@@ -392,10 +393,10 @@ bool VBoxNewHDWzd::createHardDisk()
         return false;
     }
 
-    if (isDynamicStorage())
-        progress = hd.CreateDynamicStorage (mCurrentSize);
-    else
-        progress = hd.CreateFixedStorage (mCurrentSize);
+    if (!isDynamicStorage())
+        variant = (KHardDiskVariant)(KHardDiskVariant_Standard | KHardDiskVariant_Fixed);
+
+    progress = hd.CreateBaseStorage (mCurrentSize, variant);
 
     if (!hd.isOk())
     {

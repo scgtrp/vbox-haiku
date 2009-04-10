@@ -142,6 +142,10 @@ DECLINLINE(int) emDisCoreOne(PVM pVM, DISCPUSTATE *pCpu, RTGCUINTPTR InstrGC, ui
 /**
  * Disassembles one instruction.
  *
+ * @returns VBox status code, see SELMToFlatEx and EMInterpretDisasOneEx for
+ *          details.
+ * @retval  VERR_INTERNAL_ERROR on DISCoreOneEx failure.
+ *
  * @param   pVM             The VM handle.
  * @param   pCtxCore        The context core (used for both the mode and instruction).
  * @param   pCpu            Where to return the parsed instruction info.
@@ -165,6 +169,9 @@ VMMDECL(int) EMInterpretDisasOne(PVM pVM, PCCPUMCTXCORE pCtxCore, PDISCPUSTATE p
  * Disassembles one instruction.
  *
  * This is used by internally by the interpreter and by trap/access handlers.
+ *
+ * @returns VBox status code.
+ * @retval  VERR_INTERNAL_ERROR on DISCoreOneEx failure.
  *
  * @param   pVM             The VM handle.
  * @param   GCPtrInstr      The flat address of the instruction.
@@ -310,20 +317,7 @@ DECLINLINE(int) emRamRead(PVM pVM, PCPUMCTXCORE pCtxCore, void *pvDst, RTGCPTR G
      * instruction and it either flushed the TLB or the CPU reused it.
      */
 #endif
-#ifdef VBOX_WITH_NEW_PHYS_CODE
     return PGMPhysInterpretedReadNoHandlers(pVM, pCtxCore, pvDst, GCPtrSrc, cb, /*fMayTrap*/ false);
-#else
-    NOREF(pCtxCore);
-# ifdef IN_RC
-    RTGCPHYS GCPhys;
-    rc = PGMPhysGCPtr2GCPhys(pVM, GCPtrSrc, &GCPhys);
-    AssertRCReturn(rc, rc);
-    PGMPhysRead(pVM, GCPhys, pvDst, cb);
-    return VINF_SUCCESS;
-# else
-    return PGMPhysReadGCPtr(pVM, pvDst, GCPtrSrc, cb);
-# endif
-#endif
 }
 
 
@@ -341,26 +335,7 @@ DECLINLINE(int) emRamWrite(PVM pVM, PCPUMCTXCORE pCtxCore, RTGCPTR GCPtrDst, con
      * access doesn't cost us much (see PGMPhysGCPtr2GCPhys()).
      */
 #endif
-#ifdef VBOX_WITH_NEW_PHYS_CODE
     return PGMPhysInterpretedWriteNoHandlers(pVM, pCtxCore, GCPtrDst, pvSrc, cb, /*fMayTrap*/ false);
-#else
-    NOREF(pCtxCore);
-# ifdef IN_RC
-    uint64_t fFlags;
-    RTGCPHYS GCPhys;
-    rc = PGMGstGetPage(pVM, GCPtrDst, &fFlags, &GCPhys);
-    if (RT_FAILURE(rc))
-        return rc;
-    if (    !(fFlags & X86_PTE_RW)
-        &&  (CPUMGetGuestCR0(pVM) & X86_CR0_WP))
-        return VERR_ACCESS_DENIED;
-
-    PGMPhysWrite(pVM, GCPhys + ((RTGCUINTPTR)GCPtrDst & PAGE_OFFSET_MASK), pvSrc, cb);
-    return VINF_SUCCESS;
-# else
-    return PGMPhysWriteGCPtr(pVM, GCPtrDst, pvSrc, cb);
-# endif
-#endif
 }
 
 
@@ -408,6 +383,7 @@ static const char *emGetMnemonic(PDISCPUSTATE pCpu)
         case OP_SBB:        return "Sbb";
         case OP_RDTSC:      return "Rdtsc";
         case OP_STI:        return "Sti";
+        case OP_CLI:        return "Cli";
         case OP_XADD:       return "XAdd";
         case OP_HLT:        return "Hlt";
         case OP_IRET:       return "Iret";
@@ -1341,11 +1317,7 @@ static int emInterpretStosWD(PVM pVM, PDISCPUSTATE pCpu, PCPUMCTXCORE pRegFrame,
     {
         LogFlow(("emInterpretStosWD dest=%04X:%RGv (%RGv) cbSize=%d\n", pRegFrame->es, GCOffset, GCDest, cbSize));
 
-#ifdef VBOX_WITH_NEW_PHYS_CODE
         rc = emRamWrite(pVM, pRegFrame, GCDest, &pRegFrame->rax, cbSize);
-#else
-        rc = PGMPhysWriteGCPtr(pVM, GCDest, &pRegFrame->rax, cbSize);
-#endif
         if (RT_FAILURE(rc))
             return VERR_EM_INTERPRETER;
         Assert(rc == VINF_SUCCESS);
@@ -1402,11 +1374,7 @@ static int emInterpretStosWD(PVM pVM, PDISCPUSTATE pCpu, PCPUMCTXCORE pRegFrame,
         /* REP case */
         while (cTransfers)
         {
-#ifdef VBOX_WITH_NEW_PHYS_CODE
             rc = emRamWrite(pVM, pRegFrame, GCDest, &pRegFrame->rax, cbSize);
-#else
-            rc = PGMPhysWriteGCPtr(pVM, GCDest, &pRegFrame->rax, cbSize);
-#endif
             if (RT_FAILURE(rc))
             {
                 rc = VERR_EM_INTERPRETER;
@@ -2433,6 +2401,12 @@ static int emInterpretLLdt(PVM pVM, PDISCPUSTATE pCpu, PCPUMCTXCORE pRegFrame, R
         return VERR_EM_INTERPRETER;
     }
 
+#ifdef IN_RING0
+    /* Only for the VT-x real-mode emulation case. */
+    AssertReturn(CPUMIsGuestInRealMode(pVM), VERR_EM_INTERPRETER);
+    CPUMSetGuestLDTR(pVM, sel);
+    return VINF_SUCCESS;
+#else
     if (sel == 0)
     {
         if (CPUMGetHyperLDTR(pVM) == 0)
@@ -2443,6 +2417,7 @@ static int emInterpretLLdt(PVM pVM, PDISCPUSTATE pCpu, PCPUMCTXCORE pRegFrame, R
     }
     //still feeling lazy
     return VERR_EM_INTERPRETER;
+#endif
 }
 
 #ifdef IN_RING0
@@ -2458,8 +2433,7 @@ static int emInterpretLIGdt(PVM pVM, PDISCPUSTATE pCpu, PCPUMCTXCORE pRegFrame, 
     Log(("Emulate %s at %RGv\n", emGetMnemonic(pCpu), (RTGCPTR)pRegFrame->rip));
 
     /* Only for the VT-x real-mode emulation case. */
-    if (!CPUMIsGuestInRealMode(pVM))
-        return VERR_EM_INTERPRETER;
+    AssertReturn(CPUMIsGuestInRealMode(pVM), VERR_EM_INTERPRETER);
 
     int rc = DISQueryParamVal(pRegFrame, pCpu, &pCpu->param1, &param1, PARAM_SOURCE);
     if(RT_FAILURE(rc))
@@ -2584,6 +2558,40 @@ static int emInterpretRdtsc(PVM pVM, PDISCPUSTATE pCpu, PCPUMCTXCORE pRegFrame, 
     return EMInterpretRdtsc(pVM, pRegFrame);
 }
 
+/**
+ * Interpret RDPMC
+ *
+ * @returns VBox status code.
+ * @param   pVM         The VM handle.
+ * @param   pRegFrame   The register frame.
+ *
+ */
+VMMDECL(int) EMInterpretRdpmc(PVM pVM, PCPUMCTXCORE pRegFrame)
+{
+    unsigned uCR4 = CPUMGetGuestCR4(pVM);
+
+    /* If X86_CR4_PCE is not set, then CPL must be zero. */
+    if (    !(uCR4 & X86_CR4_PCE)
+        &&  CPUMGetGuestCPL(pVM, pRegFrame) != 0)
+    {
+        Assert(CPUMGetGuestCR0(pVM) & X86_CR0_PE);
+        return VERR_EM_INTERPRETER; /* genuine #GP */
+    }
+
+    /* Just return zero here; rather tricky to properly emulate this, especially as the specs are a mess. */
+    pRegFrame->rax = 0;
+    pRegFrame->rdx = 0;
+    /* @todo We should trigger a #GP here if the cpu doesn't support the index in ecx. */
+    return VINF_SUCCESS;
+}
+
+/**
+ * RDPMC Emulation
+ */
+static int emInterpretRdpmc(PVM pVM, PDISCPUSTATE pCpu, PCPUMCTXCORE pRegFrame, RTGCPTR pvFault, uint32_t *pcbSize)
+{
+    return EMInterpretRdpmc(pVM, pRegFrame);
+}
 
 /**
  * MONITOR Emulation.
@@ -2674,7 +2682,7 @@ static const char *emMSRtoString(uint32_t uMsr)
     case MSR_IA32_BIOS_UPDT_TRIG:
         return "Unsupported MSR_IA32_BIOS_UPDT_TRIG";
     case MSR_IA32_TSC:
-        return "Unsupported MSR_IA32_TSC";
+        return "MSR_IA32_TSC";
     case MSR_IA32_MTRR_CAP:
         return "Unsupported MSR_IA32_MTRR_CAP";
     case MSR_IA32_MCP_CAP:
@@ -2697,6 +2705,14 @@ static const char *emMSRtoString(uint32_t uMsr)
         return "Unsupported MSR_IA32_MC0_CTL";
     case MSR_IA32_MC0_STATUS:
         return "Unsupported MSR_IA32_MC0_STATUS";
+    case MSR_IA32_PERFEVTSEL0:
+        return "Unsupported MSR_IA32_PERFEVTSEL0";
+    case MSR_IA32_PERFEVTSEL1:
+        return "Unsupported MSR_IA32_PERFEVTSEL1";
+    case MSR_IA32_PERF_STATUS:
+        return "Unsupported MSR_IA32_PERF_STATUS";
+    case MSR_IA32_PERF_CTL:
+        return "Unsupported MSR_IA32_PERF_CTL";
     }
     return "Unknown MSR";
 }
@@ -2733,6 +2749,10 @@ VMMDECL(int) EMInterpretRdmsr(PVM pVM, PCPUMCTXCORE pRegFrame)
 
     switch (pRegFrame->ecx)
     {
+    case MSR_IA32_TSC:
+        val = TMCpuTickGet(pVM);
+        break;
+
     case MSR_IA32_APICBASE:
         rc = PDMApicGetBase(pVM, &val);
         AssertRC(rc);
@@ -3181,11 +3201,11 @@ DECLINLINE(int) emInterpretInstructionCPU(PVM pVM, PDISCPUSTATE pCpu, PCPUMCTXCO
         INTERPRET_CASE(OP_CPUID,CpuId);
         INTERPRET_CASE(OP_MOV_CR,MovCRx);
         INTERPRET_CASE(OP_MOV_DR,MovDRx);
-        INTERPRET_CASE(OP_LLDT,LLdt);
 #ifdef IN_RING0
         INTERPRET_CASE_EX_DUAL_PARAM2(OP_LIDT, LIdt, LIGdt);
         INTERPRET_CASE_EX_DUAL_PARAM2(OP_LGDT, LGdt, LIGdt);
 #endif
+        INTERPRET_CASE(OP_LLDT,LLdt);
         INTERPRET_CASE(OP_LMSW,Lmsw);
 #ifdef EM_EMULATE_SMSW
         INTERPRET_CASE(OP_SMSW,Smsw);
@@ -3201,6 +3221,7 @@ DECLINLINE(int) emInterpretInstructionCPU(PVM pVM, PDISCPUSTATE pCpu, PCPUMCTXCO
         INTERPRET_CASE_EX_LOCK_PARAM2(OP_BTR,Btr, BitTest, EMEmulateBtr, EMEmulateLockBtr);
         INTERPRET_CASE_EX_PARAM2(OP_BTS,Bts, BitTest, EMEmulateBts);
         INTERPRET_CASE_EX_PARAM2(OP_BTC,Btc, BitTest, EMEmulateBtc);
+        INTERPRET_CASE(OP_RDPMC,Rdpmc);
         INTERPRET_CASE(OP_RDTSC,Rdtsc);
         INTERPRET_CASE(OP_CMPXCHG, CmpXchg);
 #ifdef IN_RC

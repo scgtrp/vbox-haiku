@@ -44,6 +44,7 @@ FORMS = \
     ui/VBoxVMSettingsGeneral.ui \
     ui/VBoxVMSettingsHD.ui \
     ui/VBoxVMSettingsNetwork.ui \
+    ui/VBoxVMSettingsNetworkDetails.ui \
     ui/VBoxVMSettingsParallel.ui \
     ui/VBoxVMSettingsSF.ui \
     ui/VBoxVMSettingsSFDetails.ui \
@@ -55,7 +56,9 @@ FORMS = \
     ui/VBoxGLSettingsInput.ui \
     ui/VBoxGLSettingsUpdate.ui \
     ui/VBoxGLSettingsLanguage.ui \
-    ui/VBoxImportApplianceWgt.ui \
+    ui/VBoxGLSettingsNetwork.ui \
+    ui/VBoxGLSettingsNetworkDetails.ui \
+    ui/VBoxApplianceEditorWgt.ui \
     ui/VBoxImportApplianceWzd.ui \
     ui/VBoxExportApplianceWzd.ui
 

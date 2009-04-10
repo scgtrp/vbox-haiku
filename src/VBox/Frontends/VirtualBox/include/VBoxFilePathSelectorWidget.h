@@ -23,13 +23,22 @@
 #ifndef __VBoxFilePathSelectorWidget_h__
 #define __VBoxFilePathSelectorWidget_h__
 
+/* VBox includes */
 #include "QIWithRetranslateUI.h"
 
 /* Qt includes */
 #include <QComboBox>
 
+/* VBox forward declarations */
+class QILabel;
+
+/* Qt forward declarations */
 class QFileIconProvider;
 class QAction;
+class QPushButton;
+
+////////////////////////////////////////////////////////////////////////////////
+// VBoxFilePathSelectorWidget
 
 class VBoxFilePathSelectorWidget: public QIWithRetranslateUI<QComboBox>
 {
@@ -61,6 +70,9 @@ public:
 
     void setFileFilters (const QString& aFilters);
     QString fileFilters() const;
+
+    void setDefaultSaveExt (const QString &aExt);
+    QString defaultSaveExt() const;
 
     void resetModified();
     bool isModified() const;
@@ -106,6 +118,7 @@ private:
     QString mPath;
     QString mHomeDir;
     QString mFileFilters;
+    QString mDefaultSaveExt;
     QString mFileDialogTitle;
     QString mNoneStr;
     QString mNoneTip;
@@ -114,6 +127,51 @@ private:
     bool mIsMouseAwaited;
 
     bool mModified;
+};
+
+////////////////////////////////////////////////////////////////////////////////
+// VBoxEmptyFileSelector
+
+class VBoxEmptyFileSelector: public QIWithRetranslateUI<QWidget>
+{
+    Q_OBJECT;
+
+public:
+    VBoxEmptyFileSelector (QWidget *aParent = NULL);
+
+    void setPath (const QString& aPath);
+    QString path() const;
+
+    bool isModified () const { return mIsModified; }
+    void resetModified () { mIsModified = false; }
+
+    void setFileDialogTitle (const QString& aTitle);
+    QString fileDialogTitle() const;
+
+    void setFileFilters (const QString& aFilters);
+    QString fileFilters() const;
+
+    void setHomeDir (const QString& aDir);
+    QString homeDir() const;
+
+signals:
+    void pathChanged (QString);
+
+protected:
+    void retranslateUi();
+
+private slots:
+    void choose();
+
+private:
+    /* Private member vars */
+    QILabel *mLabel;
+    QPushButton *mSelectButton;
+    QString mFileDialogTitle;
+    QString mFileFilters;
+    QString mHomeDir;
+    bool mIsModified;
+    QString mPath;
 };
 
 #endif /* __VBoxFilePathSelectorWidget_h__ */

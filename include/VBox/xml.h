@@ -297,7 +297,7 @@ public:
     /**
      * Possible file access modes.
      */
-    enum Mode { Mode_Read, Mode_Write, Mode_ReadWrite };
+    enum Mode { Mode_Read, Mode_WriteCreate, Mode_Overwrite, Mode_ReadWrite };
 
     /**
      * Opens a file with the given name in the given mode. If @a aMode is Read
@@ -421,9 +421,9 @@ public:
                                              xmlParserCtxt *aCtxt);
 
 private:
-    /* Obscure class data */
+    /* Obscure class data. */
     struct Data;
-    std::auto_ptr<Data> m;
+    struct Data *m;
 };
 
 /**
@@ -618,7 +618,7 @@ public:
 private:
     /* Obscure class data */
     struct Data;
-    std::auto_ptr<Data> m;
+    struct Data *m;
 
     static int ReadCallback(void *aCtxt, char *aBuf, int aLen);
     static int CloseCallback (void *aCtxt);

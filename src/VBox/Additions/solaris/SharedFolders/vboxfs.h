@@ -30,21 +30,7 @@ extern "C" {
 #define MAX_NLS_NAME    32
 
 /** The module name. */
-#define DEVICE_NAME              "vboxvfs"
-/** The module description as seen in 'modinfo'. */
-#define DEVICE_DESC              "filesystem for VirtualBox Shared Folders"
-
-/* Not sure if we need this; it seems only necessary for kernel mounts. */
-#if 0
-typedef struct vboxvfs_mountinfo
-{
-    char name[MAX_HOST_NAME];
-    char nls_name[MAX_NLS_NAME];
-    int uid;
-    int gid;
-    int ttl;
-} vboxvfs_mountinfo_t;
-#endif
+#define DEVICE_NAME              "vboxfs"
 
 #ifdef _KERNEL
 

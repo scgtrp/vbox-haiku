@@ -5,7 +5,7 @@
  *  A template to generate a XPCOM IDL compatible interface definition file
  *  from the generic interface definition expressed in XML.
 
-     Copyright (C) 2006-2009 Sun Microsystems, Inc.
+     Copyright (C) 2008-2009 Sun Microsystems, Inc.
 
      This file is part of VirtualBox Open Source Edition (OSE), as
      available from http://www.virtualbox.org. This file is free software;
@@ -112,6 +112,39 @@
  *
  *  Source    : src/VBox/Main/idl/VirtualBox.xidl
  *  Generator : src/VBox/Main/idl/xpcidl.xsl
+ *
+ *  This file contains portions from the following Mozilla XPCOM files:
+ *      xpcom/include/xpcom/nsID.h
+ *      xpcom/include/nsIException.h
+ *      xpcom/include/nsprpub/prtypes.h
+ *      xpcom/include/xpcom/nsISupportsBase.h
+ *
+ * These files were originally triple-licensed (MPL/GPL2/LGPL2.1). Sun
+ * elects to distribute this derived work under the LGPL2.1 only.
+ */
+
+/*
+ * Copyright (C) 2008-2009 Sun Microsystems, Inc.
+ *
+ * This file is part of a free software library; you can redistribute
+ * it and/or modify it under the terms of the GNU Lesser General
+ * Public License version 2.1 as published by the Free Software
+ * Foundation and shipped in the "COPYING" file with this library.
+ * The library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY of any kind.
+ *
+ * Sun LGPL Disclaimer: For the avoidance of doubt, except that if
+ * any license choice other than GPL or LGPL is available it will
+ * apply instead, Sun elects to use only the Lesser General Public
+ * License version 2.1 (LGPLv2) at this time for any software where
+ * a choice of LGPL license versions is made available with the
+ * language indicating that LGPLv2 or any later version may be used,
+ * or where a choice of which version of the LGPL is applied is
+ * otherwise unspecified.
+ *
+ * Please contact Sun Microsystems, Inc., 4150 Network Circle, Santa
+ * Clara, CA 95054 USA or visit http://www.sun.com if you need
+ * additional information or have any questions.
  */
 
 #ifndef ___VirtualBox_CXPCOM_h
@@ -418,7 +451,7 @@ struct nsISupports_vtbl {
    *                          instance, NS_NOINTERFACE if it is not.
    * NS_ERROR_INVALID_POINTER if aInstancePtr is NULL.
    */
-  nsresult (*QueryInterface)(nsISupports *this_, const nsID *iid, void **resultp);
+  nsresult (*QueryInterface)(nsISupports *pThis, const nsID *iid, void **resultp);
   /**
    * Increases the reference count for this interface.
    * The associated instance will not be deleted unless
@@ -426,7 +459,7 @@ struct nsISupports_vtbl {
    *
    * @return The resulting reference count.
    */
-  nsresult (*AddRef)(nsISupports *this_);
+  nsresult (*AddRef)(nsISupports *pThis);
 
   /**
    * Decreases the reference count for this interface.
@@ -435,7 +468,7 @@ struct nsISupports_vtbl {
    *
    * @return The resulting reference count.
    */
-  nsresult (*Release)(nsISupports *this_);
+  nsresult (*Release)(nsISupports *pThis);
 
 };
 
@@ -456,34 +489,34 @@ struct nsIException_vtbl {
   struct nsISupports_vtbl nsisupports;
 
   /* readonly attribute string message; */
-  nsresult (*GetMessage)(nsIException *this_, PRUnichar * *aMessage);
+  nsresult (*GetMessage)(nsIException *pThis, PRUnichar * *aMessage);
 
   /* readonly attribute nsresult (*result; */
-  nsresult (*GetResult)(nsIException *this_, nsresult *aResult);
+  nsresult (*GetResult)(nsIException *pThis, nsresult *aResult);
 
   /* readonly attribute string name; */
-  nsresult (*GetName)(nsIException *this_, PRUnichar * *aName);
+  nsresult (*GetName)(nsIException *pThis, PRUnichar * *aName);
 
   /* readonly attribute string filename; */
-  nsresult (*GetFilename)(nsIException *this_, PRUnichar * *aFilename);
+  nsresult (*GetFilename)(nsIException *pThis, PRUnichar * *aFilename);
 
   /* readonly attribute PRUint32 lineNumber; */
-  nsresult (*GetLineNumber)(nsIException *this_, PRUint32 *aLineNumber);
+  nsresult (*GetLineNumber)(nsIException *pThis, PRUint32 *aLineNumber);
 
   /* readonly attribute PRUint32 columnNumber; */
-  nsresult (*GetColumnNumber)(nsIException *this_, PRUint32 *aColumnNumber);
+  nsresult (*GetColumnNumber)(nsIException *pThis, PRUint32 *aColumnNumber);
 
   /* readonly attribute nsIStackFrame location; */
-  nsresult (*GetLocation)(nsIException *this_, nsIStackFrame * *aLocation);
+  nsresult (*GetLocation)(nsIException *pThis, nsIStackFrame * *aLocation);
 
   /* readonly attribute nsIException inner; */
-  nsresult (*GetInner)(nsIException *this_, nsIException * *aInner);
+  nsresult (*GetInner)(nsIException *pThis, nsIException * *aInner);
 
   /* readonly attribute nsISupports data; */
-  nsresult (*GetData)(nsIException *this_, nsISupports * *aData);
+  nsresult (*GetData)(nsIException *pThis, nsISupports * *aData);
 
   /* string toString (); */
-  nsresult (*ToString)(nsIException *this_, PRUnichar **_retval);
+  nsresult (*ToString)(nsIException *pThis, PRUnichar **_retval);
 };
 
 struct nsIException {
@@ -503,28 +536,28 @@ struct nsIStackFrame_vtbl {
   struct nsISupports_vtbl nsisupports;
 
   /* readonly attribute PRUint32 language; */
-  nsresult (*GetLanguage)(nsIStackFrame *this_, PRUint32 *aLanguage);
+  nsresult (*GetLanguage)(nsIStackFrame *pThis, PRUint32 *aLanguage);
 
   /* readonly attribute string languageName; */
-  nsresult (*GetLanguageName)(nsIStackFrame *this_, PRUnichar * *aLanguageName);
+  nsresult (*GetLanguageName)(nsIStackFrame *pThis, PRUnichar * *aLanguageName);
 
   /* readonly attribute string filename; */
-  nsresult (*GetFilename)(nsIStackFrame *this_, PRUnichar * *aFilename);
+  nsresult (*GetFilename)(nsIStackFrame *pThis, PRUnichar * *aFilename);
 
   /* readonly attribute string name; */
-  nsresult (*GetName)(nsIStackFrame *this_, PRUnichar * *aName);
+  nsresult (*GetName)(nsIStackFrame *pThis, PRUnichar * *aName);
 
   /* readonly attribute PRInt32 lineNumber; */
-  nsresult (*GetLineNumber)(nsIStackFrame *this_, PRInt32 *aLineNumber);
+  nsresult (*GetLineNumber)(nsIStackFrame *pThis, PRInt32 *aLineNumber);
 
   /* readonly attribute string sourceLine; */
-  nsresult (*GetSourceLine)(nsIStackFrame *this_, PRUnichar * *aSourceLine);
+  nsresult (*GetSourceLine)(nsIStackFrame *pThis, PRUnichar * *aSourceLine);
 
   /* readonly attribute nsIStackFrame caller; */
-  nsresult (*GetCaller)(nsIStackFrame *this_, nsIStackFrame * *aCaller);
+  nsresult (*GetCaller)(nsIStackFrame *pThis, nsIStackFrame * *aCaller);
 
   /* string toString (); */
-  nsresult (*ToString)(nsIStackFrame *this_, PRUnichar **_retval);
+  nsresult (*ToString)(nsIStackFrame *pThis, PRUnichar **_retval);
 };
 
 struct nsIStackFrame {
@@ -546,23 +579,6 @@ struct nsIStackFrame {
 extern "C" {
 #endif
 
-/* Initialize/Uninitialize XPCOM. */
-VBOXXPCOMC_DECL(void) VBoxComInitialize(IVirtualBox **virtualBox, ISession **session);
-VBOXXPCOMC_DECL(void) VBoxComUninitialize(void);
-
-/* Deallocation functions. */
-VBOXXPCOMC_DECL(void) VBoxComUnallocMem(void *ptr);
-VBOXXPCOMC_DECL(void) VBoxUtf16Free(PRUnichar *pwszString);
-VBOXXPCOMC_DECL(void) VBoxUtf8Free(char *pszString);
-
-/* Converting to and from UTF-8 and UTF-16. */
-VBOXXPCOMC_DECL(int) VBoxUtf16ToUtf8(const PRUnichar *pwszString, char **ppszString);
-VBOXXPCOMC_DECL(int) VBoxUtf8ToUtf16(const char *pszString, PRUnichar **ppwszString);
-
-/* Getting and setting the environment variables. */
-VBOXXPCOMC_DECL(const char *) VBoxGetEnv(const char *pszVar);
-VBOXXPCOMC_DECL(int) VBoxSetEnv(const char *pszVar, const char *pszValue);
-
 
 /**
  * Function table for dynamic linking.
@@ -574,6 +590,9 @@ typedef struct VBOXXPCOMC
     unsigned cb;
     /** The structure version. */
     unsigned uVersion;
+
+    unsigned int (*pfnGetVersion)(void);
+
     void  (*pfnComInitialize)(IVirtualBox **virtualBox, ISession **session);
     void  (*pfnComUninitialize)(void);
 
@@ -584,8 +603,6 @@ typedef struct VBOXXPCOMC
     int   (*pfnUtf16ToUtf8)(const PRUnichar *pwszString, char **ppszString);
     int   (*pfnUtf8ToUtf16)(const char *pszString, PRUnichar **ppwszString);
 
-    const char * (*pfnGetEnv)(const char *pszVar);
-    int   (*pfnSetEnv)(const char *pszVar, const char *pszValue);
     /** Tail version, same as uVersion. */
     unsigned uEndVersion;
 } VBOXXPCOMC;
@@ -826,7 +843,7 @@ typedef PCVBOXXPCOM (*PFNVBOXGETXPCOMCFUNCTIONS)(unsigned uVersion);
       </xsl:call-template>
       <xsl:text>)(</xsl:text>
       <xsl:value-of select="../@name" />
-      <xsl:text> *this_, </xsl:text>
+      <xsl:text> *pThis, </xsl:text>
       <!-- array size -->
       <xsl:text>PRUint32 *</xsl:text>
       <xsl:value-of select="@name"/>
@@ -867,7 +884,7 @@ typedef PCVBOXXPCOM (*PFNVBOXGETXPCOMCFUNCTIONS)(unsigned uVersion);
         </xsl:call-template>
         <xsl:text>)(</xsl:text>
         <xsl:value-of select="../@name" />
-        <xsl:text> *this_, </xsl:text>
+        <xsl:text> *pThis, </xsl:text>
         <xsl:apply-templates select="@type" mode="forwarder"/>
         <xsl:text> *</xsl:text>
         <xsl:value-of select="@name"/>
@@ -883,7 +900,7 @@ typedef PCVBOXXPCOM (*PFNVBOXGETXPCOMCFUNCTIONS)(unsigned uVersion);
           </xsl:call-template>
           <xsl:text>)(</xsl:text>
           <xsl:value-of select="../@name" />
-          <xsl:text> *this_, </xsl:text>
+          <xsl:text> *pThis, </xsl:text>
           <xsl:apply-templates select="@type" mode="forwarder"/>
           <xsl:text> *</xsl:text>
           <xsl:value-of select="@name"/>
@@ -894,7 +911,7 @@ typedef PCVBOXXPCOM (*PFNVBOXGETXPCOMCFUNCTIONS)(unsigned uVersion);
           </xsl:call-template>
           <xsl:text>)(</xsl:text>
           <xsl:value-of select="../@name" />
-          <xsl:text> *this_, </xsl:text>
+          <xsl:text> *pThis, </xsl:text>
           <xsl:apply-templates select="@type" mode="forwarder"/>
           <xsl:text> </xsl:text>
           <xsl:value-of select="@name"/>
@@ -1078,7 +1095,7 @@ typedef PCVBOXXPCOM (*PFNVBOXGETXPCOMCFUNCTIONS)(unsigned uVersion);
     <xsl:text>)(&#x0A;</xsl:text>
     <xsl:text>        </xsl:text>
     <xsl:value-of select="../@name" />
-    <xsl:text> *this_,&#x0A;</xsl:text>
+    <xsl:text> *pThis,&#x0A;</xsl:text>
     <xsl:for-each select="param [position() != last()]">
       <xsl:text>        </xsl:text>
       <xsl:apply-templates select="."/>
@@ -1091,7 +1108,7 @@ typedef PCVBOXXPCOM (*PFNVBOXGETXPCOMCFUNCTIONS)(unsigned uVersion);
   <xsl:if test="not(param)">
     <xsl:text>)(</xsl:text>
     <xsl:value-of select="../@name" />
-    <xsl:text> *this_ );&#x0A;</xsl:text>
+    <xsl:text> *pThis );&#x0A;</xsl:text>
   </xsl:if>
   <xsl:apply-templates select="@if" mode="end"/>
   <xsl:text>&#x0A;</xsl:text>
@@ -1289,11 +1306,11 @@ typedef PCVBOXXPCOM (*PFNVBOXGETXPCOMCFUNCTIONS)(unsigned uVersion);
   <!-- attributes (properties) -->
   <xsl:text>    nsresult (*HasMore)(</xsl:text>
   <xsl:value-of select="@name" />
-  <xsl:text> *this_, PRBool *more);&#x0A;&#x0A;</xsl:text>
+  <xsl:text> *pThis, PRBool *more);&#x0A;&#x0A;</xsl:text>
   <!-- GetNext -->
   <xsl:text>    nsresult (*GetNext)(</xsl:text>
   <xsl:value-of select="@name" />
-  <xsl:text> *this_, </xsl:text>
+  <xsl:text> *pThis, </xsl:text>
   <xsl:apply-templates select="@type" mode="forwarder"/>
   <xsl:text> *next);&#x0A;&#x0A;</xsl:text>
   <xsl:text>};</xsl:text>
@@ -1353,17 +1370,17 @@ typedef PCVBOXXPCOM (*PFNVBOXGETXPCOMCFUNCTIONS)(unsigned uVersion);
   <!-- Count -->
   <xsl:text>    nsresult (*GetCount)(</xsl:text>
   <xsl:value-of select="@name" />
-  <xsl:text> *this_, PRUint32 *aCount);&#x0A;&#x0A;</xsl:text>
+  <xsl:text> *pThis, PRUint32 *aCount);&#x0A;&#x0A;</xsl:text>
   <!-- GetItemAt -->
   <xsl:text>    nsresult (*GetItemAt)(</xsl:text>
   <xsl:value-of select="@name" />
-  <xsl:text> *this_, PRUint32 index, </xsl:text>
+  <xsl:text> *pThis, PRUint32 index, </xsl:text>
   <xsl:apply-templates select="@type" mode="forwarder"/>
   <xsl:text> **item);&#x0A;&#x0A;</xsl:text>
   <!-- Enumerate -->
   <xsl:text>    nsresult (*Enumerate)(</xsl:text>
   <xsl:value-of select="@name" />
-  <xsl:text> *this_, </xsl:text>
+  <xsl:text> *pThis, </xsl:text>
   <xsl:apply-templates select="@enumerator"/>
   <xsl:text> **enumerator);&#x0A;&#x0A;</xsl:text>
   <!-- other extra attributes (properties) -->

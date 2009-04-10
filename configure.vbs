@@ -1300,7 +1300,7 @@ sub CheckForMidl()
       exit sub
    end if
 
-   CfgPrint "MAIN_IDL = " & strMidl
+   CfgPrint "VBOX_MAIN_IDL = " & strMidl
    PrintResult "Midl.exe", strMidl
 end sub
 
@@ -1974,7 +1974,7 @@ Sub Main
    CheckForlibSDL strOptlibSDL
    ' Don't check for these libraries by default as they are part of OSE
    ' Using external libs can add a dependency to iconv
-   if (strOptXml2 >> "") then
+   if (strOptXml2 <> "") then
       CheckForXml2 strOptXml2
    end if
    if (strOptXslt <> "") then

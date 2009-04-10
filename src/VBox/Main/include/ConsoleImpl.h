@@ -115,7 +115,7 @@ public:
     STDMETHOD(COMGETTER(Display)) (IDisplay **aDisplay);
     STDMETHOD(COMGETTER(Debugger)) (IMachineDebugger **aDebugger);
     STDMETHOD(COMGETTER(USBDevices)) (ComSafeArrayOut (IUSBDevice *, aUSBDevices));
-    STDMETHOD(COMGETTER(RemoteUSBDevices)) (IHostUSBDeviceCollection **aRemoteUSBDevices);
+    STDMETHOD(COMGETTER(RemoteUSBDevices)) (ComSafeArrayOut (IHostUSBDevice *, aRemoteUSBDevices));
     STDMETHOD(COMGETTER(RemoteDisplayInfo)) (IRemoteDisplayInfo **aRemoteDisplayInfo);
     STDMETHOD(COMGETTER(SharedFolders)) (ComSafeArrayOut (ISharedFolder *, aSharedFolders));
 
@@ -178,6 +178,7 @@ public:
     HRESULT onNetworkAdapterChange (INetworkAdapter *aNetworkAdapter);
     HRESULT onSerialPortChange (ISerialPort *aSerialPort);
     HRESULT onParallelPortChange (IParallelPort *aParallelPort);
+    HRESULT onStorageControllerChange ();
     HRESULT onVRDPServerChange();
     HRESULT onUSBControllerChange();
     HRESULT onSharedFolderChange (BOOL aGlobal);
@@ -456,9 +457,9 @@ private:
                         const char *pszFormat, va_list args);
 
     static DECLCALLBACK(void)
-    setVMRuntimeErrorCallback (PVM pVM, void *pvUser, bool fFatal,
-                               const char *pszErrorID,
-                               const char *pszFormat, va_list args);
+    setVMRuntimeErrorCallback (PVM pVM, void *pvUser, uint32_t fFatal,
+                               const char *pszErrorId,
+                               const char *pszFormat, va_list va);
 
     HRESULT                     captureUSBDevices (PVM pVM);
     void                        detachAllUSBDevices (bool aDone);
@@ -543,6 +544,7 @@ private:
     PPDMLED     mapFDLeds[2];
     PPDMLED     mapIDELeds[4];
     PPDMLED     mapSATALeds[30];
+    PPDMLED     mapSCSILeds[16];
     PPDMLED     mapNetworkLeds[8];
     PPDMLED     mapSharedFolderLed;
     PPDMLED     mapUSBLed[2];

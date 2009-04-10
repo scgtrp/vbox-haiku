@@ -52,6 +52,7 @@ RTDECL(int) RTGetOptInit(PRTGETOPTSTATE pState, int argc, char **argv,
     pState->cOptions     = cOptions;
     pState->iNext        = iFirst;
     pState->pszNextShort = NULL;
+    pState->pDef         = NULL;
 
     /* validate the options. */
     for (size_t i = 0; i < cOptions; i++)
@@ -228,6 +229,7 @@ static PCRTGETOPTDEF rtGetOptSearchShort(int chOption, PCRTGETOPTDEF paOptions, 
 
 RTDECL(int) RTGetOpt(PRTGETOPTSTATE pState, PRTGETOPTUNION pValueUnion)
 {
+    pState->pDef = NULL;
     /*
      * Make sure the union is completely cleared out, whatever happens below.
      */
@@ -275,7 +277,7 @@ RTDECL(int) RTGetOpt(PRTGETOPTSTATE pState, PRTGETOPTUNION pValueUnion)
         pszArgThis = pState->argv[iThis];
 
         /*
-         * Do a long option search first and the a short option one.
+         * Do a long option search first and then a short option one.
          * This way we can make sure single dash long options doesn't
          * get mixed up with short ones.
          */
@@ -465,6 +467,7 @@ RTDECL(int) RTGetOpt(PRTGETOPTSTATE pState, PRTGETOPTUNION pValueUnion)
             }
         }
 
+        pState->pDef = pOpt;
         return pOpt->iShort;
     }
 

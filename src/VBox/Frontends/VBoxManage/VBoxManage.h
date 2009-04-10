@@ -36,6 +36,12 @@
 # define USE_XPCOM_QUEUE
 #endif
 
+////////////////////////////////////////////////////////////////////////////////
+//
+// definitions
+//
+////////////////////////////////////////////////////////////////////////////////
+
 /** @name Syntax diagram category.
  * @{ */
 #define USAGE_DUMPOPTS              0
@@ -49,8 +55,8 @@
 #define USAGE_CONTROLVM             RT_BIT_64(7)
 #define USAGE_DISCARDSTATE          RT_BIT_64(8)
 #define USAGE_SNAPSHOT              RT_BIT_64(9)
-#define USAGE_REGISTERIMAGE         RT_BIT_64(10)
-#define USAGE_UNREGISTERIMAGE       RT_BIT_64(11)
+#define USAGE_OPENMEDIUM            RT_BIT_64(10)
+#define USAGE_CLOSEMEDIUM           RT_BIT_64(11)
 #define USAGE_SHOWHDINFO            RT_BIT_64(12)
 #define USAGE_CREATEHD              RT_BIT_64(13)
 #define USAGE_MODIFYHD              RT_BIT_64(14)
@@ -88,6 +94,7 @@
 #define USAGE_IMPORTAPPLIANCE       RT_BIT_64(44)
 #define USAGE_EXPORTAPPLIANCE       RT_BIT_64(45)
 #define USAGE_HOSTONLYIFS           RT_BIT_64(46)
+#define USAGE_DHCPSERVER            RT_BIT_64(47)
 #define USAGE_ALL                   (~(uint64_t)0)
 /** @} */
 
@@ -122,9 +129,19 @@ typedef enum
     VMINFO_COMPACT          = 5
 } VMINFO_DETAILS;
 
-/*
- * Prototypes
- */
+////////////////////////////////////////////////////////////////////////////////
+//
+// global variables
+//
+////////////////////////////////////////////////////////////////////////////////
+
+extern bool g_fDetailedProgress;        // in VBoxManage.cpp
+
+////////////////////////////////////////////////////////////////////////////////
+//
+// prototypes
+//
+////////////////////////////////////////////////////////////////////////////////
 
 /* VBoxManageHelp.cpp */
 void printUsage(USAGECATEGORY u64Cmd);
@@ -190,6 +207,9 @@ int handleUSBFilter(HandlerArg *a);
 
 /* VBoxManageHostonly.cpp */
 int handleHostonlyIf(HandlerArg *a);
+
+/* VBoxManageHostonly.cpp */
+int handleDHCPServer(HandlerArg *a);
 
 #endif /* !VBOX_ONLY_DOCS */
 unsigned long VBoxSVNRev();

@@ -201,7 +201,16 @@ VMMR3DECL(int) MMR3InitUVM(PUVM pUVM)
     /*
      * Init the heap.
      */
-    return mmR3HeapCreateU(pUVM, &pUVM->mm.s.pHeap);
+    int rc = mmR3HeapCreateU(pUVM, &pUVM->mm.s.pHeap);
+    if (RT_SUCCESS(rc))
+    {
+        rc = mmR3UkHeapCreateU(pUVM, &pUVM->mm.s.pUkHeap);
+        if (RT_SUCCESS(rc))
+            return VINF_SUCCESS;
+        mmR3HeapDestroy(pUVM->mm.s.pHeap);
+        pUVM->mm.s.pHeap = NULL;
+    }
+    return rc;
 }
 
 
@@ -377,7 +386,7 @@ VMMR3DECL(int) MMR3InitPaging(PVM pVM)
     else if (rc == VERR_CFGM_VALUE_NOT_FOUND)
         enmPriority = GMMPRIORITY_NORMAL;
     else
-        AssertMsgRCReturn(rc, ("Configuration error: Failed to query string \"MM/Priority\", rc=%Rrc.\n", rc), rc);
+        AssertMsgFailedReturn(("Configuration error: Failed to query string \"MM/Priority\", rc=%Rrc.\n", rc), rc);
 
     /*
      * Make the initial memory reservation with GMM.
@@ -411,7 +420,6 @@ VMMR3DECL(int) MMR3InitPaging(PVM pVM)
     /*
      * Setup the base ram (PGM).
      */
-#ifdef VBOX_WITH_NEW_PHYS_CODE
     if (cbRam > offRamHole)
     {
         rc = PGMR3PhysRegisterRam(pVM, 0, offRamHole, "Base RAM");
@@ -426,32 +434,13 @@ VMMR3DECL(int) MMR3InitPaging(PVM pVM)
         /** @todo RamPreAlloc should be handled at the very end of the VM creation. (lazy bird) */
         return VM_SET_ERROR(pVM, VERR_NOT_IMPLEMENTED, "TODO: RamPreAlloc");
     }
-#else
-    rc = PGMR3PhysRegisterRam(pVM, 0, cbRam, "Base RAM");
-    if (RT_SUCCESS(rc))
-    {
-        /*
-         * Allocate the first chunk, as we'll map ROM ranges there.
-         * If requested, allocated the rest too.
-         */
-        RTGCPHYS GCPhys = (RTGCPHYS)0;
-        rc = PGM3PhysGrowRange(pVM, &GCPhys);
-        if (RT_SUCCESS(rc) && fPreAlloc)
-            for (GCPhys = PGM_DYNAMIC_CHUNK_SIZE;
-                 GCPhys < cbRam && RT_SUCCESS(rc);
-                 GCPhys += PGM_DYNAMIC_CHUNK_SIZE)
-                rc = PGM3PhysGrowRange(pVM, &GCPhys);
-    }
-#endif
 
-#ifdef VBOX_WITH_NEW_PHYS_CODE
     /*
      * Enabled mmR3UpdateReservation here since we don't want the
      * PGMR3PhysRegisterRam calls above mess things up.
      */
     pVM->mm.s.fDoneMMR3InitPaging = true;
     AssertMsg(pVM->mm.s.cBasePages == cBasePages || RT_FAILURE(rc), ("%RX64 != %RX64\n", pVM->mm.s.cBasePages, cBasePages));
-#endif
 
     LogFlow(("MMR3InitPaging: returns %Rrc\n", rc));
     return rc;
@@ -475,39 +464,20 @@ VMMR3DECL(int) MMR3Term(PVM pVM)
     mmR3PagePoolTerm(pVM);
 
     /*
-     * Release locked memory.
-     * (Associated record are released by the heap.)
-     */
-    PMMLOCKEDMEM pLockedMem = pVM->mm.s.pLockedMem;
-    while (pLockedMem)
-    {
-        int rc = SUPPageUnlock(pLockedMem->pv);
-        AssertMsgRC(rc, ("SUPPageUnlock(%p) -> rc=%d\n", pLockedMem->pv, rc));
-        switch (pLockedMem->eType)
-        {
-            case MM_LOCKED_TYPE_HYPER:
-                rc = SUPPageFree(pLockedMem->pv, pLockedMem->cb >> PAGE_SHIFT);
-                AssertMsgRC(rc, ("SUPPageFree(%p) -> rc=%d\n", pLockedMem->pv, rc));
-                break;
-            case MM_LOCKED_TYPE_HYPER_NOFREE:
-            case MM_LOCKED_TYPE_HYPER_PAGES:
-            case MM_LOCKED_TYPE_PHYS:
-                /* nothing to do. */
-                break;
-        }
-        /* next */
-        pLockedMem = pLockedMem->pNext;
-    }
-
-    /*
      * Zero stuff to detect after termination use of the MM interface
      */
     pVM->mm.s.offLookupHyper = NIL_OFFSET;
-    pVM->mm.s.pLockedMem     = NULL;
     pVM->mm.s.pHyperHeapR3   = NULL;        /* freed above. */
     pVM->mm.s.pHyperHeapR0   = NIL_RTR0PTR; /* freed above. */
     pVM->mm.s.pHyperHeapRC   = NIL_RTRCPTR; /* freed above. */
     pVM->mm.s.offVM          = 0;           /* init assertion on this */
+
+    /*
+     * Destroy the User-kernel heap here since the support driver session
+     * may have been terminated by the time we get to MMR3TermUVM.
+     */
+    mmR3UkHeapDestroy(pVM->pUVM->mm.s.pUkHeap);
+    pVM->pUVM->mm.s.pUkHeap = NULL;
 
     return VINF_SUCCESS;
 }
@@ -525,8 +495,13 @@ VMMR3DECL(int) MMR3Term(PVM pVM)
 VMMR3DECL(void) MMR3TermUVM(PUVM pUVM)
 {
     /*
-     * Destroy the heap.
+     * Destroy the heaps.
      */
+    if (pUVM->mm.s.pUkHeap)
+    {
+        mmR3UkHeapDestroy(pUVM->mm.s.pUkHeap);
+        pUVM->mm.s.pUkHeap = NULL;
+    }
     mmR3HeapDestroy(pUVM->mm.s.pHeap);
     pUVM->mm.s.pHeap = NULL;
 }
@@ -535,16 +510,11 @@ VMMR3DECL(void) MMR3TermUVM(PUVM pUVM)
 /**
  * Reset notification.
  *
- * MM will reload shadow ROMs into RAM at this point and make
- * the ROM writable.
- *
  * @param   pVM             The VM handle.
  */
 VMMR3DECL(void) MMR3Reset(PVM pVM)
 {
-#ifndef VBOX_WITH_NEW_PHYS_CODE
-    mmR3PhysRomReset(pVM);
-#endif
+    /* nothing to do anylonger. */
 }
 
 
@@ -593,9 +563,9 @@ static DECLCALLBACK(int) mmR3Load(PVM pVM, PSSMHANDLE pSSM, uint32_t u32Version)
     int rc;
     RTUINT cb1;
 
-    /* cBasePages */
+    /* cBasePages (ignored) */
     uint64_t cPages;
-    if (u32Version != 1)
+    if (u32Version >= 2)
         rc = SSMR3GetU64(pSSM, &cPages);
     else
     {
@@ -604,11 +574,6 @@ static DECLCALLBACK(int) mmR3Load(PVM pVM, PSSMHANDLE pSSM, uint32_t u32Version)
     }
     if (RT_FAILURE(rc))
         return rc;
-    if (cPages != pVM->mm.s.cBasePages)
-    {
-        LogRel(("mmR3Load: Memory configuration has changed. cPages=%#RX64 saved=%#RX64\n", pVM->mm.s.cBasePages, cPages));
-        return VERR_SSM_LOAD_MEMORY_SIZE_MISMATCH;
-    }
 
     /* cbRamBase */
     uint64_t cb;
@@ -621,11 +586,9 @@ static DECLCALLBACK(int) mmR3Load(PVM pVM, PSSMHANDLE pSSM, uint32_t u32Version)
     }
     if (RT_FAILURE(rc))
         return rc;
-    if (cb != pVM->mm.s.cbRamBase)
-    {
-        LogRel(("mmR3Load: Memory configuration has changed. cbRamBase=%#RX64 save=%#RX64\n", pVM->mm.s.cbRamBase, cb));
-        return VERR_SSM_LOAD_MEMORY_SIZE_MISMATCH;
-    }
+    AssertLogRelMsgReturn(cb == pVM->mm.s.cbRamBase,
+                          ("Memory configuration has changed. cbRamBase=%#RX64 save=%#RX64\n", pVM->mm.s.cbRamBase, cb),
+                          VERR_SSM_LOAD_MEMORY_SIZE_MISMATCH);
 
     /* (PGM restores the physical memory.) */
     return rc;
@@ -755,128 +718,6 @@ VMMR3DECL(int) MMR3UpdateShadowReservation(PVM pVM, uint32_t cShadowPages)
 
 
 /**
- * Locks physical memory which backs a virtual memory range (HC) adding
- * the required records to the pLockedMem list.
- *
- * @returns VBox status code.
- * @param   pVM             The VM handle.
- * @param   pv              Pointer to memory range which shall be locked down.
- *                          This pointer is page aligned.
- * @param   cb              Size of memory range (in bytes). This size is page aligned.
- * @param   eType           Memory type.
- * @param   ppLockedMem     Where to store the pointer to the created locked memory record.
- *                          This is optional, pass NULL if not used.
- * @param   fSilentFailure  Don't raise an error when unsuccessful. Upper layer with deal with it.
- */
-int mmR3LockMem(PVM pVM, void *pv, size_t cb, MMLOCKEDTYPE eType, PMMLOCKEDMEM *ppLockedMem, bool fSilentFailure)
-{
-    Assert(RT_ALIGN_P(pv, PAGE_SIZE) == pv);
-    Assert(RT_ALIGN_Z(cb, PAGE_SIZE) == cb);
-
-    if (ppLockedMem)
-        *ppLockedMem = NULL;
-
-    /*
-     * Allocate locked mem structure.
-     */
-    unsigned        cPages = (unsigned)(cb >> PAGE_SHIFT);
-    AssertReturn(cPages == (cb >> PAGE_SHIFT), VERR_OUT_OF_RANGE);
-    PMMLOCKEDMEM    pLockedMem = (PMMLOCKEDMEM)MMR3HeapAlloc(pVM, MM_TAG_MM, RT_OFFSETOF(MMLOCKEDMEM, aPhysPages[cPages]));
-    if (!pLockedMem)
-        return VERR_NO_MEMORY;
-    pLockedMem->pv      = pv;
-    pLockedMem->cb      = cb;
-    pLockedMem->eType   = eType;
-    memset(&pLockedMem->u, 0, sizeof(pLockedMem->u));
-
-    /*
-     * Lock the memory.
-     */
-    int rc = SUPPageLock(pv, cPages, &pLockedMem->aPhysPages[0]);
-    if (RT_SUCCESS(rc))
-    {
-        /*
-         * Setup the reserved field.
-         */
-        PSUPPAGE    pPhysPage = &pLockedMem->aPhysPages[0];
-        for (unsigned c = cPages; c > 0; c--, pPhysPage++)
-            pPhysPage->uReserved = (RTHCUINTPTR)pLockedMem;
-
-        /*
-         * Insert into the list.
-         *
-         * ASSUME no protected needed here as only one thread in the system can possibly
-         * be doing this. No other threads will walk this list either we assume.
-         */
-        pLockedMem->pNext = pVM->mm.s.pLockedMem;
-        pVM->mm.s.pLockedMem = pLockedMem;
-        /* Set return value. */
-        if (ppLockedMem)
-            *ppLockedMem = pLockedMem;
-    }
-    else
-    {
-        AssertMsgFailed(("SUPPageLock failed with rc=%d\n", rc));
-        MMR3HeapFree(pLockedMem);
-        if (!fSilentFailure)
-            rc = VMSetError(pVM, rc, RT_SRC_POS, N_("Failed to lock %d bytes of host memory (out of memory)"), cb);
-    }
-
-    return rc;
-}
-
-
-/**
- * Maps a part of or an entire locked memory region into the guest context.
- *
- * @returns VBox status.
- *          God knows what happens if we fail...
- * @param   pVM         VM handle.
- * @param   pLockedMem  Locked memory structure.
- * @param   Addr        GC Address where to start the mapping.
- * @param   iPage       Page number in the locked memory region.
- * @param   cPages      Number of pages to map.
- * @param   fFlags      See the fFlags argument of PGR3Map().
- */
-int mmR3MapLocked(PVM pVM, PMMLOCKEDMEM pLockedMem, RTGCPTR Addr, unsigned iPage, size_t cPages, unsigned fFlags)
-{
-    /*
-     * Adjust ~0 argument
-     */
-    if (cPages == ~(size_t)0)
-        cPages = (pLockedMem->cb >> PAGE_SHIFT) - iPage;
-    Assert(cPages != ~0U);
-    /* no incorrect arguments are accepted */
-    Assert(RT_ALIGN_GCPT(Addr, PAGE_SIZE, RTGCPTR) == Addr);
-    AssertMsg(iPage < (pLockedMem->cb >> PAGE_SHIFT), ("never even think about giving me a bad iPage(=%d)\n", iPage));
-    AssertMsg(iPage + cPages <= (pLockedMem->cb >> PAGE_SHIFT), ("never even think about giving me a bad cPages(=%d)\n", cPages));
-
-    /*
-     * Map the pages.
-     */
-    PSUPPAGE    pPhysPage = &pLockedMem->aPhysPages[iPage];
-    while (cPages)
-    {
-        RTHCPHYS HCPhys = pPhysPage->Phys;
-        int rc = PGMMap(pVM, Addr, HCPhys, PAGE_SIZE, fFlags);
-        if (RT_FAILURE(rc))
-        {
-            /** @todo how the hell can we do a proper bailout here. */
-            return rc;
-        }
-
-        /* next */
-        cPages--;
-        iPage++;
-        pPhysPage++;
-        Addr += PAGE_SIZE;
-    }
-
-    return VINF_SUCCESS;
-}
-
-
-/**
  * Convert HC Physical address to HC Virtual address.
  *
  * @returns VBox status.
@@ -899,19 +740,50 @@ VMMR3DECL(int) MMR3HCPhys2HCVirt(PVM pVM, RTHCPHYS HCPhys, void **ppv)
         return rc;
 
     /*
-     * Iterate the locked memory - very slow.
+     * Iterate thru the lookup records for HMA.
      */
     uint32_t off = HCPhys & PAGE_OFFSET_MASK;
     HCPhys &= X86_PTE_PAE_PG_MASK;
-    for (PMMLOCKEDMEM pCur = pVM->mm.s.pLockedMem; pCur; pCur = pCur->pNext)
+    PMMLOOKUPHYPER pCur = (PMMLOOKUPHYPER)((uint8_t *)pVM->mm.s.CTX_SUFF(pHyperHeap) + pVM->mm.s.offLookupHyper);
+    for (;;)
     {
-        size_t iPage = pCur->cb >> PAGE_SHIFT;
-        while (iPage-- > 0)
-            if ((pCur->aPhysPages[iPage].Phys & X86_PTE_PAE_PG_MASK) == HCPhys)
+        switch (pCur->enmType)
+        {
+            case MMLOOKUPHYPERTYPE_LOCKED:
             {
-                *ppv = (char *)pCur->pv + (iPage << PAGE_SHIFT) + off;
-                return VINF_SUCCESS;
+                PCRTHCPHYS  paHCPhysPages = pCur->u.Locked.paHCPhysPages;
+                size_t      iPage         = pCur->cb >> PAGE_SHIFT;
+                while (iPage-- > 0)
+                    if (paHCPhysPages[iPage] == HCPhys)
+                    {
+                        *ppv = (char *)pCur->u.Locked.pvR3 + (iPage << PAGE_SHIFT) + off;
+                        return VINF_SUCCESS;
+                    }
+                break;
             }
+
+            case MMLOOKUPHYPERTYPE_HCPHYS:
+                if (pCur->u.HCPhys.HCPhys - HCPhys < pCur->cb)
+                {
+                    *ppv = (uint8_t *)pCur->u.HCPhys.pvR3 + pCur->u.HCPhys.HCPhys - HCPhys + off;
+                    return VINF_SUCCESS;
+                }
+                break;
+
+            case MMLOOKUPHYPERTYPE_GCPHYS:  /* (for now we'll not allow these kind of conversions) */
+            case MMLOOKUPHYPERTYPE_MMIO2:
+            case MMLOOKUPHYPERTYPE_DYNAMIC:
+                break;
+
+            default:
+                AssertMsgFailed(("enmType=%d\n", pCur->enmType));
+                break;
+        }
+
+        /* next */
+        if (pCur->offNext ==  (int32_t)NIL_OFFSET)
+            break;
+        pCur = (PMMLOOKUPHYPER)((uint8_t *)pCur + pCur->offNext);
     }
     /* give up */
     return VERR_INVALID_POINTER;
