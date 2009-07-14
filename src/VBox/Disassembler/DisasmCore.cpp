@@ -390,7 +390,7 @@ static int disCoreOne(PDISCPUSTATE pCpu, RTUINTPTR InstructionAddr, unsigned *pc
 # ifndef __L4ENV__
     catch(...)
 # else
-    else  /* setjmp has returned a non-zero value: an exception occured */
+    else  /* setjmp has returned a non-zero value: an exception occurred */
 # endif
     {
         pCpu->opsize = 0;
@@ -413,6 +413,8 @@ unsigned ParseInstruction(RTUINTPTR lpszCodeBlock, PCOPCODE pOp, PDISCPUSTATE pC
 {
     int  size = 0;
     bool fFiltered = false;
+
+    Assert(lpszCodeBlock && pOp && pCpu);
 
     // Store the opcode format string for disasmPrintf
 #ifndef DIS_CORE_ONLY
@@ -449,6 +451,13 @@ unsigned ParseInstruction(RTUINTPTR lpszCodeBlock, PCOPCODE pOp, PDISCPUSTATE pC
         if (    (pOp->optype & OPTYPE_DEFAULT_64_OP_SIZE)
             &&  !(pCpu->prefix & PREFIX_OPSIZE))
             pCpu->opmode = CPUMODE_64BIT;
+    }
+    else
+    if (pOp->optype & OPTYPE_FORCED_32_OP_SIZE_X86)
+    {
+        /* Forced 32 bits operand size for certain instructions (mov crx, mov drx). */
+        Assert(pCpu->mode != CPUMODE_64BIT);
+        pCpu->opmode = CPUMODE_32BIT;
     }
 
     if (pOp->idxParse1 != IDX_ParseNop)
@@ -716,9 +725,19 @@ unsigned UseModRM(RTUINTPTR lpszCodeBlock, PCOPCODE pOp, POP_PARAMETER pParam, P
             switch (vtype)
             {
             case OP_PARM_C: //control register
-                disasmAddStringF(pParam->szParam, sizeof(pParam->szParam), "CR%d", reg);
                 pParam->flags |= USE_REG_CR;
-                pParam->base.reg_ctrl = reg;
+
+                if (    pCpu->pCurInstr->opcode == OP_MOV_CR
+                    &&  pCpu->opmode == CPUMODE_32BIT
+                    &&  (pCpu->prefix & PREFIX_LOCK))
+                {
+                    pCpu->prefix &= ~PREFIX_LOCK;
+                    pParam->base.reg_ctrl = USE_REG_CR8;
+                }
+                else
+                    pParam->base.reg_ctrl = reg;
+
+                disasmAddStringF(pParam->szParam, sizeof(pParam->szParam), "CR%d", pParam->base.reg_ctrl);
                 return 0;
 
             case OP_PARM_D: //debug register
@@ -1094,6 +1113,15 @@ unsigned ParseModRM(RTUINTPTR lpszCodeBlock, PCOPCODE pOp, POP_PARAMETER pParam,
     pCpu->ModRM.Bits.Mod = MODRM_MOD(ModRM);
     pCpu->ModRM.Bits.Reg = MODRM_REG(ModRM);
 
+    /* Disregard the mod bits for certain instructions (mov crx, mov drx).
+     *
+     * From the AMD manual:
+     * This instruction is always treated as a register-to-register (MOD = 11) instruction, regardless of the
+     * encoding of the MOD field in the MODR/M byte.
+     */
+    if (pOp->optype & OPTYPE_MOD_FIXED_11)
+        pCpu->ModRM.Bits.Mod = 3;
+
     if (pCpu->prefix & PREFIX_REX)
     {
         Assert(pCpu->mode == CPUMODE_64BIT);
@@ -1130,6 +1158,15 @@ unsigned ParseModRM_SizeOnly(RTUINTPTR lpszCodeBlock, PCOPCODE pOp, POP_PARAMETE
     pCpu->ModRM.Bits.Rm  = MODRM_RM(ModRM);
     pCpu->ModRM.Bits.Mod = MODRM_MOD(ModRM);
     pCpu->ModRM.Bits.Reg = MODRM_REG(ModRM);
+
+    /* Disregard the mod bits for certain instructions (mov crx, mov drx).
+     *
+     * From the AMD manual:
+     * This instruction is always treated as a register-to-register (MOD = 11) instruction, regardless of the
+     * encoding of the MOD field in the MODR/M byte.
+     */
+    if (pOp->optype & OPTYPE_MOD_FIXED_11)
+        pCpu->ModRM.Bits.Mod = 3;
 
     if (pCpu->prefix & PREFIX_REX)
     {

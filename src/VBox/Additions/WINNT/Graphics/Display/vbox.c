@@ -1,9 +1,9 @@
+/* $Id$ */
 /** @file
- *
- * VBoxGuest -- VirtualBox Win 2000/XP guest display driver
- *
- * VBox support functions.
- *
+ * Display - VirtualBox Win 2000/XP guest display driver, support functions.
+ */
+
+/*
  * Copyright (C) 2006-2007 Sun Microsystems, Inc.
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
@@ -21,6 +21,7 @@
 
 #include "driver.h"
 
+#include <VBox/VMMDev.h>
 #include <VBox/VBoxGuest.h>
 #include <VBox/err.h>
 #include <iprt/asm.h>
@@ -54,7 +55,7 @@ BOOL vboxVbvaEnable (PPDEV ppdev)
     ULONG ulEnable = TRUE;
 
     DISPDBG((1, "VBoxDisp::vboxVbvaEnable called\n"));
-    
+
     if (!ghsemHwBuffer)
     {
         return FALSE;
@@ -387,11 +388,11 @@ BOOL vboxVbvaEnable (PPDEV ppdev)
     BOOL bRc = FALSE;
 
     DISPDBG((1, "VBoxDisp::vboxVbvaEnable called\n"));
-    
+
     if (ppdev->bHGSMISupported)
     {
         VBVABUFFER *pVBVA = (VBVABUFFER *)((uint8_t *)ppdev->pjScreen + ppdev->layout.offVBVABuffer);
-        
+
         pVBVA->u32HostEvents      = 0;
         pVBVA->u32SupportedOrders = 0;
         pVBVA->off32Data          = 0;
@@ -405,7 +406,7 @@ BOOL vboxVbvaEnable (PPDEV ppdev)
         ppdev->fHwBufferOverflow = FALSE;
         ppdev->pRecord           = NULL;
         ppdev->pVBVA             = pVBVA;
-        
+
         bRc = vboxVBVAInformHost (ppdev, TRUE);
     }
 
@@ -434,8 +435,8 @@ BOOL vboxHwBufferBeginUpdate (PPDEV ppdev)
 {
     BOOL bRc = FALSE;
 
-    DISPDBG((1, "VBoxDisp::vboxHwBufferBeginUpdate called flags = 0x%08X\n",
-             ppdev->pVBVA? ppdev->pVBVA->u32HostEvents: -1));
+    // DISPDBG((1, "VBoxDisp::vboxHwBufferBeginUpdate called flags = 0x%08X\n",
+    //          ppdev->pVBVA? ppdev->pVBVA->u32HostEvents: -1));
 
     if (   ppdev->pVBVA
         && (ppdev->pVBVA->u32HostEvents & VBVA_F_MODE_ENABLED))
@@ -468,7 +469,7 @@ BOOL vboxHwBufferBeginUpdate (PPDEV ppdev)
 
             ppdev->pVBVA->indexRecordFree = indexRecordNext;
 
-            DISPDBG((1, "VBoxDisp::vboxHwBufferBeginUpdate indexRecordNext = %d\n", indexRecordNext));
+            // DISPDBG((1, "VBoxDisp::vboxHwBufferBeginUpdate indexRecordNext = %d\n", indexRecordNext));
 
             /* Remember which record we are using. */
             ppdev->pRecord = pRecord;
@@ -484,7 +485,7 @@ void vboxHwBufferEndUpdate (PPDEV ppdev)
 {
     VBVARECORD *pRecord;
 
-    DISPDBG((1, "VBoxDisp::vboxHwBufferEndUpdate called\n"));
+    // DISPDBG((1, "VBoxDisp::vboxHwBufferEndUpdate called\n"));
 
     VBVA_ASSERT(ppdev->pVBVA);
 
@@ -585,8 +586,8 @@ static BOOL vboxHwBufferWrite (PPDEV ppdev, const void *p, uint32_t cb)
     {
         uint32_t cbChunk = cb;
 
-        DISPDBG((1, "VBoxDisp::vboxHwBufferWrite pVBVA->off32Free %d, pRecord->cbRecord 0x%08X, cbHwBufferAvail %d, cb %d, cbWritten %d\n",
-                    pVBVA->off32Free, pRecord->cbRecord, cbHwBufferAvail, cb, cbWritten));
+        // DISPDBG((1, "VBoxDisp::vboxHwBufferWrite pVBVA->off32Free %d, pRecord->cbRecord 0x%08X, cbHwBufferAvail %d, cb %d, cbWritten %d\n",
+        //             pVBVA->off32Free, pRecord->cbRecord, cbHwBufferAvail, cb, cbWritten));
 
         if (cbChunk >= cbHwBufferAvail)
         {
@@ -688,4 +689,304 @@ void VBoxProcessDisplayInfo (PPDEV ppdev)
 
     return;
 }
+
+# ifdef VBOX_WITH_VIDEOHWACCEL
+
+VBOXVHWACMD* vboxVHWACommandCreate (PPDEV ppdev, VBOXVHWACMD_TYPE enmCmd, VBOXVHWACMD_LENGTH cbCmd)
+{
+    VBOXVHWACMD* pHdr = (VBOXVHWACMD*)HGSMIHeapAlloc (&ppdev->hgsmiDisplayHeap,
+                              cbCmd + VBOXVHWACMD_HEADSIZE(),
+                              HGSMI_CH_VBVA,
+                              VBVA_VHWA_CMD);
+    if (!pHdr)
+    {
+        DISPDBG((0, "VBoxDISP::vboxVHWACommandCreate: HGSMIHeapAlloc failed\n"));
+    }
+    else
+    {
+        memset(pHdr, 0, sizeof(VBOXVHWACMD));
+        pHdr->iDisplay = ppdev->iDevice;
+        pHdr->rc = VERR_GENERAL_FAILURE;
+        pHdr->enmCmd = enmCmd;
+    }
+
+    /* temporary hack */
+    vboxVHWACommandCheckHostCmds(ppdev);
+
+    return pHdr;
+}
+
+void vboxVHWACommandFree (PPDEV ppdev, VBOXVHWACMD* pCmd)
+{
+    HGSMIHeapFree (&ppdev->hgsmiDisplayHeap, pCmd);
+}
+
+static DECLCALLBACK(void) vboxVHWACommandCompletionCallbackEvent(PPDEV ppdev, VBOXVHWACMD * pCmd, void * pContext)
+{
+    PEVENT pEvent = (PEVENT)pContext;
+    LONG oldState = EngSetEvent(pEvent);
+    Assert(!oldState);
+}
+
+static int vboxVHWAHanldeVHWACmdCompletion(PPDEV ppdev, VBVAHOSTCMD * pHostCmd)
+{
+    VBVAHOSTCMDVHWACMDCOMPLETE * pComplete = VBVAHOSTCMD_BODY(pHostCmd, VBVAHOSTCMDVHWACMDCOMPLETE);
+    VBOXVHWACMD* pComplCmd = (VBOXVHWACMD*)HGSMIOffsetToPointer (&ppdev->hgsmiDisplayHeap.area, pComplete->offCmd);
+    PFNVBOXVHWACMDCOMPLETION pfnCompletion = (PFNVBOXVHWACMDCOMPLETION)pComplCmd->GuestVBVAReserved1;
+    void * pContext = (void *)pComplCmd->GuestVBVAReserved2;
+
+    pfnCompletion(ppdev, pComplCmd, pContext);
+
+    vboxVBVAHostCommandComplete(ppdev, pHostCmd);
+
+    return 0;
+}
+
+static void vboxVBVAHostCommandHanlder(PPDEV ppdev, VBVAHOSTCMD * pCmd)
+{
+    int rc = VINF_SUCCESS;
+    switch(pCmd->customOpCode)
+    {
+# ifdef VBOX_WITH_VIDEOHWACCEL
+        case VBVAHG_DCUSTOM_VHWA_CMDCOMPLETE:
+        {
+            vboxVHWAHanldeVHWACmdCompletion(ppdev, pCmd);
+            break;
+        }
+# endif
+        default:
+        {
+            vboxVBVAHostCommandComplete(ppdev, pCmd);
+        }
+    }
+}
+
+void vboxVHWACommandCheckHostCmds(PPDEV ppdev)
+{
+    VBVAHOSTCMD * pCmd;
+    int rc = ppdev->pfnHGSMIRequestCommands(ppdev->hMpHGSMI, HGSMI_CH_VBVA, &pCmd);
+    if(RT_SUCCESS(rc))
+    {
+        for(; pCmd; pCmd = pCmd->u.pNext)
+        {
+            vboxVBVAHostCommandHanlder(ppdev, pCmd);
+        }
+    }
+}
+
+void vboxVHWACommandSubmitAsynchByEvent (PPDEV ppdev, VBOXVHWACMD* pCmd, PEVENT pEvent)
+{
+//    Assert(0);
+    pCmd->GuestVBVAReserved1 = (uintptr_t)pEvent;
+    pCmd->GuestVBVAReserved2 = 0;
+
+    /* complete it asynchronously by setting event */
+    pCmd->Flags = VBOXVHWACMD_FLAG_ASYNCH_EVENT;
+    vboxHGSMIBufferSubmit (ppdev, pCmd);
+
+    if(!(ASMAtomicReadU32((volatile uint32_t *)&pCmd->Flags)  & VBOXVHWACMD_FLAG_ASYNCH))
+    {
+        /* the command is completed */
+        EngSetEvent(pEvent);
+    }
+}
+
+BOOL vboxVHWACommandSubmit (PPDEV ppdev, VBOXVHWACMD* pCmd)
+{
+    PEVENT pEvent;
+    BOOL brc = EngCreateEvent(&pEvent);
+    Assert(brc);
+
+    if(brc)
+    {
+        vboxVHWACommandSubmitAsynchByEvent (ppdev, pCmd, pEvent);
+
+        brc = EngWaitForSingleObject(pEvent,
+                NULL /*IN PLARGE_INTEGER  pTimeOut*/
+                );
+        Assert(brc);
+        if(brc)
+        {
+            EngDeleteEvent(pEvent);
+        }
+    }
+    return brc;
+}
+
+/* do not wait for completion */
+void vboxVHWACommandSubmitAsynch (PPDEV ppdev, VBOXVHWACMD* pCmd, PFNVBOXVHWACMDCOMPLETION pfnCompletion, void * pContext)
+{
+//    Assert(0);
+    pCmd->GuestVBVAReserved1 = (uintptr_t)pfnCompletion;
+    pCmd->GuestVBVAReserved2 = (uintptr_t)pContext;
+
+    pCmd->Flags = 0;
+    vboxHGSMIBufferSubmit (ppdev, pCmd);
+
+    if(!(pCmd->Flags  & VBOXVHWACMD_FLAG_ASYNCH))
+    {
+        /* the command is completed */
+        pfnCompletion(ppdev, pCmd, pContext);
+    }
+}
+
+void vboxVHWAFreeHostInfo1(PPDEV ppdev, VBOXVHWACMD_QUERYINFO1* pInfo)
+{
+    VBOXVHWACMD* pCmd = VBOXVHWACMD_HEAD(pInfo);
+    vboxVHWACommandFree (ppdev, pCmd);
+}
+
+void vboxVHWAFreeHostInfo2(PPDEV ppdev, VBOXVHWACMD_QUERYINFO2* pInfo)
+{
+    VBOXVHWACMD* pCmd = VBOXVHWACMD_HEAD(pInfo);
+    vboxVHWACommandFree (ppdev, pCmd);
+}
+
+VBOXVHWACMD_QUERYINFO1* vboxVHWAQueryHostInfo1(PPDEV ppdev)
+{
+    VBOXVHWACMD* pCmd = vboxVHWACommandCreate (ppdev, VBOXVHWACMD_TYPE_QUERY_INFO1, sizeof(VBOXVHWACMD_QUERYINFO1));
+    if (!pCmd)
+    {
+        DISPDBG((0, "VBoxDISP::vboxVHWAQueryHostInfo1: vboxVHWACommandCreate failed\n"));
+        return NULL;
+    }
+
+    if(vboxVHWACommandSubmit (ppdev, pCmd))
+    {
+        if(RT_SUCCESS(pCmd->rc))
+        {
+            return VBOXVHWACMD_BODY(pCmd, VBOXVHWACMD_QUERYINFO1);
+        }
+    }
+
+    vboxVHWACommandFree (ppdev, pCmd);
+    return NULL;
+}
+
+VBOXVHWACMD_QUERYINFO2* vboxVHWAQueryHostInfo2(PPDEV ppdev, uint32_t numFourCC)
+{
+    VBOXVHWACMD* pCmd = vboxVHWACommandCreate (ppdev, VBOXVHWACMD_TYPE_QUERY_INFO2, sizeof(VBOXVHWACMD_QUERYINFO2));
+    VBOXVHWACMD_QUERYINFO2 *pInfo2;
+    if (!pCmd)
+    {
+        DISPDBG((0, "VBoxDISP::vboxVHWAQueryHostInfo1: vboxVHWACommandCreate failed\n"));
+        return NULL;
+    }
+
+    pInfo2 = VBOXVHWACMD_BODY(pCmd, VBOXVHWACMD_QUERYINFO2);
+    pInfo2->numFourCC = numFourCC;
+
+    if(vboxVHWACommandSubmit (ppdev, pCmd))
+    {
+        if(RT_SUCCESS(pCmd->rc))
+        {
+            if(pInfo2->numFourCC == numFourCC)
+            {
+                return pInfo2;
+            }
+        }
+    }
+
+    vboxVHWACommandFree (ppdev, pCmd);
+    return NULL;
+}
+
+int vboxVHWAInitHostInfo1(PPDEV ppdev)
+{
+    VBOXVHWACMD_QUERYINFO1* pInfo = vboxVHWAQueryHostInfo1(ppdev);
+    if(!pInfo)
+    {
+        ppdev->vhwaInfo.bVHWAEnabled = false;
+        return VERR_OUT_OF_RESOURCES;
+    }
+
+    ppdev->vhwaInfo.caps = pInfo->caps;
+    ppdev->vhwaInfo.caps2 = pInfo->caps2;
+    ppdev->vhwaInfo.colorKeyCaps = pInfo->colorKeyCaps;
+    ppdev->vhwaInfo.stretchCaps = pInfo->stretchCaps;
+    ppdev->vhwaInfo.surfaceCaps = pInfo->surfaceCaps;
+    ppdev->vhwaInfo.numOverlays = pInfo->numOverlays;
+    ppdev->vhwaInfo.numFourCC = pInfo->numFourCC;
+    ppdev->vhwaInfo.bVHWAEnabled = (pInfo->cfgFlags & VBOXVHWA_CFG_ENABLED);
+    vboxVHWAFreeHostInfo1(ppdev, pInfo);
+    return VINF_SUCCESS;
+}
+
+int vboxVHWAInitHostInfo2(PPDEV ppdev, DWORD *pFourCC)
+{
+    VBOXVHWACMD_QUERYINFO2* pInfo = vboxVHWAQueryHostInfo2(ppdev, ppdev->vhwaInfo.numFourCC);
+    int rc = VINF_SUCCESS;
+
+    if(pInfo)
+        return VERR_OUT_OF_RESOURCES;
+
+    if(ppdev->vhwaInfo.numFourCC)
+    {
+        memcpy(pFourCC, pInfo->FourCC, ppdev->vhwaInfo.numFourCC * sizeof(pFourCC[0]));
+    }
+    else
+    {
+        Assert(0);
+        rc = VERR_GENERAL_FAILURE;
+    }
+
+    vboxVHWAFreeHostInfo2(ppdev, pInfo);
+
+    return rc;
+}
+
+int vboxVHWAEnable(PPDEV ppdev)
+{
+    int rc = VERR_GENERAL_FAILURE;
+    VBOXVHWACMD* pCmd = vboxVHWACommandCreate (ppdev, VBOXVHWACMD_TYPE_ENABLE, 0);
+    if (!pCmd)
+    {
+        DISPDBG((0, "VBoxDISP::vboxVHWAQueryHostInfo1: vboxVHWACommandCreate failed\n"));
+        return NULL;
+    }
+
+    if(vboxVHWACommandSubmit (ppdev, pCmd))
+    {
+        if(RT_SUCCESS(pCmd->rc))
+        {
+            rc = VINF_SUCCESS;
+        }
+    }
+
+    vboxVHWACommandFree (ppdev, pCmd);
+    return rc;
+}
+
+int vboxVHWADisable(PPDEV ppdev)
+{
+    int rc = VERR_GENERAL_FAILURE;
+    VBOXVHWACMD* pCmd = vboxVHWACommandCreate (ppdev, VBOXVHWACMD_TYPE_DISABLE, 0);
+    if (!pCmd)
+    {
+        DISPDBG((0, "VBoxDISP::vboxVHWAQueryHostInfo1: vboxVHWACommandCreate failed\n"));
+        return NULL;
+    }
+
+    if(vboxVHWACommandSubmit (ppdev, pCmd))
+    {
+        if(RT_SUCCESS(pCmd->rc))
+        {
+            rc = VINF_SUCCESS;
+        }
+    }
+
+    vboxVHWACommandFree (ppdev, pCmd);
+
+    vboxVHWACommandCheckHostCmds(ppdev);
+
+    return rc;
+}
+
+# endif
+
+void vboxVBVAHostCommandComplete(PPDEV ppdev, VBVAHOSTCMD * pCmd)
+{
+    ppdev->pfnHGSMICommandComplete(ppdev->hMpHGSMI, pCmd);
+}
+
 #endif /* VBOX_WITH_HGSMI */

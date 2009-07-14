@@ -33,7 +33,7 @@ class ATL_NO_VTABLE NetworkAdapter :
     public VirtualBoxBaseNEXT,
     public VirtualBoxSupportErrorInfoImpl <NetworkAdapter, INetworkAdapter>,
     public VirtualBoxSupportTranslation <NetworkAdapter>,
-    public INetworkAdapter
+    VBOX_SCRIPTABLE_IMPL(INetworkAdapter)
 {
 public:
 
@@ -82,8 +82,9 @@ public:
     DECLARE_PROTECT_FINAL_CONSTRUCT()
 
     BEGIN_COM_MAP(NetworkAdapter)
-        COM_INTERFACE_ENTRY(ISupportErrorInfo)
-        COM_INTERFACE_ENTRY(INetworkAdapter)
+        COM_INTERFACE_ENTRY  (ISupportErrorInfo)
+        COM_INTERFACE_ENTRY  (INetworkAdapter)
+        COM_INTERFACE_ENTRY2 (IDispatch, INetworkAdapter)
     END_COM_MAP()
 
     NS_DECL_ISUPPORTS

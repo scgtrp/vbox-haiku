@@ -362,8 +362,9 @@ PPDMDRV pdmR3DrvLookup(PVM pVM, const char *pszName)
  *
  * @returns VINF_SUCCESS
  * @param   pDrvIns     The driver instance to detach.
+ * @param   fFlags      Flags, combination of the PDMDEVATT_FLAGS_* \#defines.
  */
-int pdmR3DrvDetach(PPDMDRVINS pDrvIns)
+int pdmR3DrvDetach(PPDMDRVINS pDrvIns, uint32_t fFlags)
 {
     PDMDRV_ASSERT_DRVINS(pDrvIns);
     LogFlow(("pdmR3DrvDetach: pDrvIns=%p '%s'/%d\n", pDrvIns, pDrvIns->pDrvReg->szDriverName, pDrvIns->iInstance));
@@ -393,7 +394,7 @@ int pdmR3DrvDetach(PPDMDRVINS pDrvIns)
     /*
      * Join paths with pdmR3DrvDestroyChain.
      */
-    pdmR3DrvDestroyChain(pDrvIns);
+    pdmR3DrvDestroyChain(pDrvIns, fFlags);
     return VINF_SUCCESS;
 }
 
@@ -404,8 +405,9 @@ int pdmR3DrvDetach(PPDMDRVINS pDrvIns)
  * This is used when unplugging a device at run time.
  *
  * @param   pDrvIns     Pointer to the driver instance to start with.
+ * @param   fFlags      Flags, combination of the PDMDEVATT_FLAGS_* \#defines.
  */
-void pdmR3DrvDestroyChain(PPDMDRVINS pDrvIns)
+void pdmR3DrvDestroyChain(PPDMDRVINS pDrvIns, uint32_t fFlags)
 {
     VM_ASSERT_EMT(pDrvIns->Internal.s.pVM);
 
@@ -449,7 +451,7 @@ void pdmR3DrvDestroyChain(PPDMDRVINS pDrvIns)
             Assert(pLun->pTop == pCur);
             pLun->pTop = NULL;
             if (pLun->pDevIns->pDevReg->pfnDetach)
-                pLun->pDevIns->pDevReg->pfnDetach(pLun->pDevIns, pLun->iLun);
+                pLun->pDevIns->pDevReg->pfnDetach(pLun->pDevIns, pLun->iLun, fFlags);
         }
 
         /*
@@ -632,7 +634,8 @@ static DECLCALLBACK(int) pdmR3DrvHlp_Detach(PPDMDRVINS pDrvIns)
     int rc;
     if (pDrvIns->Internal.s.pDown)
     {
-        rc = pdmR3DrvDetach(pDrvIns->Internal.s.pDown);
+        /** @todo: Current assumption is that drivers will never initiate hot plug events. */
+        rc = pdmR3DrvDetach(pDrvIns->Internal.s.pDown, PDMDEVATT_FLAGS_NOT_HOT_PLUG);
     }
     else
     {
@@ -654,7 +657,8 @@ static DECLCALLBACK(int) pdmR3DrvHlp_DetachSelf(PPDMDRVINS pDrvIns)
              pDrvIns->pDrvReg->szDriverName, pDrvIns->iInstance));
     VM_ASSERT_EMT(pDrvIns->Internal.s.pVM);
 
-    int rc = pdmR3DrvDetach(pDrvIns);
+    /** @todo: Current assumption is that drivers will never initiate hot plug events. */
+    int rc = pdmR3DrvDetach(pDrvIns, PDMDEVATT_FLAGS_NOT_HOT_PLUG);
 
     LogFlow(("pdmR3DrvHlp_Detach: returns %Rrc\n", rc)); /* pDrvIns is freed by now. */
     return rc;
@@ -810,26 +814,25 @@ static DECLCALLBACK(int) pdmR3DrvHlp_VMSetRuntimeErrorV(PPDMDRVINS pDrvIns, uint
 
 
 /** @copydoc PDMDRVHLP::pfnPDMQueueCreate */
-static DECLCALLBACK(int) pdmR3DrvHlp_PDMQueueCreate(PPDMDRVINS pDrvIns, RTUINT cbItem, RTUINT cItems, uint32_t cMilliesInterval, PFNPDMQUEUEDRV pfnCallback, PPDMQUEUE *ppQueue)
+static DECLCALLBACK(int) pdmR3DrvHlp_PDMQueueCreate(PPDMDRVINS pDrvIns, RTUINT cbItem, RTUINT cItems, uint32_t cMilliesInterval,
+                                                    PFNPDMQUEUEDRV pfnCallback, const char *pszName, PPDMQUEUE *ppQueue)
 {
     PDMDRV_ASSERT_DRVINS(pDrvIns);
-    LogFlow(("pdmR3DrvHlp_PDMQueueCreate: caller='%s'/%d: cbItem=%d cItems=%d cMilliesInterval=%d pfnCallback=%p ppQueue=%p\n",
-             pDrvIns->pDrvReg->szDriverName, pDrvIns->iInstance, cbItem, cItems, cMilliesInterval, pfnCallback, ppQueue, ppQueue));
-    VM_ASSERT_EMT(pDrvIns->Internal.s.pVM);
+    LogFlow(("pdmR3DrvHlp_PDMQueueCreate: caller='%s'/%d: cbItem=%d cItems=%d cMilliesInterval=%d pfnCallback=%p pszName=%p:{%s} ppQueue=%p\n",
+             pDrvIns->pDrvReg->szDriverName, pDrvIns->iInstance, cbItem, cItems, cMilliesInterval, pfnCallback, pszName, pszName, ppQueue, ppQueue));
+    PVM pVM = pDrvIns->Internal.s.pVM;
+    VM_ASSERT_EMT(pVM);
 
-    int rc = PDMR3QueueCreateDriver(pDrvIns->Internal.s.pVM, pDrvIns, cbItem, cItems, cMilliesInterval, pfnCallback, ppQueue);
+    if (pDrvIns->iInstance > 0)
+    {
+        pszName = MMR3HeapAPrintf(pVM, MM_TAG_PDM_DRIVER_DESC, "%s-%u", pszName, pDrvIns->iInstance);
+        AssertLogRelReturn(pszName, VERR_NO_MEMORY);
+    }
+
+    int rc = PDMR3QueueCreateDriver(pVM, pDrvIns, cbItem, cItems, cMilliesInterval, pfnCallback, pszName, ppQueue);
 
     LogFlow(("pdmR3DrvHlp_PDMQueueCreate: caller='%s'/%d: returns %Rrc *ppQueue=%p\n", pDrvIns->pDrvReg->szDriverName, pDrvIns->iInstance, rc, *ppQueue));
     return rc;
-}
-
-
-/** @copydoc PDMDRVHLP::pfnPDMPollerRegister */
-static DECLCALLBACK(int) pdmR3DrvHlp_PDMPollerRegister(PPDMDRVINS pDrvIns, PFNPDMDRVPOLLER pfnPoller)
-{
-    PDMDRV_ASSERT_DRVINS(pDrvIns);
-    AssertLogRelMsgFailedReturn(("pdmR3DrvHlp_PDMPollerRegister: caller='%s'/%d: pfnPoller=%p -> VERR_NOT_SUPPORTED\n", pDrvIns->pDrvReg->szDriverName, pDrvIns->iInstance, pfnPoller),
-                                VERR_NOT_SUPPORTED);
 }
 
 
@@ -852,13 +855,13 @@ static DECLCALLBACK(uint64_t) pdmR3DrvHlp_TMGetVirtualTime(PPDMDRVINS pDrvIns)
 
 
 /** @copydoc PDMDRVHLP::pfnTMTimerCreate */
-static DECLCALLBACK(int) pdmR3DrvHlp_TMTimerCreate(PPDMDRVINS pDrvIns, TMCLOCK enmClock, PFNTMTIMERDRV pfnCallback, const char *pszDesc, PPTMTIMERR3 ppTimer)
+static DECLCALLBACK(int) pdmR3DrvHlp_TMTimerCreate(PPDMDRVINS pDrvIns, TMCLOCK enmClock, PFNTMTIMERDRV pfnCallback, void *pvUser, uint32_t fFlags, const char *pszDesc, PPTMTIMERR3 ppTimer)
 {
     PDMDRV_ASSERT_DRVINS(pDrvIns);
-    LogFlow(("pdmR3DrvHlp_TMTimerCreate: caller='%s'/%d: enmClock=%d pfnCallback=%p pszDesc=%p:{%s} ppTimer=%p\n",
-             pDrvIns->pDrvReg->szDriverName, pDrvIns->iInstance, enmClock, pfnCallback, pszDesc, pszDesc, ppTimer));
+    LogFlow(("pdmR3DrvHlp_TMTimerCreate: caller='%s'/%d: enmClock=%d pfnCallback=%p pvUser=%p fFlags=%#x pszDesc=%p:{%s} ppTimer=%p\n",
+             pDrvIns->pDrvReg->szDriverName, pDrvIns->iInstance, enmClock, pfnCallback, pvUser, fFlags, pszDesc, pszDesc, ppTimer));
 
-    int rc = TMR3TimerCreateDriver(pDrvIns->Internal.s.pVM, pDrvIns, enmClock, pfnCallback, pszDesc, ppTimer);
+    int rc = TMR3TimerCreateDriver(pDrvIns->Internal.s.pVM, pDrvIns, enmClock, pfnCallback, pvUser, fFlags, pszDesc, ppTimer);
 
     LogFlow(("pdmR3DrvHlp_TMTimerCreate: caller='%s'/%d: returns %Rrc *ppTimer=%p\n", pDrvIns->pDrvReg->szDriverName, pDrvIns->iInstance, rc, *ppTimer));
     return rc;
@@ -939,6 +942,18 @@ static DECLCALLBACK(void) pdmR3DrvHlp_STAMRegisterV(PPDMDRVINS pDrvIns, void *pv
 }
 
 
+/** @copydoc PDMDRVHLP::pfnSTAMDeregister */
+static DECLCALLBACK(int) pdmR3DrvHlp_STAMDeregister(PPDMDRVINS pDrvIns, void *pvSample)
+{
+    PDMDRV_ASSERT_DRVINS(pDrvIns);
+    VM_ASSERT_EMT(pDrvIns->Internal.s.pVM);
+
+    int rc = STAMR3DeregisterU(pDrvIns->Internal.s.pVM->pUVM, pvSample);
+    AssertRC(rc);
+    return rc;
+}
+
+
 /** @copydoc PDMDRVHLP::pfnSUPCallVMMR0Ex */
 static DECLCALLBACK(int) pdmR3DrvHlp_SUPCallVMMR0Ex(PPDMDRVINS pDrvIns, unsigned uOperation, void *pvArg, unsigned cbArg)
 {
@@ -948,7 +963,7 @@ static DECLCALLBACK(int) pdmR3DrvHlp_SUPCallVMMR0Ex(PPDMDRVINS pDrvIns, unsigned
     int rc;
     if (    uOperation >= VMMR0_DO_SRV_START
         &&  uOperation <  VMMR0_DO_SRV_END)
-        rc = SUPCallVMMR0Ex(pDrvIns->Internal.s.pVM->pVMR0, uOperation, 0, (PSUPVMMR0REQHDR)pvArg);
+        rc = SUPR3CallVMMR0Ex(pDrvIns->Internal.s.pVM->pVMR0, NIL_VMCPUID, uOperation, 0, (PSUPVMMR0REQHDR)pvArg);
     else
     {
         AssertMsgFailed(("Invalid uOperation=%u\n", uOperation));
@@ -1012,14 +1027,15 @@ static DECLCALLBACK(VMSTATE) pdmR3DrvHlp_VMState(PPDMDRVINS pDrvIns)
 #ifdef VBOX_WITH_PDM_ASYNC_COMPLETION
 /** @copydoc PDMDRVHLP::pfnPDMAsyncCompletionTemplateCreate */
 static DECLCALLBACK(int) pdmR3DrvHlp_PDMAsyncCompletionTemplateCreate(PPDMDRVINS pDrvIns, PPPDMASYNCCOMPLETIONTEMPLATE ppTemplate,
-                                                                      PFNPDMASYNCCOMPLETEDRV pfnCompleted, const char *pszDesc)
+                                                                      PFNPDMASYNCCOMPLETEDRV pfnCompleted, void *pvTemplateUser,
+                                                                      const char *pszDesc)
 {
     PDMDRV_ASSERT_DRVINS(pDrvIns);
     VM_ASSERT_EMT(pDrvIns->Internal.s.pVM);
     LogFlow(("pdmR3DrvHlp_PDMAsyncCompletionTemplateCreate: caller='%s'/%d: ppTemplate=%p pfnCompleted=%p pszDesc=%p:{%s}\n",
              pDrvIns->pDrvReg->szDriverName, pDrvIns->iInstance, ppTemplate, pfnCompleted, pszDesc, pszDesc));
 
-    int rc = PDMR3AsyncCompletionTemplateCreateDriver(pDrvIns->Internal.s.pVM, pDrvIns, ppTemplate, pfnCompleted, pszDesc);
+    int rc = PDMR3AsyncCompletionTemplateCreateDriver(pDrvIns->Internal.s.pVM, pDrvIns, ppTemplate, pfnCompleted, pvTemplateUser, pszDesc);
 
     LogFlow(("pdmR3DrvHlp_PDMAsyncCompletionTemplateCreate: caller='%s'/%d: returns %Rrc *ppThread=%p\n", pDrvIns->pDrvReg->szDriverName,
              pDrvIns->iInstance, rc, *ppTemplate));
@@ -1045,7 +1061,6 @@ const PDMDRVHLP g_pdmR3DrvHlp =
     pdmR3DrvHlp_VMSetRuntimeError,
     pdmR3DrvHlp_VMSetRuntimeErrorV,
     pdmR3DrvHlp_PDMQueueCreate,
-    pdmR3DrvHlp_PDMPollerRegister,
     pdmR3DrvHlp_TMGetVirtualFreq,
     pdmR3DrvHlp_TMGetVirtualTime,
     pdmR3DrvHlp_TMTimerCreate,
@@ -1054,6 +1069,7 @@ const PDMDRVHLP g_pdmR3DrvHlp =
     pdmR3DrvHlp_STAMRegister,
     pdmR3DrvHlp_STAMRegisterF,
     pdmR3DrvHlp_STAMRegisterV,
+    pdmR3DrvHlp_STAMDeregister,
     pdmR3DrvHlp_SUPCallVMMR0Ex,
     pdmR3DrvHlp_USBRegisterHub,
     pdmR3DrvHlp_PDMThreadCreate,

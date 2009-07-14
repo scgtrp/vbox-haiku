@@ -1,6 +1,6 @@
-#
+# $Revision$
+## @file
 # Makefile for the VirtualBox Linux Host Driver.
-# (For 2.6.x this file must be called 'Makefile'!)
 #
 
 #
@@ -34,6 +34,11 @@
 # (We have to support basic cross building (ARCH=i386|x86_64).)
 # While at it, warn about BUILD_* vars found to help with user problems.
 #
+ifeq ($(filter-out x86_64 amd64 AMD64,$(shell uname -m)),)
+ BUILD_TARGET_ARCH_DEF := amd64
+else
+ BUILD_TARGET_ARCH_DEF := x86
+endif
 ifneq ($(filter-out amd64 x86,$(BUILD_TARGET_ARCH)),)
  $(warning Ignoring unknown BUILD_TARGET_ARCH value '$(BUILD_TARGET_ARCH)'.)
  BUILD_TARGET_ARCH :=
@@ -45,15 +50,13 @@ ifeq ($(BUILD_TARGET_ARCH),)
   ifeq ($(ARCH),i386)
    BUILD_TARGET_ARCH := x86
   else
-   ifeq ($(filter-out x86_64 amd64 AMD64,$(shell uname -m)),)
-    BUILD_TARGET_ARCH := amd64
-   else
-    BUILD_TARGET_ARCH := x86
-   endif
+   BUILD_TARGET_ARCH := $(BUILD_TARGET_ARCH_DEF)
   endif
  endif
 else
- $(warning Using BUILD_TARGET_ARCH='$(BUILD_TARGET_ARCH)' from the $(origin BUILD_TARGET_ARCH).)
+ ifneq ($(BUILD_TARGET_ARCH),$(BUILD_TARGET_ARCH_DEF))
+  $(warning Using BUILD_TARGET_ARCH='$(BUILD_TARGET_ARCH)' from the $(origin BUILD_TARGET_ARCH).)
+ endif
 endif
 
 ifneq ($(filter-out release profile debug strict,$(BUILD_TYPE)),)
@@ -63,7 +66,9 @@ endif
 ifeq ($(BUILD_TYPE),)
  BUILD_TYPE := release
 else
- $(warning Using BUILD_TYPE='$(BUILD_TYPE)' from the $(origin BUILD_TYPE).)
+ ifneq ($(BUILD_TYPE),release)
+  $(warning Using BUILD_TYPE='$(BUILD_TYPE)' from the $(origin BUILD_TYPE).)
+ endif
 endif
 
 # override is required by the Debian guys
@@ -80,6 +85,7 @@ OBJS   = \
 	r0drv/linux/alloc-r0drv-linux.o \
 	r0drv/linux/initterm-r0drv-linux.o \
 	r0drv/linux/memobj-r0drv-linux.o \
+	r0drv/linux/memuserkernel-r0drv-linux.o \
 	r0drv/linux/mp-r0drv-linux.o \
 	r0drv/linux/mpnotification-r0drv-linux.o \
 	r0drv/linux/process-r0drv-linux.o \
@@ -91,13 +97,17 @@ OBJS   = \
 	r0drv/linux/thread2-r0drv-linux.o \
 	r0drv/linux/time-r0drv-linux.o \
 	r0drv/linux/timer-r0drv-linux.o \
+	r0drv/generic/semspinmutex-r0drv-generic.o \
 	common/err/RTErrConvertFromErrno.o \
+	common/err/RTErrConvertToErrno.o \
 	common/log/log.o \
 	common/log/logellipsis.o \
 	common/log/logrel.o \
 	common/log/logrelellipsis.o \
 	common/log/logcom.o \
 	common/log/logformat.o \
+	common/misc/handletable.o \
+	common/misc/handletablectx.o \
 	common/string/strformat.o \
 	common/string/strformatrt.o \
 	common/string/strformattype.o \
@@ -108,6 +118,7 @@ OBJS   = \
 	generic/RTLogWriteStdErr-stub-generic.o \
 	generic/RTLogWriteStdOut-stub-generic.o \
 	generic/RTLogWriteUser-generic.o \
+	generic/uuid-generic.o \
 	VBox/log-vbox.o \
 	VBox/strformat-vbox.o
 ifeq ($(BUILD_TARGET_ARCH),x86)
@@ -145,7 +156,7 @@ ifeq ($(KERNELRELEASE),)
 		      KERN_DIR=<directory> and run Make again.)
   endif
   # check if versions match -- works only for later 2.6 kernels
-  VBOX_KERN_VER := $(shell $(MAKE) -sC $(KERN_DIR) kernelrelease 2> /dev/null || true)
+  VBOX_KERN_VER := $(shell $(MAKE) -sC $(KERN_DIR) --no-print-directory kernelrelease 2> /dev/null || true)
   ifneq ($(VBOX_KERN_VER),)
    ifneq ($(VBOX_KERN_VER),$(shell uname -r))
     $(error Error: /usr/src/linux (version $(VBOX_KERN_VER)) does not match \
@@ -255,6 +266,6 @@ install_rpm: $(MODULE)
 endif # eq($(MAKECMDGOALS),clean)
 
 clean:
-	for f in . linux r0drv r0drv/linux VBox common/err common/string common/log generic math/gcc; \
+	for f in . linux r0drv r0drv/generic r0drv/linux VBox common/err common/string common/log generic math/gcc; \
 	    do rm -f $$f/*.o $$f/.*.cmd $$f/.*.flags; done
 	rm -rf .vboxdrv* .tmp_ver* vboxdrv.* Module.symvers Modules.symvers modules.order

@@ -22,12 +22,16 @@
 #include "Helper.h"
 
 #include <iprt/log.h>
+#include <VBox/VMMDev.h>
 #include <VBox/VBoxGuest.h>
-#include <VBox/VBoxDev.h>
 #include <VBox/VBoxVideo.h>
 
 #include <VBox/VBoxGuestLib.h>
 #include <VBoxDisplay.h>
+
+#ifdef VBOX_WITH_HGSMI
+#include <iprt/initterm.h>
+#endif
 
 #if _MSC_VER >= 1400 /* bird: MS fixed swprintf to be standard-conforming... */
 #define _INC_SWPRINTF_INL_
@@ -58,6 +62,10 @@ ULONG DriverEntry(IN PVOID Context1, IN PVOID Context2)
 {
     VIDEO_HW_INITIALIZATION_DATA InitData;
     ULONG rc;
+
+#ifdef VBOX_WITH_HGSMI
+    RTR0Init(0);
+#endif
 
     dprintf(("VBoxVideo::DriverEntry. Built %s %s\n", __DATE__, __TIME__));
 
@@ -1206,7 +1214,10 @@ VP_STATUS VBoxVideoFindAdapter(IN PVOID HwDeviceExtension,
       /* Setup the Device Extension and if possible secondary displays. */
       VBoxSetupDisplays((PDEVICE_EXTENSION)HwDeviceExtension, ConfigInfo, AdapterMemorySize);
 #else
-      /* Guest supports only HGSMI, the old VBVA via VMMDev is not supported. Old 
+      /* Initialize VBoxGuest library, which is used for requests which go through VMMDev. */
+      rc = VbglInit ();
+
+      /* Guest supports only HGSMI, the old VBVA via VMMDev is not supported. Old
        * code will be ifdef'ed and later removed.
        * The host will however support both old and new interface to keep compatibility
        * with old guest additions.
@@ -1497,7 +1508,11 @@ BOOLEAN VBoxVideoStartIO(PVOID HwDeviceExtension,
                  */
                 PointerAttributes.Enable = VBOX_MOUSE_POINTER_VISIBLE;
 
+#ifndef VBOX_WITH_HGSMI
                 Result = vboxUpdatePointerShape(&PointerAttributes, sizeof (PointerAttributes));
+#else
+                Result = vboxUpdatePointerShape((PDEVICE_EXTENSION)HwDeviceExtension, &PointerAttributes, sizeof (PointerAttributes));
+#endif/* VBOX_WITH_HGSMI */
 
                 if (!Result)
                     dprintf(("VBoxVideo::VBoxVideoStartIO: Could not hide hardware pointer -> fallback\n"));
@@ -1525,7 +1540,11 @@ BOOLEAN VBoxVideoStartIO(PVOID HwDeviceExtension,
                  */
                 PointerAttributes.Enable = 0;
 
+#ifndef VBOX_WITH_HGSMI
                 Result = vboxUpdatePointerShape(&PointerAttributes, sizeof (PointerAttributes));
+#else
+                Result = vboxUpdatePointerShape((PDEVICE_EXTENSION)HwDeviceExtension, &PointerAttributes, sizeof (PointerAttributes));
+#endif/* VBOX_WITH_HGSMI */
 
                 if (!Result)
                     dprintf(("VBoxVideo::VBoxVideoStartIO: Could not hide hardware pointer -> fallback\n"));
@@ -1568,7 +1587,11 @@ BOOLEAN VBoxVideoStartIO(PVOID HwDeviceExtension,
                          pPointerAttributes->Row));
                 dprintf(("\tBytes attached: %d\n", RequestPacket->InputBufferLength - sizeof(VIDEO_POINTER_ATTRIBUTES)));
 #endif
+#ifndef VBOX_WITH_HGSMI
                 Result = vboxUpdatePointerShape(pPointerAttributes, RequestPacket->InputBufferLength);
+#else
+                Result = vboxUpdatePointerShape((PDEVICE_EXTENSION)HwDeviceExtension, pPointerAttributes, RequestPacket->InputBufferLength);
+#endif/* VBOX_WITH_HGSMI */
                 if (!Result)
                     dprintf(("VBoxVideo::VBoxVideoStartIO: Could not set hardware pointer -> fallback\n"));
             } else
@@ -1849,6 +1872,74 @@ BOOLEAN VBoxVideoStartIO(PVOID HwDeviceExtension,
             RequestPacket->StatusBlock->Information = sizeof(QUERYHGSMIRESULT);
             Result = TRUE;
 
+            break;
+        }
+        case IOCTL_VIDEO_HGSMI_QUERY_CALLBACKS:
+        {
+            dprintf(("VBoxVideo::VBoxVideoStartIO: IOCTL_VIDEO_HGSMI_QUERY_CALLBACKS\n"));
+
+            if (RequestPacket->OutputBufferLength < sizeof(HGSMIQUERYCALLBACKS))
+            {
+                dprintf(("VBoxVideo::VBoxVideoStartIO: Output buffer too small: %d needed: %d!!!\n",
+                         RequestPacket->OutputBufferLength, sizeof(HGSMIQUERYCALLBACKS)));
+                RequestPacket->StatusBlock->Status = ERROR_INSUFFICIENT_BUFFER;
+                return FALSE;
+            }
+
+            if (!pDevExt->pPrimary->u.primary.bHGSMI)
+            {
+                RequestPacket->StatusBlock->Status = ERROR_INVALID_FUNCTION;
+                return FALSE;
+            }
+
+            HGSMIQUERYCALLBACKS *pInfo = (HGSMIQUERYCALLBACKS *)RequestPacket->OutputBuffer;
+
+            pInfo->hContext = pDevExt;
+            pInfo->pfnCompletionHandler = hgsmiHostCmdComplete;
+            pInfo->pfnRequestCommandsHandler = hgsmiHostCmdRequest;
+
+            RequestPacket->StatusBlock->Information = sizeof(HGSMIQUERYCALLBACKS);
+            Result = TRUE;
+            break;
+        }
+        case IOCTL_VIDEO_HGSMI_HANDLER_ENABLE:
+        {
+            dprintf(("VBoxVideo::VBoxVideoStartIO: IOCTL_VIDEO_HGSMI_HANDLER_ENABLE\n"));
+
+            if (RequestPacket->InputBufferLength< sizeof(HGSMIHANDLERENABLE))
+            {
+                dprintf(("VBoxVideo::VBoxVideoStartIO: Output buffer too small: %d needed: %d!!!\n",
+                         RequestPacket->InputBufferLength, sizeof(HGSMIHANDLERENABLE)));
+                RequestPacket->StatusBlock->Status = ERROR_INSUFFICIENT_BUFFER;
+                return FALSE;
+            }
+
+            if (!pDevExt->pPrimary->u.primary.bHGSMI)
+            {
+                RequestPacket->StatusBlock->Status = ERROR_INVALID_FUNCTION;
+                return FALSE;
+            }
+
+            HGSMIHANDLERENABLE *pInfo = (HGSMIHANDLERENABLE *)RequestPacket->InputBuffer;
+
+            int rc = vboxVBVAChannelDisplayEnable(pDevExt->pPrimary,
+                    pDevExt->iDevice,
+                    pInfo->u8Channel);
+            if(RT_FAILURE(rc))
+            {
+                RequestPacket->StatusBlock->Status = ERROR_INVALID_NAME;
+            }
+            Result = TRUE;
+            break;
+        }
+        case IOCTL_VIDEO_HGSMI_HANDLER_DISABLE:
+        {
+            /* TODO: implement */
+            if (!pDevExt->pPrimary->u.primary.bHGSMI)
+            {
+                RequestPacket->StatusBlock->Status = ERROR_INVALID_FUNCTION;
+                return FALSE;
+            }
             break;
         }
 #endif /* VBOX_WITH_HGSMI */

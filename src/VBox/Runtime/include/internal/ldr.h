@@ -34,7 +34,7 @@
 #include <iprt/types.h>
 #include "internal/magics.h"
 
-__BEGIN_DECLS
+RT_C_DECLS_BEGIN
 
 
 /*******************************************************************************
@@ -378,7 +378,7 @@ int rtldrkLdrOpen(PRTLDRREADER pReader, uint32_t fFlags, RTLDRARCH enmArch, PRTL
 int rtldrMachoOpen(PRTLDRREADER pReader, uint32_t fFlags, RTLDRARCH enmArch, RTFOFF offSomething, PRTLDRMOD phLdrMod);*/
 
 
-__END_DECLS
+RT_C_DECLS_END
 
 #endif
 

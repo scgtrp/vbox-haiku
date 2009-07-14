@@ -51,6 +51,11 @@ void printUsage(USAGECATEGORY u64Cmd)
 #else
     bool fVRDP = false;
 #endif
+#ifdef VBOX_WITH_VBOXSDL
+    bool fVBoxSDL = true;
+#else
+    bool fVBoxSDL = false;
+#endif
 
     if (u64Cmd == USAGE_DUMPOPTS)
     {
@@ -59,6 +64,7 @@ void printUsage(USAGECATEGORY u64Cmd)
         fSolaris = true;
         fDarwin = true;
         fVRDP = true;
+        fVBoxSDL = true;
         u64Cmd = USAGE_ALL;
     }
 
@@ -124,9 +130,10 @@ void printUsage(USAGECATEGORY u64Cmd)
                  "                            [--acpi on|off]\n"
                  "                            [--ioapic on|off]\n"
                  "                            [--pae on|off]\n"
-                 "                            [--hwvirtex on|off|default]\n"
+                 "                            [--hwvirtex on|off]\n"
                  "                            [--nestedpaging on|off]\n"
                  "                            [--vtxvpid on|off]\n"
+                 "                            [--cpus <number>]\n"
                  "                            [--monitorcount <number>]\n"
                  "                            [--accelerate3d <on|off>]\n"
                  "                            [--bioslogofadein on|off]\n"
@@ -179,6 +186,7 @@ void printUsage(USAGECATEGORY u64Cmd)
                  "                            [--uartmode<1-N> disconnected|\n"
                  "                                             server <pipe>|\n"
                  "                                             client <pipe>|\n"
+                 "                                             file <file>|\n"
                  "                                             <devicename>]\n"
 #ifdef VBOX_WITH_MEM_BALLOONING
                  "                            [--guestmemoryballoon <balloonsize in MB>]\n"
@@ -196,7 +204,11 @@ void printUsage(USAGECATEGORY u64Cmd)
         }
         if (fSolaris)
         {
-            RTPrintf(                        "|solaudio");
+            RTPrintf(                        "|solaudio"
+#ifdef VBOX_WITH_SOLARIS_OSS
+                                             "|oss"
+#endif
+                                              );
         }
         if (fLinux)
         {
@@ -256,8 +268,12 @@ void printUsage(USAGECATEGORY u64Cmd)
     if (u64Cmd & USAGE_STARTVM)
     {
         RTPrintf("VBoxManage startvm          <uuid>|<name>\n");
+        RTPrintf("                            [--type gui");
+        if (fVBoxSDL)
+            RTPrintf(                         "|sdl");
         if (fVRDP)
-            RTPrintf("                            [--type gui|vrdp]\n");
+            RTPrintf(                         "|vrdp");
+        RTPrintf(                             "|headless]\n");
         RTPrintf("\n");
     }
 
@@ -268,7 +284,16 @@ void printUsage(USAGECATEGORY u64Cmd)
                  "                            acpipowerbutton|acpisleepbutton|\n"
                  "                            keyboardputscancode <hex> [<hex> ...]|\n"
                  "                            injectnmi|\n"
-                 "                            setlinkstate<1-4> on|off |\n"
+                 "                            setlinkstate<1-N> on|off |\n"
+#ifdef VBOX_DYNAMIC_NET_ATTACH
+#if defined(VBOX_WITH_NETFLT)
+                 "                            nic<1-N> none|null|nat|bridged|intnet|hostonly\n"
+                 "                                     [<devicename>] |\n"
+#else /* !RT_OS_LINUX && !RT_OS_DARWIN */
+                 "                            nic<1-N> none|null|nat|bridged|intnet\n"
+                 "                                     [<devicename>] |\n"
+#endif /* !RT_OS_LINUX && !RT_OS_DARWIN  */
+#endif /* VBOX_DYNAMIC_NET_ATTACH */
                  "                            usbattach <uuid>|<address> |\n"
                  "                            usbdetach <uuid>|<address> |\n"
                  "                            dvdattach none|<uuid>|<filename>|host:<drive> |\n"
@@ -344,9 +369,7 @@ void printUsage(USAGECATEGORY u64Cmd)
         RTPrintf("VBoxManage modifyhd         <uuid>|<filename>\n"
                  "                            [--type normal|writethrough|immutable]\n"
                  "                            [--autoreset on|off]\n"
-#if 0
                  "                            [--compact]\n"
-#endif
                  "\n");
     }
 
@@ -356,7 +379,7 @@ void printUsage(USAGECATEGORY u64Cmd)
                  "                            [--format VDI|VMDK|VHD|RAW|<other>]\n"
                  "                            [--variant Standard,Fixed,Split2G,Stream,ESX]\n"
                  "                            [--type normal|writethrough|immutable]\n"
-                 "                            [--remember]\n"
+                 "                            [--remember] [--existing]\n"
                  "\n");
     }
 
@@ -407,7 +430,6 @@ void printUsage(USAGECATEGORY u64Cmd)
                  "                            machinefolder default|<folder> |\n"
                  "                            vrdpauthlibrary default|<library> |\n"
                  "                            websrvauthlibrary default|null|<library> |\n"
-                 "                            hwvirtexenabled yes|no\n"
                  "                            loghistorycount <value>\n"
                  "\n");
     }

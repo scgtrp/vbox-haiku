@@ -53,7 +53,7 @@ class HostUSBDevice;
 class ATL_NO_VTABLE PerformanceMetric :
     public VirtualBoxBaseNEXT,
     public VirtualBoxSupportTranslation <PerformanceMetric>,
-    public IPerformanceMetric
+    VBOX_SCRIPTABLE_IMPL(IPerformanceMetric)
 {
 public:
 
@@ -63,6 +63,7 @@ public:
 
     BEGIN_COM_MAP (PerformanceMetric)
         COM_INTERFACE_ENTRY (IPerformanceMetric)
+        COM_INTERFACE_ENTRY (IDispatch)
     END_COM_MAP()
 
     NS_DECL_ISUPPORTS
@@ -122,7 +123,7 @@ class ATL_NO_VTABLE PerformanceCollector :
     public VirtualBoxBaseNEXT,
     public VirtualBoxSupportErrorInfoImpl <PerformanceCollector, IPerformanceCollector>,
     public VirtualBoxSupportTranslation <PerformanceCollector>,
-    public IPerformanceCollector
+    VBOX_SCRIPTABLE_IMPL(IPerformanceCollector)
 {
 public:
 
@@ -135,6 +136,7 @@ public:
     BEGIN_COM_MAP(PerformanceCollector)
         COM_INTERFACE_ENTRY(ISupportErrorInfo)
         COM_INTERFACE_ENTRY(IPerformanceCollector)
+        COM_INTERFACE_ENTRY(IDispatch)
     END_COM_MAP()
 
     NS_DECL_ISUPPORTS
@@ -185,6 +187,9 @@ public:
     void registerMetric (pm::Metric *metric);
     void unregisterBaseMetricsFor (const ComPtr <IUnknown> &object);
     void unregisterMetricsFor (const ComPtr <IUnknown> &object);
+
+    void suspendSampling();
+    void resumeSampling();
 
     // public methods for internal purposes only
     // (ensure there is a caller and a read lock before calling them!)

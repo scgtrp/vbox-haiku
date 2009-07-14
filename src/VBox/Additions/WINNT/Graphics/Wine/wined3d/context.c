@@ -38,6 +38,7 @@ WINE_DEFAULT_DEBUG_CHANNEL(d3d);
 
 #define GLINFO_LOCATION This->adapter->gl_info
 
+/* GL locking is done by the caller */
 /* The last used device.
  *
  * If the application creates multiple devices and switches between them, ActivateContext has to
@@ -62,12 +63,11 @@ void context_bind_fbo(IWineD3DDevice *iface, GLenum target, GLuint *fbo)
     checkGLcall("glBindFramebuffer()");
 }
 
-static void context_destroy_fbo(IWineD3DDeviceImpl *This, const GLuint *fbo)
+/* GL locking is done by the caller */
+static void context_clean_fbo_attachments(IWineD3DDeviceImpl *This)
 {
-    int i = 0;
+    unsigned int i;
 
-    GL_EXTCALL(glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, *fbo));
-    checkGLcall("glBindFramebuffer()");
     for (i = 0; i < GL_LIMITS(buffers); ++i)
     {
         GL_EXTCALL(glFramebufferTexture2DEXT(GL_FRAMEBUFFER_EXT, GL_COLOR_ATTACHMENT0_EXT + i, GL_TEXTURE_2D, 0, 0));
@@ -75,12 +75,23 @@ static void context_destroy_fbo(IWineD3DDeviceImpl *This, const GLuint *fbo)
     }
     GL_EXTCALL(glFramebufferTexture2DEXT(GL_FRAMEBUFFER_EXT, GL_DEPTH_ATTACHMENT_EXT, GL_TEXTURE_2D, 0, 0));
     checkGLcall("glFramebufferTexture2D()");
+}
+
+/* GL locking is done by the caller */
+static void context_destroy_fbo(IWineD3DDeviceImpl *This, const GLuint *fbo)
+{
+    GL_EXTCALL(glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, *fbo));
+    checkGLcall("glBindFramebuffer()");
+
+    context_clean_fbo_attachments(This);
+
     GL_EXTCALL(glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, 0));
     checkGLcall("glBindFramebuffer()");
     GL_EXTCALL(glDeleteFramebuffersEXT(1, fbo));
     checkGLcall("glDeleteFramebuffers()");
 }
 
+/* GL locking is done by the caller */
 static void context_apply_attachment_filter_states(IWineD3DDevice *iface, IWineD3DSurface *surface, BOOL force_preload)
 {
     IWineD3DDeviceImpl *This = (IWineD3DDeviceImpl *)iface;
@@ -133,7 +144,7 @@ static void context_apply_attachment_filter_states(IWineD3DDevice *iface, IWineD
             glGetIntegerv(GL_TEXTURE_BINDING_CUBE_MAP_ARB, &old_binding);
         }
 
-        IWineD3DSurface_PreLoad(surface);
+        surface_internal_preload(surface, SRGB_RGB);
 
         glBindTexture(bind_target, surface_impl->glDescription.textureName);
         if (update_minfilter) glTexParameteri(bind_target, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
@@ -145,6 +156,7 @@ static void context_apply_attachment_filter_states(IWineD3DDevice *iface, IWineD
 }
 
 /* TODO: Handle stencil attachments */
+/* GL locking is done by the caller */
 void context_attach_depth_stencil_fbo(IWineD3DDeviceImpl *This, GLenum fbo_target, IWineD3DSurface *depth_stencil, BOOL use_render_buffer)
 {
     IWineD3DSurfaceImpl *depth_stencil_impl = (IWineD3DSurfaceImpl *)depth_stencil;
@@ -170,6 +182,7 @@ void context_attach_depth_stencil_fbo(IWineD3DDeviceImpl *This, GLenum fbo_targe
     }
 }
 
+/* GL locking is done by the caller */
 void context_attach_surface_fbo(IWineD3DDeviceImpl *This, GLenum fbo_target, DWORD idx, IWineD3DSurface *surface)
 {
     const IWineD3DSurfaceImpl *surface_impl = (IWineD3DSurfaceImpl *)surface;
@@ -189,6 +202,7 @@ void context_attach_surface_fbo(IWineD3DDeviceImpl *This, GLenum fbo_target, DWO
     }
 }
 
+/* GL locking is done by the caller */
 static void context_check_fbo_status(IWineD3DDevice *iface)
 {
     IWineD3DDeviceImpl *This = (IWineD3DDeviceImpl *)iface;
@@ -209,14 +223,16 @@ static void context_check_fbo_status(IWineD3DDevice *iface)
             attachment = (IWineD3DSurfaceImpl *)This->activeContext->current_fbo->render_targets[i];
             if (attachment)
             {
-                FIXME("\tColor attachment %d: (%p) %s %ux%u\n", i, attachment, debug_d3dformat(attachment->resource.format),
+                FIXME("\tColor attachment %d: (%p) %s %ux%u\n",
+                        i, attachment, debug_d3dformat(attachment->resource.format_desc->format),
                         attachment->pow2Width, attachment->pow2Height);
             }
         }
         attachment = (IWineD3DSurfaceImpl *)This->activeContext->current_fbo->depth_stencil;
         if (attachment)
         {
-            FIXME("\tDepth attachment: (%p) %s %ux%u\n", attachment, debug_d3dformat(attachment->resource.format),
+            FIXME("\tDepth attachment: (%p) %s %ux%u\n",
+                    attachment, debug_d3dformat(attachment->resource.format_desc->format),
                     attachment->pow2Width, attachment->pow2Height);
         }
     }
@@ -237,19 +253,36 @@ static struct fbo_entry *context_create_fbo_entry(IWineD3DDevice *iface)
     return entry;
 }
 
-static void context_destroy_fbo_entry(IWineD3DDeviceImpl *This, struct fbo_entry *entry)
+/* GL locking is done by the caller */
+static void context_reuse_fbo_entry(IWineD3DDevice *iface, struct fbo_entry *entry)
+{
+    IWineD3DDeviceImpl *This = (IWineD3DDeviceImpl *)iface;
+
+    GL_EXTCALL(glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, entry->id));
+    checkGLcall("glBindFramebuffer()");
+    context_clean_fbo_attachments(This);
+
+    memcpy(entry->render_targets, This->render_targets, GL_LIMITS(buffers) * sizeof(*entry->render_targets));
+    entry->depth_stencil = This->stencilBufferTarget;
+    entry->attached = FALSE;
+}
+
+/* GL locking is done by the caller */
+static void context_destroy_fbo_entry(IWineD3DDeviceImpl *This, WineD3DContext *context, struct fbo_entry *entry)
 {
     if (entry->id)
     {
         TRACE("Destroy FBO %d\n", entry->id);
         context_destroy_fbo(This, &entry->id);
     }
+    --context->fbo_entry_count;
     list_remove(&entry->entry);
     HeapFree(GetProcessHeap(), 0, entry->render_targets);
     HeapFree(GetProcessHeap(), 0, entry);
 }
 
 
+/* GL locking is done by the caller */
 static struct fbo_entry *context_find_fbo_entry(IWineD3DDevice *iface, WineD3DContext *context)
 {
     IWineD3DDeviceImpl *This = (IWineD3DDeviceImpl *)iface;
@@ -260,15 +293,30 @@ static struct fbo_entry *context_find_fbo_entry(IWineD3DDevice *iface, WineD3DCo
         if (!memcmp(entry->render_targets, This->render_targets, GL_LIMITS(buffers) * sizeof(*entry->render_targets))
                 && entry->depth_stencil == This->stencilBufferTarget)
         {
+            list_remove(&entry->entry);
+            list_add_head(&context->fbo_list, &entry->entry);
             return entry;
         }
     }
 
-    entry = context_create_fbo_entry(iface);
-    list_add_head(&context->fbo_list, &entry->entry);
+    if (context->fbo_entry_count < WINED3D_MAX_FBO_ENTRIES)
+    {
+        entry = context_create_fbo_entry(iface);
+        list_add_head(&context->fbo_list, &entry->entry);
+        ++context->fbo_entry_count;
+    }
+    else
+    {
+        entry = LIST_ENTRY(list_tail(&context->fbo_list), struct fbo_entry, entry);
+        context_reuse_fbo_entry(iface, entry);
+        list_remove(&entry->entry);
+        list_add_head(&context->fbo_list, &entry->entry);
+    }
+
     return entry;
 }
 
+/* GL locking is done by the caller */
 static void context_apply_fbo_entry(IWineD3DDevice *iface, struct fbo_entry *entry)
 {
     IWineD3DDeviceImpl *This = (IWineD3DDeviceImpl *)iface;
@@ -314,6 +362,7 @@ static void context_apply_fbo_entry(IWineD3DDevice *iface, struct fbo_entry *ent
     }
 }
 
+/* GL locking is done by the caller */
 static void context_apply_fbo_state(IWineD3DDevice *iface)
 {
     IWineD3DDeviceImpl *This = (IWineD3DDeviceImpl *)iface;
@@ -342,9 +391,12 @@ void context_resource_released(IWineD3DDevice *iface, IWineD3DResource *resource
         {
             for (i = 0; i < This->numContexts; ++i)
             {
+                WineD3DContext *context = This->contexts[i];
                 struct fbo_entry *entry, *entry2;
 
-                LIST_FOR_EACH_ENTRY_SAFE(entry, entry2, &This->contexts[i]->fbo_list, struct fbo_entry, entry)
+                ENTER_GL();
+
+                LIST_FOR_EACH_ENTRY_SAFE(entry, entry2, &context->fbo_list, struct fbo_entry, entry)
                 {
                     BOOL destroyed = FALSE;
                     UINT j;
@@ -353,14 +405,16 @@ void context_resource_released(IWineD3DDevice *iface, IWineD3DResource *resource
                     {
                         if (entry->render_targets[j] == (IWineD3DSurface *)resource)
                         {
-                            context_destroy_fbo_entry(This, entry);
+                            context_destroy_fbo_entry(This, context, entry);
                             destroyed = TRUE;
                         }
                     }
 
                     if (!destroyed && entry->depth_stencil == (IWineD3DSurface *)resource)
-                        context_destroy_fbo_entry(This, entry);
+                        context_destroy_fbo_entry(This, context, entry);
                 }
+
+                LEAVE_GL();
             }
 
             break;
@@ -453,7 +507,9 @@ static WineD3DContext *AddContextToArray(IWineD3DDeviceImpl *This, HWND win_hand
 }
 
 /* This function takes care of WineD3D pixel format selection. */
-static int WineD3D_ChoosePixelFormat(IWineD3DDeviceImpl *This, HDC hdc, WINED3DFORMAT ColorFormat, WINED3DFORMAT DepthStencilFormat, BOOL auxBuffers, int numSamples, BOOL pbuffer, BOOL findCompatible)
+static int WineD3D_ChoosePixelFormat(IWineD3DDeviceImpl *This, HDC hdc,
+        const struct GlPixelFormatDesc *color_format_desc, const struct GlPixelFormatDesc *ds_format_desc,
+        BOOL auxBuffers, int numSamples, BOOL pbuffer, BOOL findCompatible)
 {
     int iPixelFormat=0;
     unsigned int matchtry;
@@ -484,10 +540,13 @@ static int WineD3D_ChoosePixelFormat(IWineD3DDeviceImpl *This, HDC hdc, WINED3DF
     int nCfgs = This->adapter->nCfgs;
 
     TRACE("ColorFormat=%s, DepthStencilFormat=%s, auxBuffers=%d, numSamples=%d, pbuffer=%d, findCompatible=%d\n",
-          debug_d3dformat(ColorFormat), debug_d3dformat(DepthStencilFormat), auxBuffers, numSamples, pbuffer, findCompatible);
+          debug_d3dformat(color_format_desc->format), debug_d3dformat(ds_format_desc->format),
+          auxBuffers, numSamples, pbuffer, findCompatible);
 
-    if(!getColorBits(ColorFormat, &redBits, &greenBits, &blueBits, &alphaBits, &colorBits)) {
-        ERR("Unable to get color bits for format %s (%#x)!\n", debug_d3dformat(ColorFormat), ColorFormat);
+    if (!getColorBits(color_format_desc, &redBits, &greenBits, &blueBits, &alphaBits, &colorBits))
+    {
+        ERR("Unable to get color bits for format %s (%#x)!\n",
+                debug_d3dformat(color_format_desc->format), color_format_desc->format);
         return 0;
     }
 
@@ -502,14 +561,13 @@ static int WineD3D_ChoosePixelFormat(IWineD3DDeviceImpl *This, HDC hdc, WINED3DF
      * Likely a lot of other new bugs will be exposed. For that reason request a depth stencil surface all the
      * time. It can cause a slight performance hit but fixes a lot of regressions. A fixme reminds of that this
      * issue needs to be fixed. */
-    if(DepthStencilFormat != WINED3DFMT_D24S8)
+    if (ds_format_desc->format != WINED3DFMT_D24S8)
+    {
         FIXME("Add OpenGL context recreation support to SetDepthStencilSurface\n");
-
-    DepthStencilFormat = WINED3DFMT_D24S8;
-
-    if(DepthStencilFormat) {
-        getDepthStencilBits(DepthStencilFormat, &depthBits, &stencilBits);
+        ds_format_desc = getFormatDescEntry(WINED3DFMT_D24S8, &This->adapter->gl_info);
     }
+
+    getDepthStencilBits(ds_format_desc, &depthBits, &stencilBits);
 
     for(matchtry = 0; matchtry < (sizeof(matches) / sizeof(matches[0])) && !iPixelFormat; matchtry++) {
         for(i=0; i<nCfgs; i++) {
@@ -621,7 +679,8 @@ static int WineD3D_ChoosePixelFormat(IWineD3DDeviceImpl *This, HDC hdc, WINED3DF
         }
     }
 
-    TRACE("Found iPixelFormat=%d for ColorFormat=%s, DepthStencilFormat=%s\n", iPixelFormat, debug_d3dformat(ColorFormat), debug_d3dformat(DepthStencilFormat));
+    TRACE("Found iPixelFormat=%d for ColorFormat=%s, DepthStencilFormat=%s\n",
+            iPixelFormat, debug_d3dformat(color_format_desc->format), debug_d3dformat(ds_format_desc->format));
     return iPixelFormat;
 }
 
@@ -643,7 +702,7 @@ WineD3DContext *CreateContext(IWineD3DDeviceImpl *This, IWineD3DSurfaceImpl *tar
     HPBUFFERARB pbuffer = NULL;
     HGLRC ctx = NULL, oldCtx;
     WineD3DContext *ret = NULL;
-    int s;
+    unsigned int s;
 
     TRACE("(%p): Creating a %s context for render target %p\n", This, create_pbuffer ? "offscreen" : "onscreen", target);
 
@@ -652,16 +711,22 @@ WineD3DContext *CreateContext(IWineD3DDeviceImpl *This, IWineD3DSurfaceImpl *tar
         int iPixelFormat = 0;
 
         IWineD3DSurface *StencilSurface = This->stencilBufferTarget;
-        WINED3DFORMAT StencilBufferFormat = (NULL != StencilSurface) ? ((IWineD3DSurfaceImpl *) StencilSurface)->resource.format : 0;
+        const struct GlPixelFormatDesc *ds_format_desc = StencilSurface
+                ? ((IWineD3DSurfaceImpl *)StencilSurface)->resource.format_desc
+                : getFormatDescEntry(WINED3DFMT_UNKNOWN, &This->adapter->gl_info);
 
         /* Try to find a pixel format with pbuffer support. */
-        iPixelFormat = WineD3D_ChoosePixelFormat(This, hdc_parent, target->resource.format, StencilBufferFormat, FALSE /* auxBuffers */, 0 /* numSamples */, TRUE /* PBUFFER */, FALSE /* findCompatible */);
+        iPixelFormat = WineD3D_ChoosePixelFormat(This, hdc_parent, target->resource.format_desc,
+                ds_format_desc, FALSE /* auxBuffers */, 0 /* numSamples */, TRUE /* PBUFFER */,
+                FALSE /* findCompatible */);
         if(!iPixelFormat) {
             TRACE("Trying to locate a compatible pixel format because an exact match failed.\n");
 
             /* For some reason we weren't able to find a format, try to find something instead of crashing.
              * A reason for failure could have been wglChoosePixelFormatARB strictness. */
-            iPixelFormat = WineD3D_ChoosePixelFormat(This, hdc_parent, target->resource.format, StencilBufferFormat, FALSE /* auxBuffer */, 0 /* numSamples */, TRUE /* PBUFFER */, TRUE /* findCompatible */);
+            iPixelFormat = WineD3D_ChoosePixelFormat(This, hdc_parent, target->resource.format_desc,
+                    ds_format_desc, FALSE /* auxBuffer */, 0 /* numSamples */, TRUE /* PBUFFER */,
+                    TRUE /* findCompatible */);
         }
 
         /* This shouldn't happen as ChoosePixelFormat always returns something */
@@ -692,8 +757,9 @@ WineD3DContext *CreateContext(IWineD3DDeviceImpl *This, IWineD3DSurfaceImpl *tar
         PIXELFORMATDESCRIPTOR pfd;
         int iPixelFormat;
         int res;
-        WINED3DFORMAT ColorFormat = target->resource.format;
-        WINED3DFORMAT DepthStencilFormat = 0;
+        const struct GlPixelFormatDesc *color_format_desc = target->resource.format_desc;
+        const struct GlPixelFormatDesc *ds_format_desc = getFormatDescEntry(WINED3DFMT_UNKNOWN,
+                &This->adapter->gl_info);
         BOOL auxBuffers = FALSE;
         int numSamples = 0;
 
@@ -707,25 +773,25 @@ WineD3DContext *CreateContext(IWineD3DDeviceImpl *This, IWineD3DSurfaceImpl *tar
         if(wined3d_settings.offscreen_rendering_mode == ORM_BACKBUFFER) {
             auxBuffers = TRUE;
 
-            if(target->resource.format == WINED3DFMT_X4R4G4B4)
-                ColorFormat = WINED3DFMT_A4R4G4B4;
-            else if(target->resource.format == WINED3DFMT_X8R8G8B8)
-                ColorFormat = WINED3DFMT_A8R8G8B8;
+            if (color_format_desc->format == WINED3DFMT_X4R4G4B4)
+                color_format_desc = getFormatDescEntry(WINED3DFMT_A4R4G4B4, &This->adapter->gl_info);
+            else if (color_format_desc->format == WINED3DFMT_X8R8G8B8)
+                color_format_desc = getFormatDescEntry(WINED3DFMT_A8R8G8B8, &This->adapter->gl_info);
         }
 
         /* DirectDraw supports 8bit paletted render targets and these are used by old games like Starcraft and C&C.
          * Most modern hardware doesn't support 8bit natively so we perform some form of 8bit -> 32bit conversion.
          * The conversion (ab)uses the alpha component for storing the palette index. For this reason we require
          * a format with 8bit alpha, so request A8R8G8B8. */
-        if(ColorFormat == WINED3DFMT_P8)
-            ColorFormat = WINED3DFMT_A8R8G8B8;
+        if (color_format_desc->format == WINED3DFMT_P8)
+            color_format_desc = getFormatDescEntry(WINED3DFMT_A8R8G8B8, &This->adapter->gl_info);
 
         /* Retrieve the depth stencil format from the present parameters.
          * The choice of the proper format can give a nice performance boost
          * in case of GPU limited programs. */
         if(pPresentParms->EnableAutoDepthStencil) {
             TRACE("pPresentParms->EnableAutoDepthStencil=enabled; using AutoDepthStencilFormat=%s\n", debug_d3dformat(pPresentParms->AutoDepthStencilFormat));
-            DepthStencilFormat = pPresentParms->AutoDepthStencilFormat;
+            ds_format_desc = getFormatDescEntry(pPresentParms->AutoDepthStencilFormat, &This->adapter->gl_info);
         }
 
         /* D3D only allows multisampling when SwapEffect is set to WINED3DSWAPEFFECT_DISCARD */
@@ -739,12 +805,14 @@ WineD3DContext *CreateContext(IWineD3DDeviceImpl *This, IWineD3DSurfaceImpl *tar
         }
 
         /* Try to find a pixel format which matches our requirements */
-        iPixelFormat = WineD3D_ChoosePixelFormat(This, hdc, ColorFormat, DepthStencilFormat, auxBuffers, numSamples, FALSE /* PBUFFER */, FALSE /* findCompatible */);
+        iPixelFormat = WineD3D_ChoosePixelFormat(This, hdc, color_format_desc, ds_format_desc,
+                auxBuffers, numSamples, FALSE /* PBUFFER */, FALSE /* findCompatible */);
 
         /* Try to locate a compatible format if we weren't able to find anything */
         if(!iPixelFormat) {
             TRACE("Trying to locate a compatible pixel format because an exact match failed.\n");
-            iPixelFormat = WineD3D_ChoosePixelFormat(This, hdc, ColorFormat, DepthStencilFormat, auxBuffers, 0 /* numSamples */, FALSE /* PBUFFER */, TRUE /* findCompatible */ );
+            iPixelFormat = WineD3D_ChoosePixelFormat(This, hdc, color_format_desc, ds_format_desc,
+                    auxBuffers, 0 /* numSamples */, FALSE /* PBUFFER */, TRUE /* findCompatible */ );
         }
 
         /* If we still don't have a pixel format, something is very wrong as ChoosePixelFormat barely fails */
@@ -848,12 +916,6 @@ WineD3DContext *CreateContext(IWineD3DDeviceImpl *This, IWineD3DSurfaceImpl *tar
 
     checkGLcall("glClear");
 
-    glColor3f(1.0, 1.0, 1.0);
-    checkGLcall("glColor3f");
-
-    glEnable(GL_LIGHTING);
-    checkGLcall("glEnable");
-
     glLightModeli(GL_LIGHT_MODEL_LOCAL_VIEWER, GL_TRUE);
     checkGLcall("glLightModeli(GL_LIGHT_MODEL_LOCAL_VIEWER, GL_TRUE);");
 
@@ -893,13 +955,29 @@ WineD3DContext *CreateContext(IWineD3DDeviceImpl *This, IWineD3DSurfaceImpl *tar
             checkGLcall("glTexEnvi(GL_TEXTURE_SHADER_NV, GL_PREVIOUS_TEXTURE_INPUT_NV, ...\n");
         }
     }
+    if(GL_SUPPORT(ARB_FRAGMENT_PROGRAM)) {
+        /* MacOS(radeon X1600 at least, but most likely others too) refuses to draw if GLSL and ARBFP are
+         * enabled, but the currently bound arbfp program is 0. Enabling ARBFP with prog 0 is invalid, but
+         * GLSL should bypass this. This causes problems in programs that never use the fixed function pipeline,
+         * because the ARBFP extension is enabled by the ARBFP pipeline at context creation, but no program
+         * is ever assigned.
+         *
+         * So make sure a program is assigned to each context. The first real ARBFP use will set a different
+         * program and the dummy program is destroyed when the context is destroyed.
+         */
+        const char *dummy_program =
+                "!!ARBfp1.0\n"
+                "MOV result.color, fragment.color.primary;\n"
+                "END\n";
+        GL_EXTCALL(glGenProgramsARB(1, &ret->dummy_arbfp_prog));
+        GL_EXTCALL(glBindProgramARB(GL_FRAGMENT_PROGRAM_ARB, ret->dummy_arbfp_prog));
+        GL_EXTCALL(glProgramStringARB(GL_FRAGMENT_PROGRAM_ARB, GL_PROGRAM_FORMAT_ASCII_ARB, strlen(dummy_program), dummy_program));
+    }
 
-    if(GL_SUPPORT(ARB_POINT_SPRITE)) {
-        for(s = 0; s < GL_LIMITS(textures); s++) {
-            GL_EXTCALL(glActiveTextureARB(GL_TEXTURE0_ARB + s));
-            glTexEnvi(GL_POINT_SPRITE_ARB, GL_COORD_REPLACE_ARB, GL_TRUE);
-            checkGLcall("glTexEnvi(GL_POINT_SPRITE_ARB, GL_COORD_REPLACE_ARB, GL_TRUE)\n");
-        }
+    for(s = 0; s < GL_LIMITS(point_sprite_units); s++) {
+        GL_EXTCALL(glActiveTextureARB(GL_TEXTURE0_ARB + s));
+        glTexEnvi(GL_POINT_SPRITE_ARB, GL_COORD_REPLACE_ARB, GL_TRUE);
+        checkGLcall("glTexEnvi(GL_POINT_SPRITE_ARB, GL_COORD_REPLACE_ARB, GL_TRUE)\n");
     }
     LEAVE_GL();
 
@@ -934,31 +1012,50 @@ out:
  *
  *****************************************************************************/
 static void RemoveContextFromArray(IWineD3DDeviceImpl *This, WineD3DContext *context) {
-    UINT t, s;
-    WineD3DContext **oldArray = This->contexts;
+    WineD3DContext **new_array;
+    BOOL found = FALSE;
+    UINT i;
 
     TRACE("Removing ctx %p\n", context);
 
-    This->numContexts--;
-
-    if(This->numContexts) {
-        This->contexts = HeapAlloc(GetProcessHeap(), 0, sizeof(*This->contexts) * This->numContexts);
-        if(!This->contexts) {
-            ERR("Cannot allocate a new context array, PANIC!!!\n");
+    for (i = 0; i < This->numContexts; ++i)
+    {
+        if (This->contexts[i] == context)
+        {
+            HeapFree(GetProcessHeap(), 0, context);
+            found = TRUE;
+            break;
         }
-        t = 0;
-        /* Note that we decreased numContexts a few lines up, so use '<=' instead of '<' */
-        for(s = 0; s <= This->numContexts; s++) {
-            if(oldArray[s] == context) continue;
-            This->contexts[t] = oldArray[s];
-            t++;
-        }
-    } else {
-        This->contexts = NULL;
     }
 
-    HeapFree(GetProcessHeap(), 0, context);
-    HeapFree(GetProcessHeap(), 0, oldArray);
+    if (!found)
+    {
+        ERR("Context %p doesn't exist in context array\n", context);
+        return;
+    }
+
+    while (i < This->numContexts - 1)
+    {
+        This->contexts[i] = This->contexts[i + 1];
+        ++i;
+    }
+
+    --This->numContexts;
+    if (!This->numContexts)
+    {
+        HeapFree(GetProcessHeap(), 0, This->contexts);
+        This->contexts = NULL;
+        return;
+    }
+
+    new_array = HeapReAlloc(GetProcessHeap(), 0, This->contexts, This->numContexts * sizeof(*This->contexts));
+    if (!new_array)
+    {
+        ERR("Failed to shrink context array. Oh well.\n");
+        return;
+    }
+
+    This->contexts = new_array;
 }
 
 /*****************************************************************************
@@ -985,7 +1082,7 @@ void DestroyContext(IWineD3DDeviceImpl *This, WineD3DContext *context) {
     ENTER_GL();
 
     LIST_FOR_EACH_ENTRY_SAFE(entry, entry2, &context->fbo_list, struct fbo_entry, entry) {
-        context_destroy_fbo_entry(This, entry);
+        context_destroy_fbo_entry(This, context, entry);
     }
     if (context->src_fbo) {
         TRACE("Destroy src FBO %d\n", context->src_fbo);
@@ -995,8 +1092,17 @@ void DestroyContext(IWineD3DDeviceImpl *This, WineD3DContext *context) {
         TRACE("Destroy dst FBO %d\n", context->dst_fbo);
         context_destroy_fbo(This, &context->dst_fbo);
     }
+    if(context->dummy_arbfp_prog) {
+        GL_EXTCALL(glDeleteProgramsARB(1, &context->dummy_arbfp_prog));
+    }
 
     LEAVE_GL();
+
+    if (This->activeContext == context)
+    {
+        This->activeContext = NULL;
+        TRACE("Destroying the active context.\n");
+    }
 
     /* Cleanup the GL context */
     pwglMakeCurrent(NULL, NULL);
@@ -1011,6 +1117,7 @@ void DestroyContext(IWineD3DDeviceImpl *This, WineD3DContext *context) {
     RemoveContextFromArray(This, context);
 }
 
+/* GL locking is done by the caller */
 static inline void set_blit_dimension(UINT width, UINT height) {
     glMatrixMode(GL_PROJECTION);
     checkGLcall("glMatrixMode(GL_PROJECTION)");
@@ -1047,7 +1154,9 @@ static inline void SetupForBlit(IWineD3DDeviceImpl *This, WineD3DContext *contex
     TRACE("Setting up context %p for blitting\n", context);
     if(context->last_was_blit) {
         if(context->blit_w != width || context->blit_h != height) {
+            ENTER_GL();
             set_blit_dimension(width, height);
+            LEAVE_GL();
             context->blit_w = width; context->blit_h = height;
             /* No need to dirtify here, the states are still dirtified because they weren't
              * applied since the last SetupForBlit call. Otherwise last_was_blit would not
@@ -1062,7 +1171,10 @@ static inline void SetupForBlit(IWineD3DDeviceImpl *This, WineD3DContext *contex
     /* TODO: Use a display list */
 
     /* Disable shaders */
-    This->shader_backend->shader_cleanup((IWineD3DDevice *) This);
+    ENTER_GL();
+    This->shader_backend->shader_select((IWineD3DDevice *)This, FALSE, FALSE);
+    LEAVE_GL();
+
     Context_MarkStateDirty(context, STATE_VSHADER, StateTable);
     Context_MarkStateDirty(context, STATE_PIXELSHADER, StateTable);
 
@@ -1075,42 +1187,40 @@ static inline void SetupForBlit(IWineD3DDeviceImpl *This, WineD3DContext *contex
 
     /* Disable all textures. The caller can then bind a texture it wants to blit
      * from
+     *
+     * The blitting code uses (for now) the fixed function pipeline, so make sure to reset all fixed
+     * function texture unit. No need to care for higher samplers
      */
-    if (GL_SUPPORT(ARB_MULTITEXTURE)) {
-        /* The blitting code uses (for now) the fixed function pipeline, so make sure to reset all fixed
-         * function texture unit. No need to care for higher samplers
-         */
-        for(i = GL_LIMITS(textures) - 1; i > 0 ; i--) {
-            sampler = This->rev_tex_unit_map[i];
-            GL_EXTCALL(glActiveTextureARB(GL_TEXTURE0_ARB + i));
-            checkGLcall("glActiveTextureARB");
-
-            if(GL_SUPPORT(ARB_TEXTURE_CUBE_MAP)) {
-                glDisable(GL_TEXTURE_CUBE_MAP_ARB);
-                checkGLcall("glDisable GL_TEXTURE_CUBE_MAP_ARB");
-            }
-            glDisable(GL_TEXTURE_3D);
-            checkGLcall("glDisable GL_TEXTURE_3D");
-            if(GL_SUPPORT(ARB_TEXTURE_RECTANGLE)) {
-                glDisable(GL_TEXTURE_RECTANGLE_ARB);
-                checkGLcall("glDisable GL_TEXTURE_RECTANGLE_ARB");
-            }
-            glDisable(GL_TEXTURE_2D);
-            checkGLcall("glDisable GL_TEXTURE_2D");
-
-            glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
-            checkGLcall("glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);");
-
-            if (sampler != -1) {
-                if (sampler < MAX_TEXTURES) {
-                    Context_MarkStateDirty(context, STATE_TEXTURESTAGE(sampler, WINED3DTSS_COLOROP), StateTable);
-                }
-                Context_MarkStateDirty(context, STATE_SAMPLER(sampler), StateTable);
-            }
-        }
-        GL_EXTCALL(glActiveTextureARB(GL_TEXTURE0_ARB));
+    for(i = GL_LIMITS(textures) - 1; i > 0 ; i--) {
+        sampler = This->rev_tex_unit_map[i];
+        GL_EXTCALL(glActiveTextureARB(GL_TEXTURE0_ARB + i));
         checkGLcall("glActiveTextureARB");
+
+        if(GL_SUPPORT(ARB_TEXTURE_CUBE_MAP)) {
+            glDisable(GL_TEXTURE_CUBE_MAP_ARB);
+            checkGLcall("glDisable GL_TEXTURE_CUBE_MAP_ARB");
+        }
+        glDisable(GL_TEXTURE_3D);
+        checkGLcall("glDisable GL_TEXTURE_3D");
+        if(GL_SUPPORT(ARB_TEXTURE_RECTANGLE)) {
+            glDisable(GL_TEXTURE_RECTANGLE_ARB);
+            checkGLcall("glDisable GL_TEXTURE_RECTANGLE_ARB");
+        }
+        glDisable(GL_TEXTURE_2D);
+        checkGLcall("glDisable GL_TEXTURE_2D");
+
+        glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+        checkGLcall("glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);");
+
+        if (sampler != -1) {
+            if (sampler < MAX_TEXTURES) {
+                Context_MarkStateDirty(context, STATE_TEXTURESTAGE(sampler, WINED3DTSS_COLOROP), StateTable);
+            }
+            Context_MarkStateDirty(context, STATE_SAMPLER(sampler), StateTable);
+        }
     }
+    GL_EXTCALL(glActiveTextureARB(GL_TEXTURE0_ARB));
+    checkGLcall("glActiveTextureARB");
 
     sampler = This->rev_tex_unit_map[0];
 
@@ -1159,7 +1269,7 @@ static inline void SetupForBlit(IWineD3DDeviceImpl *This, WineD3DContext *contex
     glDisable(GL_DEPTH_TEST);
     checkGLcall("glDisable GL_DEPTH_TEST");
     Context_MarkStateDirty(context, STATE_RENDER(WINED3DRS_ZENABLE), StateTable);
-    glDisable(GL_FOG);
+    glDisableWINE(GL_FOG);
     checkGLcall("glDisable GL_FOG");
     Context_MarkStateDirty(context, STATE_RENDER(WINED3DRS_FOGENABLE), StateTable);
     glDisable(GL_BLEND);
@@ -1205,9 +1315,11 @@ static inline void SetupForBlit(IWineD3DDeviceImpl *This, WineD3DContext *contex
     glDisable(GL_CLIP_PLANE4); checkGLcall("glDisable(clip plane 4)");
     glDisable(GL_CLIP_PLANE5); checkGLcall("glDisable(clip plane 5)");
     Context_MarkStateDirty(context, STATE_RENDER(WINED3DRS_CLIPPING), StateTable);
-    LEAVE_GL();
 
     set_blit_dimension(width, height);
+
+    LEAVE_GL();
+
     context->blit_w = width; context->blit_h = height;
     Context_MarkStateDirty(context, STATE_VIEWPORT, StateTable);
     Context_MarkStateDirty(context, STATE_TRANSFORM(WINED3DTS_PROJECTION), StateTable);
@@ -1254,20 +1366,19 @@ static inline WineD3DContext *FindContext(IWineD3DDeviceImpl *This, IWineD3DSurf
     BOOL readTexture = wined3d_settings.offscreen_rendering_mode != ORM_FBO && This->render_offscreen;
     WineD3DContext *context = This->activeContext;
     BOOL oldRenderOffscreen = This->render_offscreen;
-    const WINED3DFORMAT oldFmt = ((IWineD3DSurfaceImpl *) This->lastActiveRenderTarget)->resource.format;
-    const WINED3DFORMAT newFmt = ((IWineD3DSurfaceImpl *) target)->resource.format;
+    const struct GlPixelFormatDesc *old = ((IWineD3DSurfaceImpl *)This->lastActiveRenderTarget)->resource.format_desc;
+    const struct GlPixelFormatDesc *new = ((IWineD3DSurfaceImpl *)target)->resource.format_desc;
     const struct StateEntry *StateTable = This->StateTable;
 
     /* To compensate the lack of format switching with some offscreen rendering methods and on onscreen buffers
      * the alpha blend state changes with different render target formats
      */
-    if(oldFmt != newFmt) {
-        const struct GlPixelFormatDesc *glDesc;
-        const StaticPixelFormatDesc *old = getFormatDescEntry(oldFmt, NULL, NULL);
-        const StaticPixelFormatDesc *new = getFormatDescEntry(newFmt, &GLINFO_LOCATION, &glDesc);
-
-        /* Disable blending when the alphaMask has changed and when a format doesn't support blending */
-        if((old->alphaMask && !new->alphaMask) || (!old->alphaMask && new->alphaMask) || !(glDesc->Flags & WINED3DFMT_FLAG_POSTPIXELSHADER_BLENDING)) {
+    if (old->format != new->format)
+    {
+        /* Disable blending when the alpha mask has changed and when a format doesn't support blending */
+        if ((old->alpha_mask && !new->alpha_mask) || (!old->alpha_mask && new->alpha_mask)
+                || !(new->Flags & WINED3DFMT_FLAG_POSTPIXELSHADER_BLENDING))
+        {
             Context_MarkStateDirty(context, STATE_RENDER(WINED3DRS_ALPHABLENDENABLE), StateTable);
         }
     }
@@ -1416,7 +1527,11 @@ static inline WineD3DContext *FindContext(IWineD3DDeviceImpl *This, IWineD3DSurf
         /* Do that before switching the context:
          * Read the back buffer of the old drawable into the destination texture
          */
-        IWineD3DSurface_PreLoad(This->lastActiveRenderTarget);
+        if(((IWineD3DSurfaceImpl *)This->lastActiveRenderTarget)->glDescription.srgbTextureName) {
+            surface_internal_preload(This->lastActiveRenderTarget, SRGB_BOTH);
+        } else {
+            surface_internal_preload(This->lastActiveRenderTarget, SRGB_RGB);
+        }
 
         /* Assume that the drawable will be modified by some other things now */
         IWineD3DSurface_ModifyLocation(This->lastActiveRenderTarget, SFLAG_INDRAWABLE, FALSE);
@@ -1537,7 +1652,9 @@ void ActivateContext(IWineD3DDeviceImpl *This, IWineD3DSurface *target, ContextU
         case CTXUSAGE_CLEAR:
         case CTXUSAGE_DRAWPRIM:
             if (wined3d_settings.offscreen_rendering_mode == ORM_FBO) {
+                ENTER_GL();
                 context_apply_fbo_state((IWineD3DDevice *)This);
+                LEAVE_GL();
             }
             if (context->draw_buffer_dirty) {
                 apply_draw_buffer(This, target, FALSE);
@@ -1549,10 +1666,9 @@ void ActivateContext(IWineD3DDeviceImpl *This, IWineD3DSurface *target, ContextU
             if (wined3d_settings.offscreen_rendering_mode == ORM_FBO) {
                 if (This->render_offscreen) {
                     FIXME("Activating for CTXUSAGE_BLIT for an offscreen target with ORM_FBO. This should be avoided.\n");
+                    ENTER_GL();
                     context_bind_fbo((IWineD3DDevice *)This, GL_FRAMEBUFFER_EXT, &context->dst_fbo);
                     context_attach_surface_fbo(This, GL_FRAMEBUFFER_EXT, 0, target);
-
-                    ENTER_GL();
                     GL_EXTCALL(glFramebufferRenderbufferEXT(GL_FRAMEBUFFER_EXT, GL_DEPTH_ATTACHMENT_EXT, GL_RENDERBUFFER_EXT, 0));
                     checkGLcall("glFramebufferRenderbufferEXT");
                     LEAVE_GL();
@@ -1611,6 +1727,7 @@ void ActivateContext(IWineD3DDeviceImpl *This, IWineD3DSurface *target, ContextU
 
             IWineD3DDeviceImpl_FindTexUnitMap(This);
 
+            ENTER_GL();
             for(i=0; i < context->numDirtyEntries; i++) {
                 dirtyState = context->dirtyArray[i];
                 idx = dirtyState >> 5;
@@ -1618,6 +1735,7 @@ void ActivateContext(IWineD3DDeviceImpl *This, IWineD3DSurface *target, ContextU
                 context->isStateDirty[idx] &= ~(1 << shift);
                 StateTable[dirtyState].apply(dirtyState, This->stateBlock, context);
             }
+            LEAVE_GL();
             context->numDirtyEntries = 0; /* This makes the whole list clean */
             context->last_was_blit = FALSE;
             break;
@@ -1631,4 +1749,8 @@ void ActivateContext(IWineD3DDeviceImpl *This, IWineD3DSurface *target, ContextU
         default:
             FIXME("Unexpected context usage requested\n");
     }
+}
+
+WineD3DContext *getActiveContext(void) {
+    return last_device->activeContext;
 }

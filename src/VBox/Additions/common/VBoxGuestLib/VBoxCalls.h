@@ -1,7 +1,5 @@
 /** @file
- *
- * VBoxGuestLib - A support library for VirtualBox guest additions:
- * Central calls header
+ * VBoxGuestLib - Central calls header.
  */
 
 /*
@@ -33,18 +31,18 @@
 #   define _InterlockedCompareExchange    _InterlockedCompareExchange_StupidDDKvsCompilerCrap
 #   define _InterlockedAddLargeStatistic  _InterlockedAddLargeStatistic_StupidDDKvsCompilerCrap
 #   pragma warning(disable : 4163)
-    __BEGIN_DECLS
+    RT_C_DECLS_BEGIN
 #   include <ntddk.h>
-    __END_DECLS
+    RT_C_DECLS_END
 #   pragma warning(default : 4163)
 #   undef  _InterlockedExchange
 #   undef  _InterlockedExchangeAdd
 #   undef  _InterlockedCompareExchange
 #   undef  _InterlockedAddLargeStatistic
 #  else
-    __BEGIN_DECLS
+    RT_C_DECLS_BEGIN
 #   include <ntddk.h>
-    __END_DECLS
+    RT_C_DECLS_END
 #  endif
 # endif
 #endif
@@ -163,6 +161,7 @@ DECLVBGL(int) vboxCallFlush (PVBSFCLIENT pClient, PVBSFMAP pMap, SHFLHANDLE hFil
 
 DECLVBGL(int) vboxCallRead (PVBSFCLIENT pClient, PVBSFMAP pMap, SHFLHANDLE hFile, uint64_t offset, uint32_t *pcbBuffer, uint8_t *pBuffer, bool fLocked);
 DECLVBGL(int) vboxCallWrite (PVBSFCLIENT pClient, PVBSFMAP pMap, SHFLHANDLE hFile, uint64_t offset, uint32_t *pcbBuffer, uint8_t *pBuffer, bool fLocked);
+DECLVBGL(int) VbglR0SfWritePhysCont(PVBSFCLIENT pClient, PVBSFMAP pMap, SHFLHANDLE hFile, uint64_t offset, uint32_t *pcbBuffer, RTCCPHYS PhysBuffer);
 
 DECLVBGL(int) vboxCallLock (PVBSFCLIENT pClient, PVBSFMAP pMap, SHFLHANDLE hFile, uint64_t offset, uint64_t cbSize, uint32_t fLock);
 

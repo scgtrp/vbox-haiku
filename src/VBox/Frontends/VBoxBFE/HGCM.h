@@ -25,8 +25,6 @@
 #include <VBox/cdefs.h>
 #include <VBox/types.h>
 #include <VBox/pdm.h>
-
-#include <VBox/VBoxGuest.h>
 #include <VBox/hgcmsvc.h>
 
 /* HGCM saved state version */
@@ -36,7 +34,7 @@
 struct _HGCMSVCEXTHANDLEDATA;
 typedef struct _HGCMSVCEXTHANDLEDATA *HGCMSVCEXTHANDLE;
 
-__BEGIN_DECLS
+RT_C_DECLS_BEGIN
 int HGCMHostInit (void);
 int HGCMHostShutdown (void);
 
@@ -56,6 +54,6 @@ int HGCMHostCall (const char *pszServiceName, uint32_t function, uint32_t cParms
 int HGCMHostSaveState (PSSMHANDLE pSSM);
 int HGCMHostLoadState (PSSMHANDLE pSSM);
 
-__END_DECLS
+RT_C_DECLS_END
 
 #endif /* __HGCM_h__ */

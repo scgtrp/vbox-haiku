@@ -24,11 +24,17 @@
 #define ___VBoxFrameBuffer_h___
 
 #include "COMDefs.h"
+#include <iprt/critsect.h>
 
 /* Qt includes */
 #include <QImage>
 #include <QPixmap>
 #include <QMutex>
+#include <QPaintEvent>
+#include <QMoveEvent>
+#if defined (VBOX_GUI_USE_QGL)
+#include <QGLWidget>
+#endif
 
 #if defined (VBOX_GUI_USE_SDL)
 #include <SDL.h>
@@ -110,6 +116,20 @@ private:
     QRegion mReg;
 };
 
+#ifdef VBOX_WITH_VIDEOHWACCEL
+class VBoxVHWACommandProcessEvent : public QEvent
+{
+public:
+    VBoxVHWACommandProcessEvent (struct _VBOXVHWACMD * pCmd)
+        : QEvent ((QEvent::Type) VBoxDefs::VHWACommandProcessType)
+        , mpCmd (pCmd) {}
+    struct _VBOXVHWACMD * command() { return mpCmd; }
+private:
+    struct _VBOXVHWACMD * mpCmd;
+};
+
+#endif
+
 /////////////////////////////////////////////////////////////////////////////
 
 /**
@@ -134,7 +154,7 @@ private:
  *  See IFramebuffer documentation for more info.
  */
 
-class VBoxFrameBuffer : public IFramebuffer
+class VBoxFrameBuffer : VBOX_SCRIPTABLE_IMPL(IFramebuffer)
 {
 public:
 
@@ -157,24 +177,8 @@ public:
             delete this;
         return cnt;
     }
-
-    STDMETHOD(QueryInterface) (REFIID riid , void **ppObj)
-    {
-        if (riid == IID_IUnknown) {
-            *ppObj = this;
-            AddRef();
-            return S_OK;
-        }
-        if (riid == IID_IFramebuffer) {
-            *ppObj = this;
-            AddRef();
-            return S_OK;
-        }
-        *ppObj = NULL;
-        return E_NOINTERFACE;
-    }
-
 #endif
+    VBOX_SCRIPTABLE_DISPATCH_IMPL(IFramebuffer)
 
     // IFramebuffer COM methods
     STDMETHOD(COMGETTER(Address)) (BYTE **aAddress);
@@ -196,17 +200,13 @@ public:
                               ULONG aWidth, ULONG aHeight,
                               BOOL *aFinished);
 
-    STDMETHOD(OperationSupported)(FramebufferAccelerationOperation_T aOperation,
-                                  BOOL *aSupported);
     STDMETHOD(VideoModeSupported) (ULONG aWidth, ULONG aHeight, ULONG aBPP,
                                    BOOL *aSupported);
-    STDMETHOD(SolidFill) (ULONG aX, ULONG aY, ULONG aWidth, ULONG aHeight,
-                          ULONG aColor, BOOL *aHandled);
-    STDMETHOD(CopyScreenBits) (ULONG aXDst, ULONG aYDst, ULONG aXSrc, ULONG aYSrc,
-                               ULONG aWidth, ULONG aHeight, BOOL *aHandled);
 
     STDMETHOD(GetVisibleRegion)(BYTE *aRectangles, ULONG aCount, ULONG *aCountCopied);
     STDMETHOD(SetVisibleRegion)(BYTE *aRectangles, ULONG aCount);
+
+    STDMETHOD(ProcessVHWACommand)(BYTE *pCommand);
 
     ulong width() { return mWdt; }
     ulong height() { return mHgt; }
@@ -221,8 +221,8 @@ public:
         return false;
     }
 
-    void lock() { mMutex->lock(); }
-    void unlock() { mMutex->unlock(); }
+    void lock() { RTCritSectEnter(&mCritSect); }
+    void unlock() { RTCritSectLeave(&mCritSect); }
 
     virtual uchar *address() = 0;
     virtual ulong bitsPerPixel() = 0;
@@ -250,10 +250,16 @@ public:
      */
     virtual void moveEvent (QMoveEvent * /*me*/ ) {}
 
+#ifdef VBOX_WITH_VIDEOHWACCEL
+    /* this method is called from the GUI thread
+     * to perform the actual Video HW Acceleration command processing */
+    virtual void doProcessVHWACommand(struct _VBOXVHWACMD * pCommand);
+#endif
+
 protected:
 
     VBoxConsoleView *mView;
-    QMutex *mMutex;
+    RTCRITSECT mCritSect;
     int mWdt;
     int mHgt;
     uint64_t mWinId;
@@ -275,8 +281,7 @@ public:
     VBoxQImageFrameBuffer (VBoxConsoleView *aView);
 
     STDMETHOD(NotifyUpdate) (ULONG aX, ULONG aY,
-                             ULONG aW, ULONG aH,
-                             BOOL *aFinished);
+                             ULONG aW, ULONG aH);
 
     ulong pixelFormat() { return mPixelFormat; }
     bool usesGuestVRAM() { return mUsesGuestVRAM; }
@@ -300,6 +305,818 @@ private:
 
 /////////////////////////////////////////////////////////////////////////////
 
+#if defined (VBOX_GUI_USE_QGL)
+class VBoxVHWADirtyRect
+{
+public:
+    VBoxVHWADirtyRect() :
+        mIsClear(true)
+    {}
+
+    VBoxVHWADirtyRect(const QRect & aRect)
+    {
+        if(aRect.isEmpty())
+        {
+            mIsClear = false;
+            mRect = aRect;
+        }
+        else
+        {
+            mIsClear = true;
+        }
+    }
+
+    bool isClear() const { return mIsClear; }
+
+    void add(const QRect & aRect)
+    {
+        if(aRect.isEmpty())
+            return;
+
+        mRect = mIsClear ? aRect : mRect.united(aRect);
+        mIsClear = false;
+    }
+
+    void add(const VBoxVHWADirtyRect & aRect)
+    {
+        if(aRect.isClear())
+            return;
+        add(aRect.rect());
+    }
+
+    void set(const QRect & aRect)
+    {
+        if(aRect.isEmpty())
+        {
+            mIsClear = true;
+        }
+        else
+        {
+            mRect = aRect;
+            mIsClear = false;
+        }
+    }
+
+    void clear() { mIsClear = true; }
+
+    const QRect & rect() const {return mRect;}
+
+    bool intersects(const QRect & aRect) const {return mIsClear ? false : mRect.intersects(aRect);}
+
+    bool intersects(const VBoxVHWADirtyRect & aRect) const {return mIsClear ? false : aRect.intersects(mRect);}
+
+    QRect united(const QRect & aRect) const {return mIsClear ? aRect : aRect.united(mRect);}
+
+    bool contains(const QRect & aRect) const {return mIsClear ? false : aRect.contains(mRect);}
+
+    void subst(const VBoxVHWADirtyRect & aRect) { if(!mIsClear && aRect.contains(mRect)) clear(); }
+
+private:
+    QRect mRect;
+    bool mIsClear;
+};
+
+class VBoxVHWAColorKey
+{
+public:
+    VBoxVHWAColorKey() :
+        mUpper(0),
+        mLower(0)
+    {}
+
+    VBoxVHWAColorKey(uint32_t aUpper, uint32_t aLower) :
+        mUpper(aUpper),
+        mLower(aLower)
+    {}
+
+    uint32_t upper() const {return mUpper; }
+    uint32_t lower() const {return mLower; }
+
+    bool operator==(const VBoxVHWAColorKey & other) const { return mUpper == other.mUpper && mLower == other.mLower; }
+private:
+    uint32_t mUpper;
+    uint32_t mLower;
+};
+
+//class VBoxVHWAColorKeyRef
+//{
+//public:
+//    VBoxVHWAColorKeyRef() : mValid(false){}
+//
+//    bool isValid() {return mValid; }
+//
+//    VBoxVHWAColorKey * ckey() { isVreturn mpCKey; }
+//    const VBoxVHWAColorKey * constckey() const { return mpCKey; }
+//
+//    void invalidate() { mValid = false; }
+//    void set(VBoxVHWAColorKey * pKey) { mValid = false; }
+//
+//private:
+//    VBoxVHWAColorKey * mpCKey;
+//    bool mValid;
+//};
+
+class VBoxVHWAColorComponent
+{
+public:
+    VBoxVHWAColorComponent() :
+        mMask(0),
+        mRange(0),
+        mOffset(32),
+        mcBits(0)
+    {}
+
+    VBoxVHWAColorComponent(uint32_t aMask);
+
+    uint32_t mask() const { return mMask; }
+    uint32_t range() const { return mRange; }
+    uint32_t offset() const { return mOffset; }
+    uint32_t cBits() const { return mcBits; }
+    uint32_t colorVal(uint32_t col) const { return (col & mMask) >> mOffset; }
+    float colorValNorm(uint32_t col) const { return ((float)colorVal(col))/mRange; }
+private:
+    uint32_t mMask;
+    uint32_t mRange;
+    uint32_t mOffset;
+    uint32_t mcBits;
+};
+
+class VBoxVHWAColorFormat
+{
+public:
+
+//    VBoxVHWAColorFormat(GLint aInternalFormat, GLenum aFormat, GLenum aType, uint32_t aDataFormat);
+    VBoxVHWAColorFormat(uint32_t bitsPerPixel, uint32_t r, uint32_t g, uint32_t b);
+
+    GLint internalFormat() const {return mInternalFormat; }
+    GLenum format() const {return mFormat; }
+    GLenum type() const {return mType; }
+    bool isValid() const {return mBitsPerPixel != 0; }
+    uint32_t dataFormat() const {return mDataFormat;}
+    uint32_t bitsPerPixel() const { return mBitsPerPixel; }
+    void pixel2Normalized(uint32_t pix, float *r, float *g, float *b) const;
+//    uint32_t r(uint32_t pix);
+//    uint32_t g(uint32_t pix);
+//    uint32_t b(uint32_t pix);
+
+private:
+    void VBoxVHWAColorFormat::init(uint32_t bitsPerPixel, uint32_t r, uint32_t g, uint32_t b);
+
+    GLint mInternalFormat;
+    GLenum mFormat;
+    GLenum mType;
+    uint32_t mDataFormat;
+
+    uint32_t mBitsPerPixel;
+
+    VBoxVHWAColorComponent mR;
+    VBoxVHWAColorComponent mG;
+    VBoxVHWAColorComponent mB;
+};
+
+/* data flow:
+ * I. NON-Yinverted surface:
+ * 1.direct memory update (paint, lock/unlock):
+ *  mem->tex->fb
+ * 2.blt
+ *  srcTex->invFB->tex->fb
+ *              |->mem
+ *
+ * II. Yinverted surface:
+ * 1.direct memory update (paint, lock/unlock):
+ *  mem->tex->fb
+ * 2.blt
+ *  srcTex->fb->tex
+ *           |->mem
+ *
+ * III. flip support:
+ * 1. Yinverted<->NON-YInverted conversion :
+ *  mem->tex-(rotate model view, force LAZY complete fb update)->invFB->tex
+ *  fb-->|                                                           |->mem
+ * */
+class VBoxVHWASurfaceBase
+{
+public:
+    VBoxVHWASurfaceBase(class VBoxVHWAGlContextState *aState, bool aIsYInverted, const QSize * aSize, const QSize * aTargetSize,
+            VBoxVHWAColorFormat & aColorFormat,
+            VBoxVHWAColorKey * pSrcBltCKey, VBoxVHWAColorKey * pDstBltCKey,
+            VBoxVHWAColorKey * pSrcOverlayCKey, VBoxVHWAColorKey * pDstOverlayCKey);
+
+    virtual ~VBoxVHWASurfaceBase();
+
+    virtual void init(uchar *pvMem);
+
+    virtual void uninit();
+
+    static void globalInit();
+
+    int blt(const QRect * aDstRect, VBoxVHWASurfaceBase * aSrtSurface, const QRect * aSrcRect, const VBoxVHWAColorKey * pDstCKeyOverride, const VBoxVHWAColorKey * pSrcCKeyOverride);
+    int overlay(VBoxVHWASurfaceBase * aOverlaySurface);
+
+    virtual int lock(const QRect * pRect, uint32_t flags);
+
+    virtual int unlock();
+
+    void updatedMem(const QRect * aRect);
+
+    void performDisplay();
+
+    void setRects(const QRect * aTargRect, const QRect * aSrcRect);
+    void setTargetRectPosition(const QPoint * aPoint);
+
+    static ulong calcBytesPerPixel(GLenum format, GLenum type);
+
+    static GLsizei makePowerOf2(GLsizei val);
+
+    bool    addressAlocated() const { return mFreeAddress; }
+    uchar * address(){ return mAddress; }
+    uchar * pointAddress(int x, int y) { return mAddress + y*mBytesPerLine + x*mBytesPerPixel; }
+    ulong   memSize(){ return mBytesPerLine * mRect.height(); }
+
+    ulong width()  { return mRect.width();  }
+    ulong height() { return mRect.height(); }
+
+    GLenum format() {return mColorFormat.format(); }
+    GLint  internalFormat() { return mColorFormat.internalFormat(); }
+    GLenum type() { return mColorFormat.type(); }
+    uint32_t dataFormat() {return mColorFormat.dataFormat(); }
+
+    ulong  bytesPerPixel() { return mBytesPerPixel; }
+    ulong  bitsPerPixel() { return mColorFormat.bitsPerPixel(); }
+    ulong  bytesPerLine() { return mBytesPerLine; }
+
+    const VBoxVHWAColorKey * dstBltCKey() const { return mpDstBltCKey; }
+    const VBoxVHWAColorKey * srcBltCKey() const { return mpSrcBltCKey; }
+    const VBoxVHWAColorKey * dstOverlayCKey() const { return mpDstOverlayCKey; }
+    const VBoxVHWAColorKey * defaultSrcOverlayCKey() const { return mpDefaultSrcOverlayCKey; }
+    const VBoxVHWAColorKey * defaultDstOverlayCKey() const { return mpDefaultDstOverlayCKey; }
+    const VBoxVHWAColorKey * srcOverlayCKey() const { return mpSrcOverlayCKey; }
+    void resetDefaultSrcOverlayCKey() { mpSrcOverlayCKey = mpDefaultSrcOverlayCKey; }
+    void resetDefaultDstOverlayCKey() { mpDstOverlayCKey = mpDefaultDstOverlayCKey; }
+
+    void setDstBltCKey(const VBoxVHWAColorKey * ckey)
+    {
+        if(ckey)
+        {
+            mDstBltCKey = *ckey;
+            mpDstBltCKey = &mDstBltCKey;
+        }
+        else
+        {
+            mpDstBltCKey = NULL;
+        }
+    }
+
+    void setSrcBltCKey(const VBoxVHWAColorKey * ckey)
+    {
+        if(ckey)
+        {
+            mSrcBltCKey = *ckey;
+            mpSrcBltCKey = &mSrcBltCKey;
+        }
+        else
+        {
+            mpSrcBltCKey = NULL;
+        }
+    }
+
+    void setDefaultDstOverlayCKey(const VBoxVHWAColorKey * ckey)
+    {
+        if(ckey)
+        {
+            mDefaultDstOverlayCKey = *ckey;
+            mpDefaultDstOverlayCKey = &mDefaultDstOverlayCKey;
+        }
+        else
+        {
+            mpDefaultDstOverlayCKey = NULL;
+        }
+    }
+
+    void setDefaultSrcOverlayCKey(const VBoxVHWAColorKey * ckey)
+    {
+        if(ckey)
+        {
+            mDefaultSrcOverlayCKey = *ckey;
+            mpDefaultSrcOverlayCKey = &mDefaultSrcOverlayCKey;
+        }
+        else
+        {
+            mpDefaultSrcOverlayCKey = NULL;
+        }
+    }
+
+    void setOverriddenDstOverlayCKey(const VBoxVHWAColorKey * ckey)
+    {
+        if(ckey)
+        {
+            mOverriddenDstOverlayCKey = *ckey;
+            mpDstOverlayCKey = &mOverriddenDstOverlayCKey;
+        }
+        else
+        {
+            mpDstOverlayCKey = NULL;
+        }
+    }
+
+    void setOverriddenSrcOverlayCKey(const VBoxVHWAColorKey * ckey)
+    {
+        if(ckey)
+        {
+            mOverriddenSrcOverlayCKey = *ckey;
+            mpSrcOverlayCKey = &mOverriddenSrcOverlayCKey;
+        }
+        else
+        {
+            mpSrcOverlayCKey = NULL;
+        }
+    }
+
+
+    const VBoxVHWAColorFormat & colorFormat() {return mColorFormat; }
+
+    /* clients should treat the returned texture as read-only */
+    GLuint textureSynched(const QRect * aRect) { synchTex(aRect); return mTexture; }
+
+    void setAddress(uchar * addr);
+
+    const QRect& rect() {return mRect;}
+
+//    /* surface currently being displayed in a flip chain */
+//    virtual bool isPrimary() = 0;
+//    /* surface representing the main framebuffer. */
+//    virtual bool isMainFramebuffer() = 0;
+    virtual void makeCurrent() = 0;
+    virtual void makeYInvertedCurrent() = 0;
+
+    bool isYInverted() {return mIsYInverted; }
+
+    bool isHidden() {return mIsHidden; }
+    void setHidden(bool hidden) { mIsHidden = hidden; }
+
+    int invert();
+
+    bool isFrontBuffer() {return !mIsYInverted; }
+
+//    bool isOverlay() { return mIsOverlay; }
+
+#ifdef VBOX_WITH_VIDEOHWACCEL
+    virtual class VBoxVHWAGlProgramMngr * getGlProgramMngr() = 0;
+    static int setCKey(class VBoxVHWAGlProgramVHWA * pProgram, const VBoxVHWAColorFormat * pFormat, const VBoxVHWAColorKey * pCKey);
+#endif
+private:
+    void initDisplay();
+    void deleteDisplay();
+    void initDisplay(bool bInverted);
+    void deleteDisplay(bool bInverted);
+    GLuint createDisplay(bool bInverted);
+    void synchTex(const QRect * aRect);
+    void synchTexMem(const QRect * aRect);
+    void synchTexFB(const QRect * aRect);
+    void synchMem(const QRect * aRect);
+    void synchFB(const QRect * aRect);
+    void synch(const QRect * aRect);
+
+    int performBlt(const QRect * pDstRect, VBoxVHWASurfaceBase * pSrcSurface, const QRect * pSrcRect, const VBoxVHWAColorKey * pDstCKey, const VBoxVHWAColorKey * pSrcCKey, bool blt);
+
+//    void doTex2FB(const QRect * aRect);
+    void doTex2FB(const QRect * pDstRect, const QRect * pSrcRect);
+
+    void doSetupMatrix(const QSize * pSize, bool bInverted);
+
+    QRect mRect; /* == Inv FB size */
+    QRect mTexRect; /* texture size */
+
+    QRect mSrcRect;
+    QRect mTargRect; /* == Vis FB size */
+    QRect mTargSize;
+
+    GLuint mYInvertedDisplay;
+    GLuint mVisibleDisplay;
+
+    bool mYInvertedDisplayInitialized;
+    bool mVisibleDisplayInitialized;
+
+    uchar * mAddress;
+    GLuint mTexture;
+
+    VBoxVHWAColorFormat mColorFormat;
+
+    VBoxVHWAColorKey *mpSrcBltCKey;
+    VBoxVHWAColorKey *mpDstBltCKey;
+    VBoxVHWAColorKey *mpSrcOverlayCKey;
+    VBoxVHWAColorKey *mpDstOverlayCKey;
+
+    VBoxVHWAColorKey *mpDefaultDstOverlayCKey;
+    VBoxVHWAColorKey *mpDefaultSrcOverlayCKey;
+
+    VBoxVHWAColorKey mSrcBltCKey;
+    VBoxVHWAColorKey mDstBltCKey;
+    VBoxVHWAColorKey mOverriddenSrcOverlayCKey;
+    VBoxVHWAColorKey mOverriddenDstOverlayCKey;
+    VBoxVHWAColorKey mDefaultDstOverlayCKey;
+    VBoxVHWAColorKey mDefaultSrcOverlayCKey;
+
+
+    GLenum mFormat;
+    GLint  mInternalFormat;
+    GLenum mType;
+//    ulong  mDisplayWidth;
+//    ulong  mDisplayHeight;
+    ulong  mBytesPerPixel;
+    ulong  mBytesPerLine;
+
+    int mLockCount;
+    /* memory buffer not reflected in fm and texture, e.g if memory buffer is replaced or in case of lock/unlock  */
+    VBoxVHWADirtyRect mUpdateMem2TexRect;
+    /* memory buffer not reflected in fm and texture, e.g if memory buffer is replaced or in case of lock/unlock  */
+    VBoxVHWADirtyRect mUpdateTex2FBRect;
+    /*in case of blit we blit from another surface's texture, so our current texture gets durty  */
+    VBoxVHWADirtyRect mUpdateFB2TexRect;
+    /*in case of blit the memory buffer does not get updated until we need it, e.g. for paint or lock operations */
+    VBoxVHWADirtyRect mUpdateFB2MemRect;
+
+    /* flag for lazy invert post-processing */
+    bool mInverted;
+
+    bool mFreeAddress;
+
+    bool mIsYInverted;
+
+    bool mIsHidden;
+
+//    bool mIsOverlay;
+
+protected:
+    virtual void init(uchar *pvMem, bool bInverted);
+
+    class VBoxVHWAGlContextState *mState;
+
+};
+
+class VBoxVHWADisplay
+{
+public:
+    VBoxVHWADisplay() :
+        mSurfVGA(NULL),
+        mSurfPrimary(NULL)
+    {}
+
+    VBoxVHWASurfaceBase * setVGA(VBoxVHWASurfaceBase * pVga)
+    {
+        VBoxVHWASurfaceBase * old = mSurfVGA;
+        mSurfVGA = pVga;
+        mSurfPrimary = pVga;
+        mOverlays.clear();
+        return old;
+    }
+
+    VBoxVHWASurfaceBase * getVGA()
+    {
+        return mSurfVGA;
+    }
+
+    VBoxVHWASurfaceBase * getPrimary()
+    {
+        return mSurfPrimary;
+    }
+
+    void setPrimary(VBoxVHWASurfaceBase * pSurf)
+    {
+        mSurfPrimary = pSurf;
+    }
+
+    void addOverlay(VBoxVHWASurfaceBase * pSurf)
+    {
+        mOverlays.push_back(pSurf);
+    }
+
+    void checkAddOverlay(VBoxVHWASurfaceBase * pSurf)
+    {
+        if(!hasOverlay(pSurf))
+            addOverlay(pSurf);
+    }
+
+    bool hasOverlay(VBoxVHWASurfaceBase * pSurf)
+    {
+        for (OverlayList::iterator it = mOverlays.begin();
+             it != mOverlays.end(); ++ it)
+        {
+            if((*it) == pSurf)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    void removeOverlay(VBoxVHWASurfaceBase * pSurf)
+    {
+        mOverlays.remove(pSurf);
+    }
+
+    void flip(VBoxVHWASurfaceBase * pTarg, VBoxVHWASurfaceBase * pCurr)
+    {
+        pCurr->invert();
+        pTarg->invert();
+        if(pCurr == mSurfPrimary) /* flip of the primary surface */
+        {
+            mSurfPrimary = pTarg;
+        }
+        else /* flip of the overlay */
+        {
+            for (OverlayList::iterator it = mOverlays.begin();
+                 it != mOverlays.end(); ++ it)
+            {
+                if((*it) == pCurr)
+                {
+                    (*it) = pTarg;
+                    pCurr->setHidden(false);
+                    break;
+                }
+            }
+        }
+    }
+
+    void performDisplay()
+    {
+        mSurfPrimary->performDisplay();
+
+        for (OverlayList::const_iterator it = mOverlays.begin();
+             it != mOverlays.end(); ++ it)
+        {
+            mSurfPrimary->overlay(*it);
+        }
+    }
+
+private:
+    VBoxVHWASurfaceBase *mSurfVGA;
+    VBoxVHWASurfaceBase *mSurfPrimary;
+
+    typedef std::list <VBoxVHWASurfaceBase*> OverlayList;
+
+    OverlayList mOverlays;
+};
+
+
+
+class VBoxVHWAGlContextState
+{
+public:
+    VBoxVHWAGlContextState() : mContext(NULL), mInverted(false) {}
+
+    void assertCurrent(class VBoxVHWASurfaceBase *aContext, bool bInverted)
+    {
+        mContext = aContext;
+        if(aContext && aContext->isYInverted())
+        {
+            mInverted = true;
+        }
+        else
+        {
+            mInverted = bInverted;
+        }
+    }
+
+    void makeYInvertedCurrent(class VBoxVHWASurfaceBase *aContext)
+    {
+        if(mContext != aContext)
+        {
+//            aContext->makeCurrent();
+            aContext->makeYInvertedCurrent();
+            assertCurrent(aContext, true);
+        }
+        else
+        {
+            if(!aContext->isYInverted() && !mInverted)
+            {
+//                aContext->makeCurrent();
+                aContext->makeYInvertedCurrent();
+                mInverted = true;
+            }
+        }
+    }
+
+    void makeCurrent(class VBoxVHWASurfaceBase *aContext)
+    {
+        if(mContext != aContext)
+        {
+            aContext->makeCurrent();
+            assertCurrent(aContext, false);
+        }
+        else
+        {
+            if(!aContext->isYInverted() && mInverted)
+            {
+                aContext->makeCurrent();
+                mInverted = false;
+            }
+        }
+    }
+
+    void makeCurrent(class VBoxVHWASurfaceBase *aContext, bool mInverted)
+    {
+        if(mInverted)
+        {
+            makeYInvertedCurrent(aContext);
+        }
+        else
+        {
+            makeCurrent(aContext);
+        }
+    }
+
+    class VBoxVHWASurfaceBase * getCurrent() {return mContext; }
+    bool isCurrentYInverted() {return mInverted; }
+
+private:
+
+    class VBoxVHWASurfaceBase *mContext;
+    bool mInverted;
+};
+
+class VBoxVHWASurfaceQGL : public VBoxVHWASurfaceBase
+{
+public:
+    VBoxVHWASurfaceQGL(class VBoxVHWAGlContextState *aState, const QSize * aSize, const QSize * aTargetSize,
+            VBoxVHWAColorFormat & aColorFormat,
+            VBoxVHWAColorKey * pSrcBltCKey, VBoxVHWAColorKey * pDstBltCKey,
+            VBoxVHWAColorKey * pSrcOverlayCKey, VBoxVHWAColorKey * pDstOverlayCKey,
+            class VBoxGLWidget *pWidget,
+            bool bInvisibleBuffer) :
+                VBoxVHWASurfaceBase(aState, bInvisibleBuffer, aSize, aTargetSize,
+                        aColorFormat,
+                        pSrcBltCKey, pDstBltCKey, pSrcOverlayCKey, pDstOverlayCKey),
+                mWidget(pWidget),
+                mBuffer(NULL)
+    {}
+
+    ~VBoxVHWASurfaceQGL();
+
+    void makeCurrent();
+    void makeYInvertedCurrent();
+
+    void init(uchar *pvMem);
+
+    void uninit();
+
+//    int unlock()
+//    {
+//        int rc = VBoxVHWASurfaceBase::unlock();
+//        if(!mBuffer)
+//            performDisplay();
+//        return rc;
+//    }
+#ifdef VBOX_WITH_VIDEOHWACCEL
+    class VBoxVHWAGlProgramMngr * getGlProgramMngr();
+#endif
+private:
+    class VBoxGLWidget *mWidget;
+    class QGLPixelBuffer *mBuffer;
+protected:
+    virtual void init(uchar *pvMem, bool bInverted);
+};
+
+class VBoxGLWidget : public QGLWidget
+{
+public:
+    VBoxGLWidget (QWidget *aParent);
+    ~VBoxGLWidget();
+
+    ulong vboxPixelFormat() { return mPixelFormat; }
+    bool vboxUsesGuestVRAM() { return mUsesGuestVRAM; }
+
+    uchar *vboxAddress() { return mDisplay.getVGA() ? mDisplay.getVGA()->address() : NULL; }
+    uchar *vboxVRAMAddressFromOffset(uint64_t offset);
+    ulong vboxBitsPerPixel() { return mDisplay.getVGA()->bitsPerPixel(); }
+    ulong vboxBytesPerLine() { return mDisplay.getVGA() ? mDisplay.getVGA()->bytesPerLine() : NULL; }
+
+typedef void (VBoxGLWidget::*PFNVBOXQGLOP)(void* );
+//typedef FNVBOXQGLOP *PFNVBOXQGLOP;
+
+    void vboxPaintEvent (QPaintEvent *pe) {vboxPerformGLOp(&VBoxGLWidget::vboxDoPaint, pe);}
+    void vboxResizeEvent (VBoxResizeEvent *re) {vboxPerformGLOp(&VBoxGLWidget::vboxDoResize, re);}
+#ifdef DEBUG_misha
+    void vboxTestSurfaces () {vboxPerformGLOp(&VBoxGLWidget::vboxDoTestSurfaces, NULL);}
+#endif
+#ifdef VBOX_WITH_VIDEOHWACCEL
+    void vboxVHWACmd (struct _VBOXVHWACMD * pCmd) {vboxPerformGLOp(&VBoxGLWidget::vboxDoVHWACmd, pCmd);}
+    class VBoxVHWAGlProgramMngr * vboxVHWAGetGlProgramMngr();
+#endif
+
+    VBoxVHWASurfaceBase * vboxGetVGASurface() { return mDisplay.getVGA(); }
+protected:
+//    void resizeGL (int height, int width);
+
+    void paintGL()
+    {
+        Assert(mState.getCurrent() == NULL);
+        /* we are called with QGLWidget context */
+        mState.assertCurrent(mDisplay.getVGA(), false);
+        (this->*mpfnOp)(mOpContext);
+        /* restore the context */
+        mState.makeCurrent(mDisplay.getVGA());
+        /* clear*/
+        mState.assertCurrent(NULL, false);
+    }
+
+    void initializeGL();
+
+private:
+//    void vboxDoInitDisplay();
+//    void vboxDoDeleteDisplay();
+//    void vboxDoPerformDisplay() { Assert(mDisplayInitialized); glCallList(mDisplay); }
+    void vboxDoResize(void *re);
+    void vboxDoPaint(void *rec);
+#ifdef DEBUG_misha
+    void vboxDoTestSurfaces(void *context);
+#endif
+#ifdef VBOX_WITH_VIDEOHWACCEL
+    void vboxDoVHWACmd(void *cmd);
+    void vboxCheckUpdateAddress (VBoxVHWASurfaceBase * pSurface, uint64_t offset)
+    {
+        if (pSurface->addressAlocated())
+        {
+            uchar * addr = vboxVRAMAddressFromOffset(offset);
+            if(addr)
+            {
+                pSurface->setAddress(addr);
+            }
+        }
+    }
+    int vhwaSurfaceCanCreate(struct _VBOXVHWACMD_SURF_CANCREATE *pCmd);
+    int vhwaSurfaceCreate(struct _VBOXVHWACMD_SURF_CREATE *pCmd);
+    int vhwaSurfaceDestroy(struct _VBOXVHWACMD_SURF_DESTROY *pCmd);
+    int vhwaSurfaceLock(struct _VBOXVHWACMD_SURF_LOCK *pCmd);
+    int vhwaSurfaceUnlock(struct _VBOXVHWACMD_SURF_UNLOCK *pCmd);
+    int vhwaSurfaceBlt(struct _VBOXVHWACMD_SURF_BLT *pCmd);
+    int vhwaSurfaceFlip(struct _VBOXVHWACMD_SURF_FLIP *pCmd);
+    int vhwaSurfaceOverlayUpdate(struct _VBOXVHWACMD_SURF_OVERLAY_UPDATE *pCmf);
+    int vhwaSurfaceOverlaySetPosition(struct _VBOXVHWACMD_SURF_OVERLAY_SETPOSITION *pCmd);
+    int vhwaSurfaceColorkeySet(struct _VBOXVHWACMD_SURF_COLORKEY_SET *pCmd);
+    int vhwaQueryInfo1(struct _VBOXVHWACMD_QUERYINFO1 *pCmd);
+    int vhwaQueryInfo2(struct _VBOXVHWACMD_QUERYINFO2 *pCmd);
+#endif
+
+//    VBoxVHWASurfaceQGL * pDisplay;
+    VBoxVHWADisplay mDisplay;
+
+
+    /* we need to do all opengl stuff in the paintGL context,
+     * submit the operation to be performed */
+    void vboxPerformGLOp(PFNVBOXQGLOP pfn, void* pContext) {mpfnOp = pfn; mOpContext = pContext; updateGL();}
+
+    PFNVBOXQGLOP mpfnOp;
+    void *mOpContext;
+
+//    ulong  mBitsPerPixel;
+    ulong  mPixelFormat;
+    bool   mUsesGuestVRAM;
+
+    VBoxVHWAGlContextState mState;
+
+#ifdef VBOX_WITH_VIDEOHWACCEL
+    class VBoxVHWAGlProgramMngr *mpMngr;
+#endif
+};
+
+
+class VBoxQGLFrameBuffer : public VBoxFrameBuffer
+{
+public:
+
+    VBoxQGLFrameBuffer (VBoxConsoleView *aView);
+
+    STDMETHOD(NotifyUpdate) (ULONG aX, ULONG aY,
+                             ULONG aW, ULONG aH);
+
+#ifdef VBOX_WITH_VIDEOHWACCEL
+    STDMETHOD(ProcessVHWACommand)(BYTE *pCommand);
+#endif
+
+    ulong pixelFormat() { return vboxWidget()->vboxPixelFormat(); }
+    bool usesGuestVRAM() { return vboxWidget()->vboxUsesGuestVRAM(); }
+
+    uchar *address() { return vboxWidget()->vboxAddress(); }
+    ulong bitsPerPixel() { return vboxWidget()->vboxBitsPerPixel(); }
+    ulong bytesPerLine() { return vboxWidget()->vboxBytesPerLine(); }
+
+    void paintEvent (QPaintEvent *pe);
+    void resizeEvent (VBoxResizeEvent *re);
+#ifdef VBOX_WITH_VIDEOHWACCEL
+    void doProcessVHWACommand(struct _VBOXVHWACMD * pCommand);
+#endif
+
+private:
+//    void vboxMakeCurrent();
+    VBoxGLWidget * vboxWidget();
+};
+
+
+#endif
+
+/////////////////////////////////////////////////////////////////////////////
+
 #if defined (VBOX_GUI_USE_SDL)
 
 class VBoxSDLFrameBuffer : public VBoxFrameBuffer
@@ -310,8 +1127,7 @@ public:
     virtual ~VBoxSDLFrameBuffer();
 
     STDMETHOD(NotifyUpdate) (ULONG aX, ULONG aY,
-                             ULONG aW, ULONG aH,
-                             BOOL *aFinished);
+                             ULONG aW, ULONG aH);
 
     uchar *address()
     {
@@ -366,8 +1182,7 @@ public:
     virtual ~VBoxDDRAWFrameBuffer();
 
     STDMETHOD(NotifyUpdate) (ULONG aX, ULONG aY,
-                             ULONG aW, ULONG aH,
-                             BOOL *aFinished);
+                             ULONG aW, ULONG aH);
 
     uchar *address() { return (uchar *) mSurfaceDesc.lpSurface; }
     ulong bitsPerPixel() { return mSurfaceDesc.ddpfPixelFormat.dwRGBBitCount; }
@@ -424,8 +1239,7 @@ public:
     virtual ~VBoxQuartz2DFrameBuffer ();
 
     STDMETHOD (NotifyUpdate) (ULONG aX, ULONG aY,
-                              ULONG aW, ULONG aH,
-                              BOOL *aFinished);
+                              ULONG aW, ULONG aH);
     STDMETHOD (SetVisibleRegion) (BYTE *aRectangles, ULONG aCount);
 
     uchar *address() { return mDataAddress; }

@@ -53,6 +53,17 @@ EXPORTS
     SUPR0MemGetPhys
     SUPR0MemFree
     SUPR0Printf
+    SUPSemEventCreate
+    SUPSemEventClose
+    SUPSemEventSignal
+    SUPSemEventWait
+    SUPSemEventWaitNoResume
+    SUPSemEventMultiCreate
+    SUPSemEventMultiClose
+    SUPSemEventMultiSignal
+    SUPSemEventMultiReset
+    SUPSemEventMultiWait
+    SUPSemEventMultiWaitNoResume
     SUPR0GetPagingMode
     SUPR0EnableVTx
     RTMemAlloc
@@ -73,6 +84,12 @@ EXPORTS
     RTR0MemObjIsMapping
     RTR0MemObjGetPagePhysAddr
     RTR0MemObjFree
+    RTR0MemUserCopyFrom
+    RTR0MemUserCopyTo
+    RTR0MemUserIsValidAddr
+    RTR0MemKernelIsValidAddr
+    RTR0MemAreKrnlAndUsrDifferent
+    RTProcSelf
     ; broken - RTSemMutexCreate
     ; broken - RTSemMutexRequest
     ; broken - RTSemMutexRelease
@@ -99,16 +116,23 @@ EXPORTS
     RTSpinlockAcquireNoInts
     RTSpinlockReleaseNoInts
     RTTimeNanoTS
-    RTTimeMillieTS
+    RTTimeMilliTS
     RTTimeSystemNanoTS
-    RTTimeSystemMillieTS
+    RTTimeSystemMilliTS
     RTThreadSelf
     RTThreadNativeSelf
     RTThreadSleep
     RTThreadYield
+    RTThreadPreemptIsEnabled
+    RTThreadPreemptIsPending
+    RTThreadPreemptDisable
+    RTThreadPreemptRestore
+    RTThreadPreemptPossible
+    RTThreadIsInInterrupt
     RTMpOnAll
     RTMpOnOthers
     RTMpOnSpecific
+    RTMpPokeCpu
     RTMpIsCpuOnline
     RTMpGetCount
     RTMpCpuIdToSetIndex

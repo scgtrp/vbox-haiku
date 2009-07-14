@@ -75,6 +75,8 @@
 #define CPUM_SYNC_FPU_STATE             RT_BIT(7)
 /** Sync the debug state on entry (32->64 switcher only). */
 #define CPUM_SYNC_DEBUG_STATE           RT_BIT(8)
+/** Enabled use of hypervisor debug registers in guest context. */
+#define CPUM_USE_DEBUG_REGS_HYPER       RT_BIT(9)
 /** @} */
 
 /* Sanity check. */
@@ -258,26 +260,13 @@ typedef CPUMHOSTCTX *PCPUMHOSTCTX;
  */
 typedef struct CPUM
 {
-    /**
-     * Hypervisor context.
-     * Aligned on a 64-byte boundrary.
-     */
-    CPUMCTX                 Hyper;
-
-    /** Pointer to the current hypervisor core context - R3Ptr. */
-    R3PTRTYPE(PCPUMCTXCORE) pHyperCoreR3;
-    /** Pointer to the current hypervisor core context - R0Ptr. */
-    R0PTRTYPE(PCPUMCTXCORE) pHyperCoreR0;
-    /** Pointer to the current hypervisor core context - RCPtr. */
-    RCPTRTYPE(PCPUMCTXCORE) pHyperCoreRC;
-
     /* Offset from CPUM to CPUMCPU for the first CPU. */
     uint32_t                ulOffCPUMCPU;
 
-    /** Hidden selector registers state.
-     *  Valid (hw accelerated raw mode) or not (normal raw mode)
+    /** Use flags.
+     * These flags indicates which CPU features the host uses.
      */
-    uint32_t                fValidHiddenSelRegs;
+    uint32_t                fHostUseFlags;
 
     /** Host CPU Features - ECX */
     struct
@@ -320,7 +309,7 @@ typedef struct CPUM
     CPUMCPUID               GuestCpuIdDef;
 
     /** Align the next member, and thereby the structure, on a 64-byte boundrary. */
-    uint8_t                 abPadding2[HC_ARCH_BITS == 32 ? 60 : 48];
+    uint8_t                 abPadding2[HC_ARCH_BITS == 32 ? 8 : 4];
 
     /**
      * Guest context on raw mode entry.
@@ -336,6 +325,12 @@ typedef CPUM *PCPUM;
  */
 typedef struct CPUMCPU
 {
+    /**
+     * Hypervisor context.
+     * Aligned on a 64-byte boundrary.
+     */
+    CPUMCTX                 Hyper;
+
     /**
      * Saved host context. Only valid while inside GC.
      * Aligned on a 64-byte boundrary.
@@ -359,6 +354,13 @@ typedef struct CPUMCPU
      */
     CPUMCTXMSR              GuestMsr;
 
+    /** Pointer to the current hypervisor core context - R3Ptr. */
+    R3PTRTYPE(PCPUMCTXCORE) pHyperCoreR3;
+    /** Pointer to the current hypervisor core context - R0Ptr. */
+    R0PTRTYPE(PCPUMCTXCORE) pHyperCoreR0;
+    /** Pointer to the current hypervisor core context - RCPtr. */
+    RCPTRTYPE(PCPUMCTXCORE) pHyperCoreRC;
+
     /** Use flags.
      * These flags indicates both what is to be used and what has been used.
      */
@@ -377,14 +379,13 @@ typedef struct CPUMCPU
     /* Temporary storage for the return code of the function called in the 32-64 switcher. */
     uint32_t                u32RetCode;
 
-    /* Round to 16 byte size.
-    uint32_t                uPadding;
-     */
+    /** Align the next member, and thereby the structure, on a 64-byte boundrary. */
+    uint8_t                 abPadding2[HC_ARCH_BITS == 32 ? 36 : 28];
 } CPUMCPU, *PCPUMCPU;
 /** Pointer to the CPUMCPU instance data residing in the shared VMCPU structure. */
 typedef CPUMCPU *PCPUMCPU;
 
-__BEGIN_DECLS
+RT_C_DECLS_BEGIN
 
 DECLASM(int)      cpumHandleLazyFPUAsm(PCPUMCPU pCPUM);
 
@@ -405,7 +406,7 @@ DECLASM(void)     cpumR0LoadDRx(uint64_t const *pa4Regs);
 DECLASM(void)     cpumR0SaveDRx(uint64_t *pa4Regs);
 #endif
 
-__END_DECLS
+RT_C_DECLS_END
 
 /** @} */
 

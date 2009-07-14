@@ -1596,7 +1596,7 @@ static uint32_t fdctrl_read_data (fdctrl_t *fdctrl)
 {
     fdrive_t *cur_drv;
     uint32_t retval = 0;
-    int pos, len;
+    unsigned pos, len;
 #ifdef VBOX
     int rc;
 #endif
@@ -1618,11 +1618,12 @@ static uint32_t fdctrl_read_data (fdctrl_t *fdctrl)
             cur_drv->Led.Asserted.s.fReading
                 = cur_drv->Led.Actual.s.fReading = 1;
 
+            Assert(len <= sizeof(fdctrl->fifo));
             rc = cur_drv->pDrvBlock->pfnRead (
                 cur_drv->pDrvBlock,
                 fd_sector (cur_drv) * 512,
                 fdctrl->fifo,
-                len * 512
+                len
                 );
 
             cur_drv->Led.Actual.s.fReading = 0;
@@ -1781,7 +1782,7 @@ static void fdctrl_write_data (fdctrl_t *fdctrl, uint32_t value)
                 cur_drv->pDrvBlock,
                 fd_sector (cur_drv) * 512,
                 fdctrl->fifo,
-                FD_SECTOR_LEN * 512
+                FD_SECTOR_LEN
                 );
 
             cur_drv->Led.Actual.s.fWriting = 0;
@@ -2342,9 +2343,9 @@ static void fdctrl_result_timer(void *opaque)
 
 
 #ifdef VBOX
-static DECLCALLBACK(void) fdc_timer (PPDMDEVINS pDevIns, PTMTIMER pTimer)
+static DECLCALLBACK(void) fdc_timer (PPDMDEVINS pDevIns, PTMTIMER pTimer, void *pvUser)
 {
-    fdctrl_t *fdctrl = PDMINS_2_DATA (pDevIns, fdctrl_t *);
+    fdctrl_t *fdctrl = (fdctrl_t *)pvUser;
     fdctrl_result_timer (fdctrl);
 }
 
@@ -2656,12 +2657,16 @@ static int fdConfig (fdrive_t *drv, PPDMDEVINS pDevIns)
  * @param   iLUN        The logical unit which is being detached.
  */
 static DECLCALLBACK(int)  fdcAttach (PPDMDEVINS pDevIns,
-                                     unsigned iLUN)
+                                     unsigned iLUN, uint32_t fFlags)
 {
     fdctrl_t *fdctrl = PDMINS_2_DATA (pDevIns, fdctrl_t *);
     fdrive_t *drv;
     int rc;
     LogFlow (("ideDetach: iLUN=%u\n", iLUN));
+
+    AssertMsgReturn(fFlags & PDMDEVATT_FLAGS_NOT_HOT_PLUG,
+                    ("The FDC device does not support hotplugging\n"),
+                    VERR_INVALID_PARAMETER);
 
     /*
      * Validate.
@@ -2704,7 +2709,7 @@ static DECLCALLBACK(int)  fdcAttach (PPDMDEVINS pDevIns,
  * @param   iLUN        The logical unit which is being detached.
  */
 static DECLCALLBACK(void) fdcDetach (PPDMDEVINS pDevIns,
-                                     unsigned iLUN)
+                                     unsigned iLUN, uint32_t fFlags)
 {
     fdctrl_t *fdctrl = PDMINS_2_DATA (pDevIns, fdctrl_t *);
     LogFlow (("ideDetach: iLUN=%u\n", iLUN));
@@ -2848,7 +2853,8 @@ static DECLCALLBACK(int) fdcConstruct (PPDMDEVINS pDevIns,
     /*
      * Create the FDC timer.
      */
-    rc = PDMDevHlpTMTimerCreate(pDevIns, TMCLOCK_VIRTUAL, fdc_timer, "FDC Timer", &fdctrl->result_timer);
+    rc = PDMDevHlpTMTimerCreate(pDevIns, TMCLOCK_VIRTUAL, fdc_timer, fdctrl,
+                                TMTIMER_FLAGS_DEFAULT_CRIT_SECT, "FDC Timer", &fdctrl->result_timer);
     if (RT_FAILURE (rc))
         return rc;
 

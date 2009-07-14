@@ -1,5 +1,5 @@
 /** @file
- * Settings File Manipulation API.
+ * Settings File Manipulation API. (Main)
  */
 
 /*
@@ -30,21 +30,14 @@
 #ifndef ___VBox_settings_h
 #define ___VBox_settings_h
 
-#include <iprt/cdefs.h>
-#include <iprt/cpputils.h>
-#include <iprt/string.h>
-
-#include <list>
-#include <memory>
 #include <limits>
 
+#include <iprt/cdefs.h>
+#include <iprt/cpputils.h>
 #include <iprt/time.h>
+#include <iprt/xml_cpp.h>
 
 #include <VBox/com/Guid.h>
-
-#include <VBox/xml.h>
-
-// #include <stdarg.h>
 
 /* these conflict with numeric_digits<>::min and max */
 #undef min
@@ -248,6 +241,25 @@
 #if defined(_MSC_VER)
 #pragma warning (disable:4251)
 #pragma warning (disable:4275)
+#endif
+
+/** @def IN_VBOXXML_R3
+ * Used to indicate whether we're inside the same link module as the
+ * XML Settings File Manipulation API.
+ *
+ * @todo should go to a separate common include together with VBOXXML2_CLASS
+ * once there becomes more than one header in the VBoxXML2 library.
+ */
+#ifdef DOXYGEN_RUNNING
+# define IN_VBOXXML_R3
+#endif
+
+/** @def VBOXXML_CLASS
+ * Class export/import wrapper. */
+#ifdef IN_VBOXXML_R3
+# define VBOXXML_CLASS DECLEXPORT_CLASS
+#else
+# define VBOXXML_CLASS DECLIMPORT_CLASS
 #endif
 
 /* Forwards */
@@ -1192,31 +1204,6 @@ private:
 };
 
 } /* namespace settings */
-
-
-/*
- * VBoxXml
- *
- *
- */
-
-
-class VBoxXmlBase
-{
-protected:
-    VBoxXmlBase();
-
-    ~VBoxXmlBase();
-
-    xmlParserCtxtPtr m_ctxt;
-};
-
-class VBoxXmlFile : public VBoxXmlBase
-{
-public:
-    VBoxXmlFile();
-    ~VBoxXmlFile();
-};
 
 
 

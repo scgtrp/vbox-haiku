@@ -593,7 +593,7 @@ static int createFakeVM(PVM *ppVM)
                  * Allocate and init the VM structure.
                  */
                 PVM pVM;
-                rc = SUPPageAlloc((sizeof(*pVM) + PAGE_SIZE - 1) >> PAGE_SHIFT, (void **)&pVM);
+                rc = SUPR3PageAlloc((sizeof(*pVM) + PAGE_SIZE - 1) >> PAGE_SHIFT, (void **)&pVM);
                 if (RT_SUCCESS(rc))
                 {
                     pVM->enmVMState = VMSTATE_CREATED;
@@ -650,7 +650,7 @@ int main(int argc, char **argv)
     /*
      * Register a few callbacks.
      */
-    rc = SSMR3RegisterDevice(pVM, NULL, "SSM Testcase Data Item no.1 (all types)", 1, 0, 256,
+    rc = SSMR3RegisterDevice(pVM, NULL, "SSM Testcase Data Item no.1 (all types)", 1, 0, 256, NULL,
         NULL, Item01Save, NULL,
         NULL, Item01Load, NULL);
     if (RT_FAILURE(rc))
@@ -659,7 +659,7 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    rc = SSMR3RegisterDevice(pVM, NULL, "SSM Testcase Data Item no.2 (rand mem)", 2, 0, _1M * 8,
+    rc = SSMR3RegisterDevice(pVM, NULL, "SSM Testcase Data Item no.2 (rand mem)", 2, 0, _1M * 8, NULL,
         NULL, Item02Save, NULL,
         NULL, Item02Load, NULL);
     if (RT_FAILURE(rc))
@@ -668,7 +668,7 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    rc = SSMR3RegisterDevice(pVM, NULL, "SSM Testcase Data Item no.3 (big mem)", 0, 123, 512*_1M,
+    rc = SSMR3RegisterDevice(pVM, NULL, "SSM Testcase Data Item no.3 (big mem)", 0, 123, 512*_1M, NULL,
         NULL, Item03Save, NULL,
         NULL, Item03Load, NULL);
     if (RT_FAILURE(rc))
@@ -677,7 +677,7 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    rc = SSMR3RegisterDevice(pVM, NULL, "SSM Testcase Data Item no.4 (big zero mem)", 0, 42, 512*_1M,
+    rc = SSMR3RegisterDevice(pVM, NULL, "SSM Testcase Data Item no.4 (big zero mem)", 0, 42, 512*_1M, NULL,
         NULL, Item04Save, NULL,
         NULL, Item04Load, NULL);
     if (RT_FAILURE(rc))

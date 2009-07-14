@@ -69,6 +69,7 @@
 #  pragma intrinsic(__indword)
 #  pragma intrinsic(__indwordstring)
 #  pragma intrinsic(__invlpg)
+#  pragma intrinsic(__wbinvd)
 #  pragma intrinsic(__stosd)
 #  pragma intrinsic(__stosw)
 #  pragma intrinsic(__stosb)
@@ -100,6 +101,9 @@
 #  pragma intrinsic(_InterlockedCompareExchange)
 #  pragma intrinsic(_InterlockedCompareExchange64)
 #  ifdef RT_ARCH_AMD64
+#   pragma intrinsic(_mm_mfence)
+#   pragma intrinsic(_mm_sfence)
+#   pragma intrinsic(_mm_lfence)
 #   pragma intrinsic(__stosq)
 #   pragma intrinsic(__readcr8)
 #   pragma intrinsic(__writecr8)
@@ -110,6 +114,16 @@
 #endif
 #ifndef RT_INLINE_ASM_USES_INTRIN
 # define RT_INLINE_ASM_USES_INTRIN 0
+#endif
+
+/** @def RT_INLINE_ASM_GCC_4_3_X_X86
+ * Used to work around some 4.3.x register allocation issues in this version of
+ * the compiler. */
+#ifdef __GNUC__
+# define RT_INLINE_ASM_GCC_4_3_X_X86 (__GNUC__ == 4 && __GNUC_MINOR__ == 3 && defined(__i386__))
+#endif
+#ifndef RT_INLINE_ASM_GCC_4_3_X_X86
+# define RT_INLINE_ASM_GCC_4_3_X_X86 0
 #endif
 
 
@@ -227,7 +241,7 @@ DECLASM(void) ASMGetIDTR(PRTIDTR pIdtr);
 DECLINLINE(void) ASMGetIDTR(PRTIDTR pIdtr)
 {
 # if RT_INLINE_ASM_GNU_STYLE
-    __asm__ __volatile__ ("sidt %0" : "=m" (*pIdtr));
+    __asm__ __volatile__("sidt %0" : "=m" (*pIdtr));
 # else
     __asm
     {
@@ -254,7 +268,7 @@ DECLASM(void) ASMSetIDTR(const RTIDTR *pIdtr);
 DECLINLINE(void) ASMSetIDTR(const RTIDTR *pIdtr)
 {
 # if RT_INLINE_ASM_GNU_STYLE
-    __asm__ __volatile__ ("lidt %0" : : "m" (*pIdtr));
+    __asm__ __volatile__("lidt %0" : : "m" (*pIdtr));
 # else
     __asm
     {
@@ -281,7 +295,7 @@ DECLASM(void) ASMGetGDTR(PRTGDTR pGdtr);
 DECLINLINE(void) ASMGetGDTR(PRTGDTR pGdtr)
 {
 # if RT_INLINE_ASM_GNU_STYLE
-    __asm__ __volatile__ ("sgdt %0" : "=m" (*pGdtr));
+    __asm__ __volatile__("sgdt %0" : "=m" (*pGdtr));
 # else
     __asm
     {
@@ -549,7 +563,7 @@ DECLINLINE(uint64_t) ASMReadTSC(void)
 {
     RTUINT64U u;
 # if RT_INLINE_ASM_GNU_STYLE
-    __asm__ __volatile__ ("rdtsc\n\t" : "=a" (u.s.Lo), "=d" (u.s.Hi));
+    __asm__ __volatile__("rdtsc\n\t" : "=a" (u.s.Lo), "=d" (u.s.Hi));
 # else
 #  if RT_INLINE_ASM_USES_INTRIN
     u.u = __rdtsc();
@@ -1243,9 +1257,9 @@ DECLINLINE(void) ASMSetCR3(RTCCUINTREG uCR3)
 
 # elif RT_INLINE_ASM_GNU_STYLE
 #  ifdef RT_ARCH_AMD64
-    __asm__ __volatile__ ("movq %0, %%cr3\n\t" : : "r" (uCR3));
+    __asm__ __volatile__("movq %0, %%cr3\n\t" : : "r" (uCR3));
 #  else
-    __asm__ __volatile__ ("movl %0, %%cr3\n\t" : : "r" (uCR3));
+    __asm__ __volatile__("movl %0, %%cr3\n\t" : : "r" (uCR3));
 #  endif
 # else
     __asm
@@ -1277,13 +1291,13 @@ DECLINLINE(void) ASMReloadCR3(void)
 # elif RT_INLINE_ASM_GNU_STYLE
     RTCCUINTREG u;
 #  ifdef RT_ARCH_AMD64
-    __asm__ __volatile__ ("movq %%cr3, %0\n\t"
-                          "movq %0, %%cr3\n\t"
-                          : "=r" (u));
+    __asm__ __volatile__("movq %%cr3, %0\n\t"
+                         "movq %0, %%cr3\n\t"
+                         : "=r" (u));
 #  else
-    __asm__ __volatile__ ("movl %%cr3, %0\n\t"
-                          "movl %0, %%cr3\n\t"
-                          : "=r" (u));
+    __asm__ __volatile__("movl %%cr3, %0\n\t"
+                         "movl %0, %%cr3\n\t"
+                         : "=r" (u));
 #  endif
 # else
     __asm
@@ -1329,9 +1343,9 @@ DECLINLINE(RTCCUINTREG) ASMGetCR4(void)
 #  else
         push    eax /* just in case */
         /*mov     eax, cr4*/
-        _emit 0x0f
-        _emit 0x20
-        _emit 0xe0
+        _emit   0x0f
+        _emit   0x20
+        _emit   0xe0
         mov     [uCR4], eax
         pop     eax
 #  endif
@@ -1357,9 +1371,9 @@ DECLINLINE(void) ASMSetCR4(RTCCUINTREG uCR4)
 
 # elif RT_INLINE_ASM_GNU_STYLE
 #  ifdef RT_ARCH_AMD64
-    __asm__ __volatile__ ("movq %0, %%cr4\n\t" : : "r" (uCR4));
+    __asm__ __volatile__("movq %0, %%cr4\n\t" : : "r" (uCR4));
 #  else
-    __asm__ __volatile__ ("movl %0, %%cr4\n\t" : : "r" (uCR4));
+    __asm__ __volatile__("movl %0, %%cr4\n\t" : : "r" (uCR4));
 #  endif
 # else
     __asm
@@ -1481,6 +1495,57 @@ DECLINLINE(RTCCUINTREG) ASMIntDisableFlags(void)
     }
 # endif
     return xFlags;
+}
+#endif
+
+
+/**
+ * Are interrupts enabled?
+ *
+ * @returns true / false.
+ */
+DECLINLINE(RTCCUINTREG) ASMIntAreEnabled(void)
+{
+    RTCCUINTREG uFlags = ASMGetFlags();
+    return uFlags & 0x200 /* X86_EFL_IF */ ? true : false;
+}
+
+
+/**
+ * Halts the CPU until interrupted.
+ */
+#if RT_INLINE_ASM_EXTERNAL
+DECLASM(void) ASMHalt(void);
+#else
+DECLINLINE(void) ASMHalt(void)
+{
+# if RT_INLINE_ASM_GNU_STYLE
+    __asm__ __volatile__("hlt\n\t");
+# else
+    __asm {
+        hlt
+    }
+# endif
+}
+#endif
+
+
+/**
+ * The PAUSE variant of NOP for helping hyperthreaded CPUs detecing spin locks.
+ */
+#if RT_INLINE_ASM_EXTERNAL
+DECLASM(void) ASMNopPause(void);
+#else
+DECLINLINE(void) ASMNopPause(void)
+{
+# if RT_INLINE_ASM_GNU_STYLE
+    __asm__ __volatile__(".byte 0xf3,0x90\n\t");
+# else
+    __asm {
+        _emit 0f3h
+        _emit 090h
+    }
+# endif
 }
 #endif
 
@@ -2108,7 +2173,7 @@ DECLINLINE(void) ASMSetDR7(RTCCUINTREG uDRVal)
  * trapping instruction, etc.
  */
 #if RT_INLINE_ASM_GNU_STYLE
-# define ASMCompilerBarrier()   do { __asm__ __volatile__ ("" : : : "memory"); } while (0)
+# define ASMCompilerBarrier()   do { __asm__ __volatile__("" : : : "memory"); } while (0)
 #elif RT_INLINE_ASM_USES_INTRIN
 # define ASMCompilerBarrier()   do { _ReadWriteBarrier(); } while (0)
 #else /* 2003 should have _ReadWriteBarrier() but I guess we're at 2002 level then... */
@@ -2798,67 +2863,6 @@ DECLINLINE(int64_t) ASMAtomicXchgS64(volatile int64_t *pi64, int64_t i64)
 }
 
 
-#ifdef RT_ARCH_AMD64
-/**
- * Atomically Exchange an unsigned 128-bit value, ordered.
- *
- * @returns Current *pu128.
- * @param   pu128   Pointer to the 128-bit variable to update.
- * @param   u128    The 128-bit value to assign to *pu128.
- *
- * @remark  We cannot really assume that any hardware supports this. Nor do I have
- *          GAS support for it. So, for the time being we'll BREAK the atomic
- *          bit of this function and use two 64-bit exchanges instead.
- */
-# if 0 /* see remark RT_INLINE_ASM_EXTERNAL */
-DECLASM(uint128_t) ASMAtomicXchgU128(volatile uint128_t *pu128, uint128_t u128);
-# else
-DECLINLINE(uint128_t) ASMAtomicXchgU128(volatile uint128_t *pu128, uint128_t u128)
-{
-   if (true)/*ASMCpuId_ECX(1) & RT_BIT(13))*/
-   {
-       /** @todo this is clumsy code */
-       RTUINT128U u128Ret;
-       u128Ret.u = u128;
-       u128Ret.s.Lo = ASMAtomicXchgU64(&((PRTUINT128U)(uintptr_t)pu128)->s.Lo, u128Ret.s.Lo);
-       u128Ret.s.Hi = ASMAtomicXchgU64(&((PRTUINT128U)(uintptr_t)pu128)->s.Hi, u128Ret.s.Hi);
-       return u128Ret.u;
-   }
-#if 0  /* later? */
-   else
-   {
-#  if RT_INLINE_ASM_GNU_STYLE
-        __asm__ __volatile__("1:\n\t"
-                             "lock; cmpxchg8b %1\n\t"
-                             "jnz 1b\n\t"
-                             : "=A" (u128),
-                               "=m" (*pu128)
-                             : "0" (*pu128),
-                               "b" ( (uint64_t)u128 ),
-                               "c" ( (uint64_t)(u128 >> 64) ));
-#  else
-        __asm
-        {
-            mov     rbx, dword ptr [u128]
-            mov     rcx, dword ptr [u128 + 8]
-            mov     rdi, pu128
-            mov     rax, dword ptr [rdi]
-            mov     rdx, dword ptr [rdi + 8]
-        retry:
-            lock cmpxchg16b [rdi]
-            jnz retry
-            mov     dword ptr [u128], rax
-            mov     dword ptr [u128 + 8], rdx
-        }
-#  endif
-    }
-    return u128;
-#endif
-}
-# endif
-#endif /* RT_ARCH_AMD64 */
-
-
 /**
  * Atomically Exchange a pointer value, ordered.
  *
@@ -2938,12 +2942,23 @@ DECLINLINE(RTR3PTR) ASMAtomicXchgR3Ptr(RTR3PTR volatile *ppvR3, RTR3PTR pvR3)
  *
  * @remarks This doesn't currently work for all handles (like RTFILE).
  */
-#define ASMAtomicXchgHandle(ph, hNew, phRes) \
-    do { \
-        *(void **)(phRes) = ASMAtomicXchgPtr((void * volatile *)(ph), (const void *)(hNew)); \
-        AssertCompile(sizeof(*ph) == sizeof(void *)); \
-        AssertCompile(sizeof(*phRes) == sizeof(void *)); \
-    } while (0)
+#if HC_ARCH_BITS == 32
+# define ASMAtomicXchgHandle(ph, hNew, phRes) \
+   do { \
+       AssertCompile(sizeof(*(ph))    == sizeof(uint32_t)); \
+       AssertCompile(sizeof(*(phRes)) == sizeof(uint32_t)); \
+       *(uint32_t *)(phRes) = ASMAtomicXchgU32((uint32_t volatile *)(ph), (const uint32_t)(hNew)); \
+   } while (0)
+#elif HC_ARCH_BITS == 64
+# define ASMAtomicXchgHandle(ph, hNew, phRes) \
+   do { \
+       AssertCompile(sizeof(*(ph))    == sizeof(uint64_t)); \
+       AssertCompile(sizeof(*(phRes)) == sizeof(uint64_t)); \
+       *(uint64_t *)(phRes) = ASMAtomicXchgU64((uint64_t volatile *)(ph), (const uint64_t)(hNew)); \
+   } while (0)
+#else
+# error HC_ARCH_BITS
+#endif
 
 
 /**
@@ -3067,7 +3082,8 @@ DECLINLINE(bool) ASMAtomicCmpXchgS32(volatile int32_t *pi32, const int32_t i32Ne
  * @param   u64New  The 64-bit value to assign to *pu64.
  * @param   u64Old  The value to compare with.
  */
-#if RT_INLINE_ASM_EXTERNAL && !RT_INLINE_ASM_USES_INTRIN
+#if (RT_INLINE_ASM_EXTERNAL && !RT_INLINE_ASM_USES_INTRIN) \
+ || (RT_INLINE_ASM_GCC_4_3_X_X86 && defined(IN_RING3) && defined(__PIC__))
 DECLASM(bool) ASMAtomicCmpXchgU64(volatile uint64_t *pu64, const uint64_t u64New, const uint64_t u64Old);
 #else
 DECLINLINE(bool) ASMAtomicCmpXchgU64(volatile uint64_t *pu64, const uint64_t u64New, uint64_t u64Old)
@@ -3203,11 +3219,21 @@ DECLINLINE(bool) ASMAtomicCmpXchgPtr(void * volatile *ppv, const void *pvNew, co
  *
  * @remarks This doesn't currently work for all handles (like RTFILE).
  */
-#define ASMAtomicCmpXchgHandle(ph, hNew, hOld, fRc) \
-    do { \
-        (fRc) = ASMAtomicCmpXchgPtr((void * volatile *)(ph), (void *)(hNew), (void *)(hOld)); \
-        AssertCompile(sizeof(*ph) == sizeof(void *)); \
-    } while (0)
+#if HC_ARCH_BITS == 32
+# define ASMAtomicCmpXchgHandle(ph, hNew, hOld, fRc) \
+   do { \
+       AssertCompile(sizeof(*(ph)) == sizeof(uint32_t)); \
+       (fRc) = ASMAtomicCmpXchgU32((uint32_t volatile *)(ph), (const uint32_t)(hNew), (const uint32_t)(hOld)); \
+   } while (0)
+#elif HC_ARCH_BITS == 64
+# define ASMAtomicCmpXchgHandle(ph, hNew, hOld, fRc) \
+   do { \
+       AssertCompile(sizeof(*(ph)) == sizeof(uint64_t)); \
+       (fRc) = ASMAtomicCmpXchgU64((uint64_t volatile *)(ph), (const uint64_t)(hNew), (const uint64_t)(hOld)); \
+   } while (0)
+#else
+# error HC_ARCH_BITS
+#endif
 
 
 /** @def ASMAtomicCmpXchgSize
@@ -3441,20 +3467,22 @@ DECLINLINE(bool) ASMAtomicCmpXchgExS64(volatile int64_t *pi64, const int64_t i64
  *
  * @remarks This doesn't currently work for all handles (like RTFILE).
  */
-#if ARCH_BITS == 32
+#if HC_ARCH_BITS == 32
 # define ASMAtomicCmpXchgExHandle(ph, hNew, hOld, fRc, phOldVal) \
     do { \
-        (fRc) = ASMAtomicCmpXchgExU32((volatile uint32_t *)(void *)(pu), (uint32_t)(uNew), (uint32_t)(uOld), (uint32_t *)(puOldVal)); \
-        AssertCompile(sizeof(*ph) == sizeof(void *)); \
-        AssertCompile(sizeof(*phOldVal) == sizeof(void *)); \
+        AssertCompile(sizeof(*ph)       == sizeof(uint32_t)); \
+        AssertCompile(sizeof(*phOldVal) == sizeof(uint32_t)); \
+        (fRc) = ASMAtomicCmpXchgExU32((volatile uint32_t *)(pu), (uint32_t)(uNew), (uint32_t)(uOld), (uint32_t *)(puOldVal)); \
     } while (0)
-#elif ARCH_BITS == 64
+#elif HC_ARCH_BITS == 64
 # define ASMAtomicCmpXchgExHandle(ph, hNew, hOld, fRc, phOldVal) \
     do { \
-        (fRc) = ASMAtomicCmpXchgExU64((volatile uint64_t *)(void *)(pu), (uint64_t)(uNew), (uint64_t)(uOld), (uint64_t *)(puOldVal)); \
-        AssertCompile(sizeof(*ph) == sizeof(void *)); \
-        AssertCompile(sizeof(*phOldVal) == sizeof(void *)); \
+        AssertCompile(sizeof(*(ph))       == sizeof(uint64_t)); \
+        AssertCompile(sizeof(*(phOldVal)) == sizeof(uint64_t)); \
+        (fRc) = ASMAtomicCmpXchgExU64((volatile uint64_t *)(pu), (uint64_t)(uNew), (uint64_t)(uOld), (uint64_t *)(puOldVal)); \
     } while (0)
+#else
+# error HC_ARCH_BITS
 #endif
 
 
@@ -3796,6 +3824,115 @@ DECLINLINE(void) ASMAtomicAndS32(int32_t volatile *pi32, int32_t i32)
 
 
 /**
+ * Serialize Instruction.
+ */
+#if RT_INLINE_ASM_EXTERNAL && !RT_INLINE_ASM_USES_INTRIN
+DECLASM(void) ASMSerializeInstruction(void);
+#else
+DECLINLINE(void) ASMSerializeInstruction(void)
+{
+# if RT_INLINE_ASM_GNU_STYLE
+    RTCCUINTREG xAX = 0;
+#  ifdef RT_ARCH_AMD64
+    __asm__ ("cpuid"
+             : "=a" (xAX)
+             : "0" (xAX)
+             : "rbx", "rcx", "rdx");
+#  elif (defined(PIC) || defined(__PIC__)) && defined(__i386__)
+    __asm__ ("push  %%ebx\n\t"
+             "cpuid\n\t"
+             "pop   %%ebx\n\t"
+             : "=a" (xAX)
+             : "0" (xAX)
+             : "ecx", "edx");
+#  else
+    __asm__ ("cpuid"
+             : "=a" (xAX)
+             : "0" (xAX)
+             : "ebx", "ecx", "edx");
+#  endif
+
+# elif RT_INLINE_ASM_USES_INTRIN
+    int aInfo[4];
+    __cpuid(aInfo, 0);
+
+# else
+    __asm
+    {
+        push    ebx
+        xor     eax, eax
+        cpuid
+        pop     ebx
+    }
+# endif
+}
+#endif
+
+
+/**
+ * Memory load/store fence, waits for any pending writes and reads to complete.
+ * Requires the X86_CPUID_FEATURE_EDX_SSE2 CPUID bit set.
+ */
+DECLINLINE(void) ASMMemoryFenceSSE2(void)
+{
+#if RT_INLINE_ASM_GNU_STYLE
+    __asm__ __volatile__ (".byte 0x0f,0xae,0xf0\n\t");
+#elif RT_INLINE_ASM_USES_INTRIN
+    _mm_mfence();
+#else
+    __asm
+    {
+        _emit   0x0f
+        _emit   0xae
+        _emit   0xf0
+    }
+#endif
+}
+
+
+/**
+ * Memory store fence, waits for any writes to complete.
+ * Requires the X86_CPUID_FEATURE_EDX_SSE CPUID bit set.
+ */
+DECLINLINE(void) ASMWriteFenceSSE(void)
+{
+#if RT_INLINE_ASM_GNU_STYLE
+    __asm__ __volatile__ (".byte 0x0f,0xae,0xf8\n\t");
+#elif RT_INLINE_ASM_USES_INTRIN
+    _mm_sfence();
+#else
+    __asm
+    {
+        _emit   0x0f
+        _emit   0xae
+        _emit   0xf8
+    }
+#endif
+}
+
+
+/**
+ * Memory load fence, waits for any pending reads to complete.
+ * Requires the X86_CPUID_FEATURE_EDX_SSE2 CPUID bit set.
+ */
+DECLINLINE(void) ASMReadFenceSSE2(void)
+{
+#if RT_INLINE_ASM_GNU_STYLE
+    __asm__ __volatile__ (".byte 0x0f,0xae,0xe8\n\t");
+#elif RT_INLINE_ASM_USES_INTRIN
+    _mm_lfence();
+#else
+    __asm
+    {
+        _emit   0x0f
+        _emit   0xae
+        _emit   0xe8
+    }
+#endif
+}
+
+
+/**
  * Memory fence, waits for any pending writes and reads to complete.
  */
 DECLINLINE(void) ASMMemoryFence(void)
@@ -3992,7 +4129,8 @@ DECLINLINE(int32_t) ASMAtomicUoReadS32(volatile int32_t *pi32)
  *                  The memory pointed to must be writable.
  * @remark  This will fault if the memory is read-only!
  */
-#if RT_INLINE_ASM_EXTERNAL && !defined(RT_ARCH_AMD64)
+#if (RT_INLINE_ASM_EXTERNAL && !defined(RT_ARCH_AMD64)) \
+ || (RT_INLINE_ASM_GCC_4_3_X_X86 && defined(IN_RING3) && defined(__PIC__))
 DECLASM(uint64_t) ASMAtomicReadU64(volatile uint64_t *pu64);
 #else
 DECLINLINE(uint64_t) ASMAtomicReadU64(volatile uint64_t *pu64)
@@ -4238,12 +4376,23 @@ DECLINLINE(bool) ASMAtomicUoReadBool(volatile bool *pf)
  *
  * @remarks This doesn't currently work for all handles (like RTFILE).
  */
-#define ASMAtomicReadHandle(ph, phRes) \
+#if HC_ARCH_BITS == 32
+# define ASMAtomicReadHandle(ph, phRes) \
     do { \
-        *(void **)(phRes) = ASMAtomicReadPtr((void * volatile *)(ph)); \
-        AssertCompile(sizeof(*ph) == sizeof(void *)); \
-        AssertCompile(sizeof(*phRes) == sizeof(void *)); \
+        AssertCompile(sizeof(*(ph))    == sizeof(uint32_t)); \
+        AssertCompile(sizeof(*(phRes)) == sizeof(uint32_t)); \
+        *(uint32_t *)(phRes) = ASMAtomicReadU32((uint32_t volatile *)(ph)); \
     } while (0)
+#elif HC_ARCH_BITS == 64
+# define ASMAtomicReadHandle(ph, phRes) \
+    do { \
+        AssertCompile(sizeof(*(ph))    == sizeof(uint64_t)); \
+        AssertCompile(sizeof(*(phRes)) == sizeof(uint64_t)); \
+        *(uint64_t *)(phRes) = ASMAtomicReadU64((uint64_t volatile *)(ph)); \
+    } while (0)
+#else
+# error HC_ARCH_BITS
+#endif
 
 
 /**
@@ -4254,12 +4403,23 @@ DECLINLINE(bool) ASMAtomicUoReadBool(volatile bool *pf)
  *
  * @remarks This doesn't currently work for all handles (like RTFILE).
  */
-#define ASMAtomicUoReadHandle(ph, phRes) \
+#if HC_ARCH_BITS == 32
+# define ASMAtomicUoReadHandle(ph, phRes) \
     do { \
-        *(void **)(phRes) = ASMAtomicUoReadPtr((void * volatile *)(ph)); \
-        AssertCompile(sizeof(*ph) == sizeof(void *)); \
-        AssertCompile(sizeof(*phRes) == sizeof(void *)); \
+        AssertCompile(sizeof(*(ph))    == sizeof(uint32_t)); \
+        AssertCompile(sizeof(*(phRes)) == sizeof(uint32_t)); \
+        *(uint32_t *)(phRes) = ASMAtomicUoReadU32((uint32_t volatile *)(ph)); \
     } while (0)
+#elif HC_ARCH_BITS == 64
+# define ASMAtomicUoReadHandle(ph, phRes) \
+    do { \
+        AssertCompile(sizeof(*(ph))    == sizeof(uint64_t)); \
+        AssertCompile(sizeof(*(phRes)) == sizeof(uint64_t)); \
+        *(uint64_t *)(phRes) = ASMAtomicUoReadU64((uint64_t volatile *)(ph)); \
+    } while (0)
+#else
+# error HC_ARCH_BITS
+#endif
 
 
 /**
@@ -4285,7 +4445,7 @@ DECLINLINE(bool) ASMAtomicUoReadBool(volatile bool *pf)
  * Atomically read a value which size might differ
  * between platforms or compilers, unordered.
  *
- * @param   pu      Pointer to the variable to update.
+ * @param   pu      Pointer to the variable to read.
  * @param   puRes   Where to store the result.
  */
 #define ASMAtomicUoReadSize(pu, puRes) \
@@ -4576,11 +4736,21 @@ DECLINLINE(void) ASMAtomicUoWritePtr(void * volatile *ppv, const void *pv)
  *
  * @remarks This doesn't currently work for all handles (like RTFILE).
  */
-#define ASMAtomicWriteHandle(ph, hNew) \
+#if HC_ARCH_BITS == 32
+# define ASMAtomicWriteHandle(ph, hNew) \
     do { \
-        ASMAtomicWritePtr((void * volatile *)(ph), (const void *)hNew); \
-        AssertCompile(sizeof(*ph) == sizeof(void*)); \
+        AssertCompile(sizeof(*(ph)) == sizeof(uint32_t)); \
+        ASMAtomicWriteU32((uint32_t volatile *)(ph), (const uint32_t)(hNew)); \
     } while (0)
+#elif HC_ARCH_BITS == 64
+# define ASMAtomicWriteHandle(ph, hNew) \
+    do { \
+        AssertCompile(sizeof(*(ph)) == sizeof(uint64_t)); \
+        ASMAtomicWriteU64((uint64_t volatile *)(ph), (const uint64_t)(hNew)); \
+    } while (0)
+#else
+# error HC_ARCH_BITS
+#endif
 
 
 /**
@@ -4591,11 +4761,21 @@ DECLINLINE(void) ASMAtomicUoWritePtr(void * volatile *ppv, const void *pv)
  *
  * @remarks This doesn't currently work for all handles (like RTFILE).
  */
-#define ASMAtomicUoWriteHandle(ph, hNew) \
+#if HC_ARCH_BITS == 32
+# define ASMAtomicUoWriteHandle(ph, hNew) \
     do { \
-        ASMAtomicUoWritePtr((void * volatile *)(ph), (const void *)hNew); \
-        AssertCompile(sizeof(*ph) == sizeof(void*)); \
+        AssertCompile(sizeof(*(ph)) == sizeof(uint32_t)); \
+        ASMAtomicUoWriteU32((uint32_t volatile *)(ph), (const uint32_t)hNew); \
     } while (0)
+#elif HC_ARCH_BITS == 64
+# define ASMAtomicUoWriteHandle(ph, hNew) \
+    do { \
+        AssertCompile(sizeof(*(ph)) == sizeof(uint64_t)); \
+        ASMAtomicUoWriteU64((uint64_t volatile *)(ph), (const uint64_t)hNew); \
+    } while (0)
+#else
+# error HC_ARCH_BITS
+#endif
 
 
 /**
@@ -4669,6 +4849,50 @@ DECLINLINE(void) ASMInvalidatePage(void *pv)
 #endif
 
 
+/**
+ * Write back the internal caches and invalidate them.
+ */
+#if RT_INLINE_ASM_EXTERNAL && !RT_INLINE_ASM_USES_INTRIN
+DECLASM(void) ASMWriteBackAndInvalidateCaches(void);
+#else
+DECLINLINE(void) ASMWriteBackAndInvalidateCaches(void)
+{
+# if RT_INLINE_ASM_USES_INTRIN
+    __wbinvd();
+
+# elif RT_INLINE_ASM_GNU_STYLE
+    __asm__ __volatile__("wbinvd");
+# else
+    __asm
+    {
+        wbinvd
+    }
+# endif
+}
+#endif
+
+
+/**
+ * Invalidate internal and (perhaps) external caches without first
+ * flushing dirty cache lines. Use with extreme care.
+ */
+#if RT_INLINE_ASM_EXTERNAL
+DECLASM(void) ASMInvalidateInternalCaches(void);
+#else
+DECLINLINE(void) ASMInvalidateInternalCaches(void)
+{
+# if RT_INLINE_ASM_GNU_STYLE
+    __asm__ __volatile__("invd");
+# else
+    __asm
+    {
+        invd
+    }
+# endif
+}
+#endif
+
+
 #if defined(PAGE_SIZE) && !defined(NT_INCLUDED)
 # if PAGE_SIZE != 0x1000
 #  error "PAGE_SIZE is not 0x1000!"
@@ -4695,21 +4919,21 @@ DECLINLINE(void) ASMMemZeroPage(volatile void *pv)
 #  elif RT_INLINE_ASM_GNU_STYLE
     RTCCUINTREG uDummy;
 #   ifdef RT_ARCH_AMD64
-    __asm__ __volatile__ ("rep stosq"
-                          : "=D" (pv),
-                            "=c" (uDummy)
-                          : "0" (pv),
-                            "c" (0x1000 >> 3),
-                            "a" (0)
-                          : "memory");
+    __asm__ __volatile__("rep stosq"
+                         : "=D" (pv),
+                           "=c" (uDummy)
+                         : "0" (pv),
+                           "c" (0x1000 >> 3),
+                           "a" (0)
+                         : "memory");
 #   else
-    __asm__ __volatile__ ("rep stosl"
-                          : "=D" (pv),
-                            "=c" (uDummy)
-                          : "0" (pv),
-                            "c" (0x1000 >> 2),
-                            "a" (0)
-                          : "memory");
+    __asm__ __volatile__("rep stosl"
+                         : "=D" (pv),
+                           "=c" (uDummy)
+                         : "0" (pv),
+                           "c" (0x1000 >> 2),
+                           "a" (0)
+                         : "memory");
 #   endif
 #  else
     __asm
@@ -4751,13 +4975,13 @@ DECLINLINE(void) ASMMemZero32(volatile void *pv, size_t cb)
         __stosd((unsigned long *)pv, 0, cb / 4);
 
 # elif RT_INLINE_ASM_GNU_STYLE
-    __asm__ __volatile__ ("rep stosl"
-                          : "=D" (pv),
-                            "=c" (cb)
-                          : "0" (pv),
-                            "1" (cb >> 2),
-                            "a" (0)
-                          : "memory");
+    __asm__ __volatile__("rep stosl"
+                         : "=D" (pv),
+                           "=c" (cb)
+                         : "0" (pv),
+                           "1" (cb >> 2),
+                           "a" (0)
+                         : "memory");
 # else
     __asm
     {
@@ -4799,13 +5023,13 @@ DECLINLINE(void) ASMMemFill32(volatile void *pv, size_t cb, uint32_t u32)
         __stosd((unsigned long *)pv, u32, cb / 4);
 
 # elif RT_INLINE_ASM_GNU_STYLE
-    __asm__ __volatile__ ("rep stosl"
-                          : "=D" (pv),
-                            "=c" (cb)
-                          : "0" (pv),
-                            "1" (cb >> 2),
-                            "a" (u32)
-                          : "memory");
+    __asm__ __volatile__("rep stosl"
+                         : "=D" (pv),
+                           "=c" (cb)
+                         : "0" (pv),
+                           "1" (cb >> 2),
+                           "a" (u32)
+                         : "memory");
 # else
     __asm
     {
@@ -5242,9 +5466,9 @@ DECLINLINE(void) ASMProbeReadBuffer(const void *pvBuf, size_t cbBuf)
  */
 #if RT_INLINE_ASM_GNU_STYLE
 # ifndef __L4ENV__
-#  define ASMBreakpoint()       do { __asm__ __volatile__ ("int3\n\tnop"); } while (0)
+#  define ASMBreakpoint()       do { __asm__ __volatile__("int3\n\tnop"); } while (0)
 # else
-#  define ASMBreakpoint()       do { __asm__ __volatile__ ("int3; jmp 1f; 1:"); } while (0)
+#  define ASMBreakpoint()       do { __asm__ __volatile__("int3; jmp 1f; 1:"); } while (0)
 # endif
 #else
 # define ASMBreakpoint()        __debugbreak()
@@ -5260,8 +5484,12 @@ DECLINLINE(void) ASMProbeReadBuffer(const void *pvBuf, size_t cbBuf)
 /**
  * Sets a bit in a bitmap.
  *
- * @param   pvBitmap    Pointer to the bitmap.
+ * @param   pvBitmap    Pointer to the bitmap. This should be 32-bit aligned.
  * @param   iBit        The bit to set.
+ *
+ * @remarks The 32-bit aligning of pvBitmap is not a strict requirement.
+ *          However, doing so will yield better performance as well as avoiding
+ *          traps accessing the last bits in the bitmap.
  */
 #if RT_INLINE_ASM_EXTERNAL && !RT_INLINE_ASM_USES_INTRIN
 DECLASM(void) ASMBitSet(volatile void *pvBitmap, int32_t iBit);
@@ -5272,11 +5500,11 @@ DECLINLINE(void) ASMBitSet(volatile void *pvBitmap, int32_t iBit)
     _bittestandset((long *)pvBitmap, iBit);
 
 # elif RT_INLINE_ASM_GNU_STYLE
-    __asm__ __volatile__ ("btsl %1, %0"
-                          : "=m" (*(volatile long *)pvBitmap)
-                          : "Ir" (iBit),
-                            "m" (*(volatile long *)pvBitmap)
-                          : "memory");
+    __asm__ __volatile__("btsl %1, %0"
+                         : "=m" (*(volatile long *)pvBitmap)
+                         : "Ir" (iBit),
+                           "m" (*(volatile long *)pvBitmap)
+                         : "memory");
 # else
     __asm
     {
@@ -5298,7 +5526,8 @@ DECLINLINE(void) ASMBitSet(volatile void *pvBitmap, int32_t iBit)
 /**
  * Atomically sets a bit in a bitmap, ordered.
  *
- * @param   pvBitmap    Pointer to the bitmap.
+ * @param   pvBitmap    Pointer to the bitmap. Must be 32-bit aligned, otherwise
+ *                      the memory access isn't atomic!
  * @param   iBit        The bit to set.
  */
 #if RT_INLINE_ASM_EXTERNAL && !RT_INLINE_ASM_USES_INTRIN
@@ -5306,14 +5535,15 @@ DECLASM(void) ASMAtomicBitSet(volatile void *pvBitmap, int32_t iBit);
 #else
 DECLINLINE(void) ASMAtomicBitSet(volatile void *pvBitmap, int32_t iBit)
 {
+    AssertMsg(!((uintptr_t)pvBitmap & 3), ("address %p not 32-bit aligned", pvBitmap));
 # if RT_INLINE_ASM_USES_INTRIN
     _interlockedbittestandset((long *)pvBitmap, iBit);
 # elif RT_INLINE_ASM_GNU_STYLE
-    __asm__ __volatile__ ("lock; btsl %1, %0"
-                          : "=m" (*(volatile long *)pvBitmap)
-                          : "Ir" (iBit),
-                            "m" (*(volatile long *)pvBitmap)
-                          : "memory");
+    __asm__ __volatile__("lock; btsl %1, %0"
+                         : "=m" (*(volatile long *)pvBitmap)
+                         : "Ir" (iBit),
+                           "m" (*(volatile long *)pvBitmap)
+                         : "memory");
 # else
     __asm
     {
@@ -5337,6 +5567,10 @@ DECLINLINE(void) ASMAtomicBitSet(volatile void *pvBitmap, int32_t iBit)
  *
  * @param   pvBitmap    Pointer to the bitmap.
  * @param   iBit        The bit to clear.
+ *
+ * @remarks The 32-bit aligning of pvBitmap is not a strict requirement.
+ *          However, doing so will yield better performance as well as avoiding
+ *          traps accessing the last bits in the bitmap.
  */
 #if RT_INLINE_ASM_EXTERNAL && !RT_INLINE_ASM_USES_INTRIN
 DECLASM(void) ASMBitClear(volatile void *pvBitmap, int32_t iBit);
@@ -5347,11 +5581,11 @@ DECLINLINE(void) ASMBitClear(volatile void *pvBitmap, int32_t iBit)
     _bittestandreset((long *)pvBitmap, iBit);
 
 # elif RT_INLINE_ASM_GNU_STYLE
-    __asm__ __volatile__ ("btrl %1, %0"
-                          : "=m" (*(volatile long *)pvBitmap)
-                          : "Ir" (iBit),
-                            "m" (*(volatile long *)pvBitmap)
-                          : "memory");
+    __asm__ __volatile__("btrl %1, %0"
+                         : "=m" (*(volatile long *)pvBitmap)
+                         : "Ir" (iBit),
+                           "m" (*(volatile long *)pvBitmap)
+                         : "memory");
 # else
     __asm
     {
@@ -5373,21 +5607,23 @@ DECLINLINE(void) ASMBitClear(volatile void *pvBitmap, int32_t iBit)
 /**
  * Atomically clears a bit in a bitmap, ordered.
  *
- * @param   pvBitmap    Pointer to the bitmap.
+ * @param   pvBitmap    Pointer to the bitmap. Must be 32-bit aligned, otherwise
+ *                      the memory access isn't atomic!
  * @param   iBit        The bit to toggle set.
- * @remark  No memory barrier, take care on smp.
+ * @remarks No memory barrier, take care on smp.
  */
 #if RT_INLINE_ASM_EXTERNAL
 DECLASM(void) ASMAtomicBitClear(volatile void *pvBitmap, int32_t iBit);
 #else
 DECLINLINE(void) ASMAtomicBitClear(volatile void *pvBitmap, int32_t iBit)
 {
+    AssertMsg(!((uintptr_t)pvBitmap & 3), ("address %p not 32-bit aligned", pvBitmap));
 # if RT_INLINE_ASM_GNU_STYLE
-    __asm__ __volatile__ ("lock; btrl %1, %0"
-                          : "=m" (*(volatile long *)pvBitmap)
-                          : "Ir" (iBit),
-                            "m" (*(volatile long *)pvBitmap)
-                          : "memory");
+    __asm__ __volatile__("lock; btrl %1, %0"
+                         : "=m" (*(volatile long *)pvBitmap)
+                         : "Ir" (iBit),
+                           "m" (*(volatile long *)pvBitmap)
+                         : "memory");
 # else
     __asm
     {
@@ -5411,6 +5647,10 @@ DECLINLINE(void) ASMAtomicBitClear(volatile void *pvBitmap, int32_t iBit)
  *
  * @param   pvBitmap    Pointer to the bitmap.
  * @param   iBit        The bit to toggle.
+ *
+ * @remarks The 32-bit aligning of pvBitmap is not a strict requirement.
+ *          However, doing so will yield better performance as well as avoiding
+ *          traps accessing the last bits in the bitmap.
  */
 #if RT_INLINE_ASM_EXTERNAL && !RT_INLINE_ASM_USES_INTRIN
 DECLASM(void) ASMBitToggle(volatile void *pvBitmap, int32_t iBit);
@@ -5420,11 +5660,11 @@ DECLINLINE(void) ASMBitToggle(volatile void *pvBitmap, int32_t iBit)
 # if RT_INLINE_ASM_USES_INTRIN
     _bittestandcomplement((long *)pvBitmap, iBit);
 # elif RT_INLINE_ASM_GNU_STYLE
-    __asm__ __volatile__ ("btcl %1, %0"
-                          : "=m" (*(volatile long *)pvBitmap)
-                          : "Ir" (iBit),
-                            "m" (*(volatile long *)pvBitmap)
-                          : "memory");
+    __asm__ __volatile__("btcl %1, %0"
+                         : "=m" (*(volatile long *)pvBitmap)
+                         : "Ir" (iBit),
+                           "m" (*(volatile long *)pvBitmap)
+                         : "memory");
 # else
     __asm
     {
@@ -5446,7 +5686,8 @@ DECLINLINE(void) ASMBitToggle(volatile void *pvBitmap, int32_t iBit)
 /**
  * Atomically toggles a bit in a bitmap, ordered.
  *
- * @param   pvBitmap    Pointer to the bitmap.
+ * @param   pvBitmap    Pointer to the bitmap. Must be 32-bit aligned, otherwise
+ *                      the memory access isn't atomic!
  * @param   iBit        The bit to test and set.
  */
 #if RT_INLINE_ASM_EXTERNAL
@@ -5454,12 +5695,13 @@ DECLASM(void) ASMAtomicBitToggle(volatile void *pvBitmap, int32_t iBit);
 #else
 DECLINLINE(void) ASMAtomicBitToggle(volatile void *pvBitmap, int32_t iBit)
 {
+    AssertMsg(!((uintptr_t)pvBitmap & 3), ("address %p not 32-bit aligned", pvBitmap));
 # if RT_INLINE_ASM_GNU_STYLE
-    __asm__ __volatile__ ("lock; btcl %1, %0"
-                          : "=m" (*(volatile long *)pvBitmap)
-                          : "Ir" (iBit),
-                            "m" (*(volatile long *)pvBitmap)
-                          : "memory");
+    __asm__ __volatile__("lock; btcl %1, %0"
+                         : "=m" (*(volatile long *)pvBitmap)
+                         : "Ir" (iBit),
+                           "m" (*(volatile long *)pvBitmap)
+                         : "memory");
 # else
     __asm
     {
@@ -5483,8 +5725,13 @@ DECLINLINE(void) ASMAtomicBitToggle(volatile void *pvBitmap, int32_t iBit)
  *
  * @returns true if the bit was set.
  * @returns false if the bit was clear.
+ *
  * @param   pvBitmap    Pointer to the bitmap.
  * @param   iBit        The bit to test and set.
+ *
+ * @remarks The 32-bit aligning of pvBitmap is not a strict requirement.
+ *          However, doing so will yield better performance as well as avoiding
+ *          traps accessing the last bits in the bitmap.
  */
 #if RT_INLINE_ASM_EXTERNAL && !RT_INLINE_ASM_USES_INTRIN
 DECLASM(bool) ASMBitTestAndSet(volatile void *pvBitmap, int32_t iBit);
@@ -5496,14 +5743,14 @@ DECLINLINE(bool) ASMBitTestAndSet(volatile void *pvBitmap, int32_t iBit)
     rc.u8 = _bittestandset((long *)pvBitmap, iBit);
 
 # elif RT_INLINE_ASM_GNU_STYLE
-    __asm__ __volatile__ ("btsl %2, %1\n\t"
-                          "setc %b0\n\t"
-                          "andl $1, %0\n\t"
-                          : "=q" (rc.u32),
-                            "=m" (*(volatile long *)pvBitmap)
-                          : "Ir" (iBit),
-                            "m" (*(volatile long *)pvBitmap)
-                          : "memory");
+    __asm__ __volatile__("btsl %2, %1\n\t"
+                         "setc %b0\n\t"
+                         "andl $1, %0\n\t"
+                         : "=q" (rc.u32),
+                           "=m" (*(volatile long *)pvBitmap)
+                         : "Ir" (iBit),
+                           "m" (*(volatile long *)pvBitmap)
+                         : "memory");
 # else
     __asm
     {
@@ -5530,7 +5777,9 @@ DECLINLINE(bool) ASMBitTestAndSet(volatile void *pvBitmap, int32_t iBit)
  *
  * @returns true if the bit was set.
  * @returns false if the bit was clear.
- * @param   pvBitmap    Pointer to the bitmap.
+ *
+ * @param   pvBitmap    Pointer to the bitmap. Must be 32-bit aligned, otherwise
+ *                      the memory access isn't atomic!
  * @param   iBit        The bit to set.
  */
 #if RT_INLINE_ASM_EXTERNAL && !RT_INLINE_ASM_USES_INTRIN
@@ -5539,17 +5788,18 @@ DECLASM(bool) ASMAtomicBitTestAndSet(volatile void *pvBitmap, int32_t iBit);
 DECLINLINE(bool) ASMAtomicBitTestAndSet(volatile void *pvBitmap, int32_t iBit)
 {
     union { bool f; uint32_t u32; uint8_t u8; } rc;
+    AssertMsg(!((uintptr_t)pvBitmap & 3), ("address %p not 32-bit aligned", pvBitmap));
 # if RT_INLINE_ASM_USES_INTRIN
     rc.u8 = _interlockedbittestandset((long *)pvBitmap, iBit);
 # elif RT_INLINE_ASM_GNU_STYLE
-    __asm__ __volatile__ ("lock; btsl %2, %1\n\t"
-                          "setc %b0\n\t"
-                          "andl $1, %0\n\t"
-                          : "=q" (rc.u32),
-                            "=m" (*(volatile long *)pvBitmap)
-                          : "Ir" (iBit),
-                            "m" (*(volatile long *)pvBitmap)
-                          : "memory");
+    __asm__ __volatile__("lock; btsl %2, %1\n\t"
+                         "setc %b0\n\t"
+                         "andl $1, %0\n\t"
+                         : "=q" (rc.u32),
+                           "=m" (*(volatile long *)pvBitmap)
+                         : "Ir" (iBit),
+                           "m" (*(volatile long *)pvBitmap)
+                         : "memory");
 # else
     __asm
     {
@@ -5576,8 +5826,13 @@ DECLINLINE(bool) ASMAtomicBitTestAndSet(volatile void *pvBitmap, int32_t iBit)
  *
  * @returns true if the bit was set.
  * @returns false if the bit was clear.
+ *
  * @param   pvBitmap    Pointer to the bitmap.
  * @param   iBit        The bit to test and clear.
+ *
+ * @remarks The 32-bit aligning of pvBitmap is not a strict requirement.
+ *          However, doing so will yield better performance as well as avoiding
+ *          traps accessing the last bits in the bitmap.
  */
 #if RT_INLINE_ASM_EXTERNAL && !RT_INLINE_ASM_USES_INTRIN
 DECLASM(bool) ASMBitTestAndClear(volatile void *pvBitmap, int32_t iBit);
@@ -5589,14 +5844,14 @@ DECLINLINE(bool) ASMBitTestAndClear(volatile void *pvBitmap, int32_t iBit)
     rc.u8 = _bittestandreset((long *)pvBitmap, iBit);
 
 # elif RT_INLINE_ASM_GNU_STYLE
-    __asm__ __volatile__ ("btrl %2, %1\n\t"
-                          "setc %b0\n\t"
-                          "andl $1, %0\n\t"
-                          : "=q" (rc.u32),
-                            "=m" (*(volatile long *)pvBitmap)
-                          : "Ir" (iBit),
-                            "m" (*(volatile long *)pvBitmap)
-                          : "memory");
+    __asm__ __volatile__("btrl %2, %1\n\t"
+                         "setc %b0\n\t"
+                         "andl $1, %0\n\t"
+                         : "=q" (rc.u32),
+                           "=m" (*(volatile long *)pvBitmap)
+                         : "Ir" (iBit),
+                           "m" (*(volatile long *)pvBitmap)
+                         : "memory");
 # else
     __asm
     {
@@ -5623,9 +5878,12 @@ DECLINLINE(bool) ASMBitTestAndClear(volatile void *pvBitmap, int32_t iBit)
  *
  * @returns true if the bit was set.
  * @returns false if the bit was clear.
- * @param   pvBitmap    Pointer to the bitmap.
+ *
+ * @param   pvBitmap    Pointer to the bitmap. Must be 32-bit aligned, otherwise
+ *                      the memory access isn't atomic!
  * @param   iBit        The bit to test and clear.
- * @remark  No memory barrier, take care on smp.
+ *
+ * @remarks No memory barrier, take care on smp.
  */
 #if RT_INLINE_ASM_EXTERNAL && !RT_INLINE_ASM_USES_INTRIN
 DECLASM(bool) ASMAtomicBitTestAndClear(volatile void *pvBitmap, int32_t iBit);
@@ -5633,18 +5891,19 @@ DECLASM(bool) ASMAtomicBitTestAndClear(volatile void *pvBitmap, int32_t iBit);
 DECLINLINE(bool) ASMAtomicBitTestAndClear(volatile void *pvBitmap, int32_t iBit)
 {
     union { bool f; uint32_t u32; uint8_t u8; } rc;
+    AssertMsg(!((uintptr_t)pvBitmap & 3), ("address %p not 32-bit aligned", pvBitmap));
 # if RT_INLINE_ASM_USES_INTRIN
     rc.u8 = _interlockedbittestandreset((long *)pvBitmap, iBit);
 
 # elif RT_INLINE_ASM_GNU_STYLE
-    __asm__ __volatile__ ("lock; btrl %2, %1\n\t"
-                          "setc %b0\n\t"
-                          "andl $1, %0\n\t"
-                          : "=q" (rc.u32),
-                            "=m" (*(volatile long *)pvBitmap)
-                          : "Ir" (iBit),
-                            "m" (*(volatile long *)pvBitmap)
-                          : "memory");
+    __asm__ __volatile__("lock; btrl %2, %1\n\t"
+                         "setc %b0\n\t"
+                         "andl $1, %0\n\t"
+                         : "=q" (rc.u32),
+                           "=m" (*(volatile long *)pvBitmap)
+                         : "Ir" (iBit),
+                           "m" (*(volatile long *)pvBitmap)
+                         : "memory");
 # else
     __asm
     {
@@ -5671,8 +5930,13 @@ DECLINLINE(bool) ASMAtomicBitTestAndClear(volatile void *pvBitmap, int32_t iBit)
  *
  * @returns true if the bit was set.
  * @returns false if the bit was clear.
+ *
  * @param   pvBitmap    Pointer to the bitmap.
  * @param   iBit        The bit to test and toggle.
+ *
+ * @remarks The 32-bit aligning of pvBitmap is not a strict requirement.
+ *          However, doing so will yield better performance as well as avoiding
+ *          traps accessing the last bits in the bitmap.
  */
 #if RT_INLINE_ASM_EXTERNAL && !RT_INLINE_ASM_USES_INTRIN
 DECLINLINE(bool) ASMBitTestAndToggle(volatile void *pvBitmap, int32_t iBit);
@@ -5684,14 +5948,14 @@ DECLINLINE(bool) ASMBitTestAndToggle(volatile void *pvBitmap, int32_t iBit)
     rc.u8 = _bittestandcomplement((long *)pvBitmap, iBit);
 
 # elif RT_INLINE_ASM_GNU_STYLE
-    __asm__ __volatile__ ("btcl %2, %1\n\t"
-                          "setc %b0\n\t"
-                          "andl $1, %0\n\t"
-                          : "=q" (rc.u32),
-                            "=m" (*(volatile long *)pvBitmap)
-                          : "Ir" (iBit),
-                            "m" (*(volatile long *)pvBitmap)
-                          : "memory");
+    __asm__ __volatile__("btcl %2, %1\n\t"
+                         "setc %b0\n\t"
+                         "andl $1, %0\n\t"
+                         : "=q" (rc.u32),
+                           "=m" (*(volatile long *)pvBitmap)
+                         : "Ir" (iBit),
+                           "m" (*(volatile long *)pvBitmap)
+                         : "memory");
 # else
     __asm
     {
@@ -5718,7 +5982,9 @@ DECLINLINE(bool) ASMBitTestAndToggle(volatile void *pvBitmap, int32_t iBit)
  *
  * @returns true if the bit was set.
  * @returns false if the bit was clear.
- * @param   pvBitmap    Pointer to the bitmap.
+ *
+ * @param   pvBitmap    Pointer to the bitmap. Must be 32-bit aligned, otherwise
+ *                      the memory access isn't atomic!
  * @param   iBit        The bit to test and toggle.
  */
 #if RT_INLINE_ASM_EXTERNAL
@@ -5727,15 +5993,16 @@ DECLASM(bool) ASMAtomicBitTestAndToggle(volatile void *pvBitmap, int32_t iBit);
 DECLINLINE(bool) ASMAtomicBitTestAndToggle(volatile void *pvBitmap, int32_t iBit)
 {
     union { bool f; uint32_t u32; uint8_t u8; } rc;
+    AssertMsg(!((uintptr_t)pvBitmap & 3), ("address %p not 32-bit aligned", pvBitmap));
 # if RT_INLINE_ASM_GNU_STYLE
-    __asm__ __volatile__ ("lock; btcl %2, %1\n\t"
-                          "setc %b0\n\t"
-                          "andl $1, %0\n\t"
-                          : "=q" (rc.u32),
-                            "=m" (*(volatile long *)pvBitmap)
-                          : "Ir" (iBit),
-                            "m" (*(volatile long *)pvBitmap)
-                          : "memory");
+    __asm__ __volatile__("lock; btcl %2, %1\n\t"
+                         "setc %b0\n\t"
+                         "andl $1, %0\n\t"
+                         : "=q" (rc.u32),
+                           "=m" (*(volatile long *)pvBitmap)
+                         : "Ir" (iBit),
+                           "m" (*(volatile long *)pvBitmap)
+                         : "memory");
 # else
     __asm
     {
@@ -5762,8 +6029,13 @@ DECLINLINE(bool) ASMAtomicBitTestAndToggle(volatile void *pvBitmap, int32_t iBit
  *
  * @returns true if the bit is set.
  * @returns false if the bit is clear.
+ *
  * @param   pvBitmap    Pointer to the bitmap.
  * @param   iBit        The bit to test.
+ *
+ * @remarks The 32-bit aligning of pvBitmap is not a strict requirement.
+ *          However, doing so will yield better performance as well as avoiding
+ *          traps accessing the last bits in the bitmap.
  */
 #if RT_INLINE_ASM_EXTERNAL && !RT_INLINE_ASM_USES_INTRIN
 DECLASM(bool) ASMBitTest(const volatile void *pvBitmap, int32_t iBit);
@@ -5775,13 +6047,13 @@ DECLINLINE(bool) ASMBitTest(const volatile void *pvBitmap, int32_t iBit)
     rc.u32 = _bittest((long *)pvBitmap, iBit);
 # elif RT_INLINE_ASM_GNU_STYLE
 
-    __asm__ __volatile__ ("btl %2, %1\n\t"
-                          "setc %b0\n\t"
-                          "andl $1, %0\n\t"
-                          : "=q" (rc.u32)
-                          : "m" (*(const volatile long *)pvBitmap),
-                            "Ir" (iBit)
-                          : "memory");
+    __asm__ __volatile__("btl %2, %1\n\t"
+                         "setc %b0\n\t"
+                         "andl $1, %0\n\t"
+                         : "=q" (rc.u32)
+                         : "m" (*(const volatile long *)pvBitmap),
+                           "Ir" (iBit)
+                         : "memory");
 # else
     __asm
     {
@@ -6312,7 +6584,7 @@ DECLINLINE(unsigned) ASMBitLastSetU32(uint32_t u32)
  */
 DECLINLINE(unsigned) ASMBitLastSetS32(int32_t i32)
 {
-    return ASMBitLastSetS32((uint32_t)i32);
+    return ASMBitLastSetU32((uint32_t)i32);
 }
 
 /**

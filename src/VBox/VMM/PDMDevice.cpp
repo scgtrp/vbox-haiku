@@ -136,7 +136,8 @@ int pdmR3DevInit(PVM pVM)
     rc = PDMR3LdrGetSymbolR0(pVM, NULL, "g_pdmR0DevHlp", &pDevHlpR0);
     AssertReleaseRCReturn(rc, rc);
 
-    rc = PDMR3QueueCreateInternal(pVM, sizeof(PDMDEVHLPTASK), 8, 0, pdmR3DevHlpQueueConsumer, true, &pVM->pdm.s.pDevHlpQueueR3);
+    rc = PDMR3QueueCreateInternal(pVM, sizeof(PDMDEVHLPTASK), 8, 0, pdmR3DevHlpQueueConsumer, true, "DevHlp",
+                                  &pVM->pdm.s.pDevHlpQueueR3);
     AssertRCReturn(rc, rc);
     pVM->pdm.s.pDevHlpQueueR0 = PDMQueueR0Ptr(pVM->pdm.s.pDevHlpQueueR3);
     pVM->pdm.s.pDevHlpQueueRC = PDMQueueRCPtr(pVM->pdm.s.pDevHlpQueueR3);
@@ -785,9 +786,10 @@ int pdmR3DevFindLun(PVM pVM, const char *pszDevice, unsigned iInstance, unsigned
  * @param   iInstance       Device instance.
  * @param   iLun            The Logical Unit to obtain the interface of.
  * @param   ppBase          Where to store the base interface pointer. Optional.
+ * @param   fFlags          Flags, combination of the PDMDEVATT_FLAGS_* \#defines.
  * @thread  EMT
  */
-VMMR3DECL(int) PDMR3DeviceAttach(PVM pVM, const char *pszDevice, unsigned iInstance, unsigned iLun, PPDMIBASE *ppBase)
+VMMR3DECL(int) PDMR3DeviceAttach(PVM pVM, const char *pszDevice, unsigned iInstance, unsigned iLun, PPDMIBASE *ppBase, uint32_t fFlags)
 {
     VM_ASSERT_EMT(pVM);
     LogFlow(("PDMR3DeviceAttach: pszDevice=%p:{%s} iInstance=%d iLun=%d ppBase=%p\n",
@@ -808,7 +810,7 @@ VMMR3DECL(int) PDMR3DeviceAttach(PVM pVM, const char *pszDevice, unsigned iInsta
         {
             if (!pLun->pTop)
             {
-                rc = pDevIns->pDevReg->pfnAttach(pDevIns, iLun);
+                rc = pDevIns->pDevReg->pfnAttach(pDevIns, iLun, fFlags);
 
             }
             else
@@ -841,9 +843,10 @@ VMMR3DECL(int) PDMR3DeviceAttach(PVM pVM, const char *pszDevice, unsigned iInsta
  * @param   pszDevice       Device name.
  * @param   iInstance       Device instance.
  * @param   iLun            The Logical Unit to obtain the interface of.
+ * @param   fFlags          Flags, combination of the PDMDEVATT_FLAGS_* \#defines.
  * @thread  EMT
  */
-VMMR3DECL(int) PDMR3DeviceDetach(PVM pVM, const char *pszDevice, unsigned iInstance, unsigned iLun)
+VMMR3DECL(int) PDMR3DeviceDetach(PVM pVM, const char *pszDevice, unsigned iInstance, unsigned iLun, uint32_t fFlags)
 {
     VM_ASSERT_EMT(pVM);
     LogFlow(("PDMR3DeviceDetach: pszDevice=%p:{%s} iInstance=%d iLun=%d\n",
@@ -863,7 +866,7 @@ VMMR3DECL(int) PDMR3DeviceDetach(PVM pVM, const char *pszDevice, unsigned iInsta
         if (pDevIns->pDevReg->pfnDetach)
         {
             if (pLun->pTop)
-                rc = pdmR3DrvDetach(pLun->pTop);
+                rc = pdmR3DrvDetach(pLun->pTop, fFlags);
             else
                 rc = VINF_PDM_NO_DRIVER_ATTACHED_TO_LUN;
         }

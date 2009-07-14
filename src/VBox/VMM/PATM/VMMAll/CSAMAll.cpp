@@ -36,6 +36,7 @@
 #include <iprt/avl.h>
 #include "CSAMInternal.h"
 #include <VBox/vm.h>
+#include <VBox/vmm.h>
 #include <VBox/dbg.h>
 #include <VBox/err.h>
 #include <VBox/log.h>
@@ -67,7 +68,7 @@ VMMDECL(int) CSAMExecFault(PVM pVM, RTRCPTR pvFault)
     }
 
     STAM_COUNTER_ADD(&pVM->csam.s.StatNrTraps, 1);
-    VM_FF_SET(pVM, VM_FF_CSAM_SCAN_PAGE);
+    VMCPU_FF_SET(VMMGetCpu0(pVM), VMCPU_FF_CSAM_SCAN_PAGE);
     return VINF_CSAM_PENDING_ACTION;
 }
 
@@ -133,7 +134,7 @@ VMMDECL(int) CSAMMarkPage(PVM pVM, RTRCPTR pPage, bool fScanned)
         int rc = MMHyperAlloc(pVM, CSAM_PAGE_BITMAP_SIZE, 0, MM_TAG_CSAM, (void **)&pVM->csam.s.CTXSUFF(pPDBitmap)[pgdir]);
         if (RT_FAILURE(rc))
         {
-            Log(("MMR3HyperAlloc failed with %d\n", rc));
+            Log(("MMHyperAlloc failed with %Rrc\n", rc));
             return rc;
         }
 #ifdef IN_RC
@@ -204,7 +205,7 @@ VMMDECL(void) CSAMMarkPossibleCodePage(PVM pVM, RTRCPTR GCPtr)
     if (pVM->csam.s.cPossibleCodePages < RT_ELEMENTS(pVM->csam.s.pvPossibleCodePage))
     {
         pVM->csam.s.pvPossibleCodePage[pVM->csam.s.cPossibleCodePages++] = (RTRCPTR)GCPtr;
-        VM_FF_SET(pVM, VM_FF_CSAM_PENDING_ACTION);
+        VMCPU_FF_SET(VMMGetCpu0(pVM), VMCPU_FF_CSAM_PENDING_ACTION);
     }
     return;
 }

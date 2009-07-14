@@ -54,6 +54,7 @@
 #include <iprt/semaphore.h>
 #include <iprt/spinlock.h>
 #include <iprt/mp.h>
+#include <iprt/power.h>
 #include <iprt/process.h>
 #include <iprt/thread.h>
 #include <iprt/initterm.h>
@@ -65,10 +66,6 @@
 /*******************************************************************************
 *   Defined Constants And Macros                                               *
 *******************************************************************************/
-/** @todo this quoting macros probably should be moved to a common place.
-  * The indirection is for expanding macros passed to the first macro. */
-#define VBOXSOLQUOTE2(x)         #x
-#define VBOXSOLQUOTE(x)          VBOXSOLQUOTE2(x)
 /** The module name. */
 #define DEVICE_NAME              "vboxdrv"
 /** The module description as seen in 'modinfo'. */
@@ -143,7 +140,7 @@ static struct dev_ops g_VBoxDrvSolarisDevOps =
 static struct modldrv g_VBoxDrvSolarisModule =
 {
     &mod_driverops,         /* extern from kernel */
-    DEVICE_DESC " " VBOX_VERSION_STRING "r" VBOXSOLQUOTE(VBOX_SVN_REV),
+    DEVICE_DESC " " VBOX_VERSION_STRING "r" RT_XSTR(VBOX_SVN_REV),
     &g_VBoxDrvSolarisDevOps
 };
 
@@ -319,6 +316,14 @@ static int VBoxDrvSolarisAttach(dev_info_t *pDip, ddi_attach_cmd_t enmCmd)
 #endif
 
             /*
+             * Register for suspend/resume notifications
+             */
+            rc = ddi_prop_create(DDI_DEV_T_NONE, pDip, DDI_PROP_CANSLEEP /* kmem alloc can sleep */,
+                                "pm-hardware-state", "needs-suspend-resume", sizeof("needs-suspend-resume"));
+            if (rc != DDI_PROP_SUCCESS)
+                LogRel((DEVICE_NAME ":Suspend/Resume notification registeration failed.\n"));
+
+            /*
              * Register ourselves as a character device, pseudo-driver
              */
 #ifdef VBOX_WITH_HARDENING
@@ -342,11 +347,15 @@ static int VBoxDrvSolarisAttach(dev_info_t *pDip, ddi_attach_cmd_t enmCmd)
 
         case DDI_RESUME:
         {
+#if 0
             RTSemFastMutexRequest(g_DevExt.mtxGip);
             if (g_DevExt.pGipTimer)
                 RTTimerStart(g_DevExt.pGipTimer, 0);
 
             RTSemFastMutexRelease(g_DevExt.mtxGip);
+#endif
+            RTPowerSignalEvent(RTPOWEREVENT_RESUME);
+            LogRel((DEVICE_NAME ":Awakened from suspend.\n"));
             return DDI_SUCCESS;
         }
 
@@ -388,12 +397,17 @@ static int VBoxDrvSolarisDetach(dev_info_t *pDip, ddi_detach_cmd_t enmCmd)
 
         case DDI_SUSPEND:
         {
+#if 0
             RTSemFastMutexRequest(g_DevExt.mtxGip);
             if (g_DevExt.pGipTimer && g_DevExt.cGipUsers > 0)
                 RTTimerStop(g_DevExt.pGipTimer);
 
             RTSemFastMutexRelease(g_DevExt.mtxGip);
+#endif
+            RTPowerSignalEvent(RTPOWEREVENT_SUSPEND);
+            LogRel((DEVICE_NAME ":Falling to suspend mode.\n"));
             return DDI_SUCCESS;
+
         }
 
         default:

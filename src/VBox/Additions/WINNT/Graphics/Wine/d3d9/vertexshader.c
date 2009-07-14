@@ -135,7 +135,8 @@ HRESULT WINAPI IDirect3DDevice9Impl_CreateVertexShader(LPDIRECT3DDEVICE9EX iface
     object->ref = 1;
     object->lpVtbl = &Direct3DVertexShader9_Vtbl;
     EnterCriticalSection(&d3d9_cs);
-    hrc= IWineD3DDevice_CreateVertexShader(This->WineD3DDevice, NULL /* declaration */, pFunction, &object->wineD3DVertexShader, (IUnknown *)object);
+    hrc= IWineD3DDevice_CreateVertexShader(This->WineD3DDevice, pFunction,
+            NULL /* output signature */, &object->wineD3DVertexShader, (IUnknown *)object);
     LeaveCriticalSection(&d3d9_cs);
 
     if (FAILED(hrc)) {
@@ -175,10 +176,20 @@ HRESULT WINAPI IDirect3DDevice9Impl_GetVertexShader(LPDIRECT3DDEVICE9EX iface, I
     TRACE("(%p) : Relay  device@%p\n", This, This->WineD3DDevice);
     EnterCriticalSection(&d3d9_cs);
     hrc = IWineD3DDevice_GetVertexShader(This->WineD3DDevice, &pShader);
-    if(hrc == D3D_OK && pShader != NULL){
-       hrc = IWineD3DVertexShader_GetParent(pShader, (IUnknown **)ppShader);
-       IWineD3DVertexShader_Release(pShader);
-    } else {
+    if (SUCCEEDED(hrc))
+    {
+        if (pShader)
+        {
+            hrc = IWineD3DVertexShader_GetParent(pShader, (IUnknown **)ppShader);
+            IWineD3DVertexShader_Release(pShader);
+        }
+        else
+        {
+            *ppShader = NULL;
+        }
+    }
+    else
+    {
         WARN("(%p) : Call to IWineD3DDevice_GetVertexShader failed %u (device %p)\n", This, hrc, This->WineD3DDevice);
     }
     LeaveCriticalSection(&d3d9_cs);
@@ -191,6 +202,12 @@ HRESULT WINAPI IDirect3DDevice9Impl_SetVertexShaderConstantF(LPDIRECT3DDEVICE9EX
     HRESULT hr;
     TRACE("(%p) : Relay\n", This);
 
+    if(Register + Vector4fCount > D3D9_MAX_VERTEX_SHADER_CONSTANTF) {
+        WARN("Trying to access %u constants, but d3d9 only supports %u\n",
+             Register + Vector4fCount, D3D9_MAX_VERTEX_SHADER_CONSTANTF);
+        return D3DERR_INVALIDCALL;
+    }
+
     EnterCriticalSection(&d3d9_cs);
     hr = IWineD3DDevice_SetVertexShaderConstantF(This->WineD3DDevice, Register, pConstantData, Vector4fCount);
     LeaveCriticalSection(&d3d9_cs);
@@ -200,6 +217,12 @@ HRESULT WINAPI IDirect3DDevice9Impl_SetVertexShaderConstantF(LPDIRECT3DDEVICE9EX
 HRESULT WINAPI IDirect3DDevice9Impl_GetVertexShaderConstantF(LPDIRECT3DDEVICE9EX iface, UINT Register, float* pConstantData, UINT Vector4fCount) {
     IDirect3DDevice9Impl *This = (IDirect3DDevice9Impl *)iface;
     HRESULT hr;
+
+    if(Register + Vector4fCount > D3D9_MAX_VERTEX_SHADER_CONSTANTF) {
+        WARN("Trying to access %u constants, but d3d9 only supports %u\n",
+             Register + Vector4fCount, D3D9_MAX_VERTEX_SHADER_CONSTANTF);
+        return D3DERR_INVALIDCALL;
+    }
 
     TRACE("(%p) : Relay\n", This);
     EnterCriticalSection(&d3d9_cs);

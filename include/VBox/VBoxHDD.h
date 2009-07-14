@@ -40,7 +40,7 @@
 /** @todo remove this dependency, using PFNVMPROGRESS outside VMM is *WRONG*. */
 #include <VBox/vmapi.h>
 
-__BEGIN_DECLS
+RT_C_DECLS_BEGIN
 
 #ifdef IN_RING0
 # error "There are no VBox HDD Container APIs available in Ring-0 Host Context!"
@@ -222,6 +222,8 @@ typedef enum VDINTERFACETYPE
     VDINTERFACETYPE_CONFIG,
     /** Interface for TCP network stack. Per-disk. */
     VDINTERFACETYPE_TCPNET,
+    /** Interface for getting parent image state. Per-operation. */
+    VDINTERFACETYPE_PARENTSTATE,
     /** invalid interface. */
     VDINTERFACETYPE_INVALID
 } VDINTERFACETYPE;
@@ -392,8 +394,10 @@ DECLINLINE(PVDINTERFACEERROR) VDGetInterfaceError(PVDINTERFACE pInterface)
  *
  * @return  VBox status code.
  * @param   pvUser          Opaque user data which is passed on request submission.
+ * @param   ppvCaller       Where to store the opaque user data the caller of
+ *                          VDAsyncRead or VDAsyncWrite passed.
  */
-typedef DECLCALLBACK(int) FNVDCOMPLETED(void *pvUser);
+typedef DECLCALLBACK(int) FNVDCOMPLETED(void *pvUser, void **ppvCaller);
 /** Pointer to FNVDCOMPLETED() */
 typedef FNVDCOMPLETED *PFNVDCOMPLETED;
 
@@ -422,9 +426,15 @@ typedef struct VDINTERFACEASYNCIO
      * @param   pvUser          The opaque data passed on container creation.
      * @param   pszLocation     Name of the location to open.
      * @param   fReadonly       Whether to open the storage medium read only.
+     * @param   pfnCompleted    The callabck which is called whenever a task
+     *                          completed. The backend has to pass the user data
+     *                          of the request initiator (ie the one who calls
+     *                          VDAsyncRead or VDAsyncWrite) in pvCompletion
+     *                          if this is NULL.
      * @param   ppStorage       Where to store the opaque storage handle.
      */
-    DECLR3CALLBACKMEMBER(int, pfnOpen, (void *pvUser, const char *pszLocation, bool fReadonly, void **ppStorage));
+    DECLR3CALLBACKMEMBER(int, pfnOpen, (void *pvUser, const char *pszLocation, bool fReadonly,
+                                        PFNVDCOMPLETED pfnCompleted, void **ppStorage));
 
     /**
      * Close callback.
@@ -434,6 +444,16 @@ typedef struct VDINTERFACEASYNCIO
      * @param   pStorage        The opaque storage handle to close.
      */
     DECLR3CALLBACKMEMBER(int, pfnClose, (void *pvUser, void *pStorage));
+
+    /**
+     * Returns the size of the opened storage backend.
+     *
+     * @return  VBox status code.
+     * @param   pvUser          The opaque data passed on container creation.
+     * @param   pStorage        The opaque storage handle to close.
+     * @param   pcbSize         Where to store the size of the storage backend.
+     */
+    DECLR3CALLBACKMEMBER(int, pfnGetSize, (void *pvUser, void *pStorage, uint64_t *pcbSize));
 
     /**
      * Synchronous write callback.
@@ -446,8 +466,8 @@ typedef struct VDINTERFACEASYNCIO
      * @param   pvBuf           Pointer to the bits need to be written.
      * @param   pcbWritten      Where to store how many bytes where actually written.
      */
-    DECLR3CALLBACKMEMBER(int, pfnWrite, (void *pvUser, void *pStorage, uint64_t uOffset,
-                                         size_t cbWrite, const void *pvBuf, size_t *pcbWritten));
+    DECLR3CALLBACKMEMBER(int, pfnWriteSync, (void *pvUser, void *pStorage, uint64_t uOffset,
+                                             size_t cbWrite, const void *pvBuf, size_t *pcbWritten));
 
     /**
      * Synchronous read callback.
@@ -460,8 +480,8 @@ typedef struct VDINTERFACEASYNCIO
      * @param   pvBuf           Where to store the read bits.
      * @param   pcbRead         Where to store how many bytes where actually read.
      */
-    DECLR3CALLBACKMEMBER(int, pfnRead, (void *pvUser, void *pStorage, uint64_t uOffset,
-                                        size_t cbRead, void *pvBuf, size_t *pcbRead));
+    DECLR3CALLBACKMEMBER(int, pfnReadSync, (void *pvUser, void *pStorage, uint64_t uOffset,
+                                            size_t cbRead, void *pvBuf, size_t *pcbRead));
 
     /**
      * Flush data to the storage backend.
@@ -470,49 +490,55 @@ typedef struct VDINTERFACEASYNCIO
      * @param   pvUser          The opaque data passed on container creation.
      * @param   pStorage        The storage handle to flush.
      */
-    DECLR3CALLBACKMEMBER(int, pfnFlush, (void *pvUser, void *pStorage));
+    DECLR3CALLBACKMEMBER(int, pfnFlushSync, (void *pvUser, void *pStorage));
 
     /**
-     * Prepare an asynchronous read task.
+     * Initiate a asynchronous read request.
      *
      * @return  VBox status code.
      * @param   pvUser         The opqaue user data passed on container creation.
      * @param   pStorage       The storage handle.
      * @param   uOffset        The offset to start reading from.
-     * @param   pvBuf          Where to store read bits.
+     * @param   paSegments     Scatter gather list to store the data in.
+     * @param   cSegments      Number of segments in the list.
      * @param   cbRead         How many bytes to read.
+     * @param   pvCompletion   The opaque user data which is returned upon completion.
      * @param   ppTask         Where to store the opaque task handle.
      */
-    DECLR3CALLBACKMEMBER(int, pfnPrepareRead, (void *pvUser, void *pStorage, uint64_t uOffset,
-                                               void *pvBuf, size_t cbRead, void **ppTask));
+    DECLR3CALLBACKMEMBER(int, pfnReadAsync, (void *pvUser, void *pStorage, uint64_t uOffset,
+                                             PCPDMDATASEG paSegments, size_t cSegments,
+                                             size_t cbRead, void *pvCompletion,
+                                             void **ppTask));
 
     /**
-     * Prepare an asynchronous write task.
+     * Initiate a asynchronous write request.
      *
      * @return  VBox status code.
      * @param   pvUser         The opaque user data passed on conatiner creation.
      * @param   pStorage       The storage handle.
      * @param   uOffset        The offset to start writing to.
-     * @param   pvBuf          Where to read the data from.
+     * @param   paSegments     Scatter gather list of the data to write
+     * @param   cSegments      Number of segments in the list.
      * @param   cbWrite        How many bytes to write.
+     * @param   pvCompletion   The opaque user data which is returned upon completion.
      * @param   ppTask         Where to store the opaque task handle.
      */
-    DECLR3CALLBACKMEMBER(int, pfnPrepareWrite, (void *pvUser, void *pStorage, uint64_t uOffset,
-                                                void *pvBuf, size_t cbWrite, void **ppTask));
+    DECLR3CALLBACKMEMBER(int, pfnWriteAsync, (void *pvUser, void *pStorage, uint64_t uOffset,
+                                              PCPDMDATASEG paSegments, size_t cSegments,
+                                              size_t cbWrite, void *pvCompletion,
+                                              void **ppTask));
 
     /**
-     * Submit an array of tasks for processing
+     * Initiates a async flush request.
      *
-     * @return  VBox status code.
-     * @param   pvUser        The opaque user data passed on container creation.
-     * @param   apTasks       Array of task handles to submit.
-     * @param   cTasks        How many tasks to submit.
-     * @param   pvUser2       User data which is passed on completion.
-     * @param   pvUserCaller  Opaque user data the caller of VDAsyncWrite/Read passed.
-     * @param   pfnTasksCompleted Pointer to callback which is called on request completion.
+     * @return  VBox statis code.
+     * @param   pvUser          The opaque data passed on container creation.
+     * @param   pStorage        The storage handle to flush.
+     * @param   pvCompletion    The opaque user data which is returned upon completion.
+     * @param   ppTask          Where to store the opaque task handle.
      */
-    DECLR3CALLBACKMEMBER(int, pfnTasksSubmit, (void *pvUser, void *apTasks[], unsigned cTasks, void *pvUser2,
-                                               void *pvUserCaller, PFNVDCOMPLETED pfnTasksCompleted));
+    DECLR3CALLBACKMEMBER(int, pfnFlushAsync, (void *pvUser, void *pStorage,
+                                              void *pvCompletion, void **ppTask));
 
 } VDINTERFACEASYNCIO, *PVDINTERFACEASYNCIO;
 
@@ -980,6 +1006,64 @@ DECLINLINE(PVDINTERFACETCPNET) VDGetInterfaceTcpNet(PVDINTERFACE pInterface)
     return pInterfaceTcpNet;
 }
 
+/**
+ * Interface to get the parent state.
+ *
+ * Per operation interface. Optional, present only if there is a parent, and
+ * used only internally for compacting.
+ */
+typedef struct VDINTERFACEPARENTSTATE
+{
+    /**
+     * Size of the parent state interface.
+     */
+    uint32_t    cbSize;
+
+    /**
+     * Interface type.
+     */
+    VDINTERFACETYPE enmInterface;
+
+    /**
+     * Read data callback.
+     *
+     * @return  VBox status code.
+     * @return  VERR_VD_NOT_OPENED if no image is opened in HDD container.
+     * @param   pvUser          The opaque data passed for the operation.
+     * @param   uOffset         Offset of first reading byte from start of disk.
+     *                          Must be aligned to a sector boundary.
+     * @param   pvBuf           Pointer to buffer for reading data.
+     * @param   cbRead          Number of bytes to read.
+     *                          Must be aligned to a sector boundary.
+     */
+    DECLR3CALLBACKMEMBER(int, pfnParentRead, (void *pvUser, uint64_t uOffset, void *pvBuf, size_t cbRead));
+
+} VDINTERFACEPARENTSTATE, *PVDINTERFACEPARENTSTATE;
+
+
+/**
+ * Get parent state interface from opaque callback table.
+ *
+ * @return Pointer to the callback table.
+ * @param  pInterface Pointer to the interface descriptor.
+ */
+DECLINLINE(PVDINTERFACEPARENTSTATE) VDGetInterfaceParentState(PVDINTERFACE pInterface)
+{
+    /* Check that the interface descriptor is a parent state interface. */
+    AssertMsgReturn(   (pInterface->enmInterface == VDINTERFACETYPE_PARENTSTATE)
+                    && (pInterface->cbSize == sizeof(VDINTERFACE)),
+                    ("Not a parent state interface"), NULL);
+
+    PVDINTERFACEPARENTSTATE pInterfaceParentState = (PVDINTERFACEPARENTSTATE)pInterface->pCallbacks;
+
+    /* Do basic checks. */
+    AssertMsgReturn(   (pInterfaceParentState->cbSize == sizeof(VDINTERFACEPARENTSTATE))
+                    && (pInterfaceParentState->enmInterface == VDINTERFACETYPE_PARENTSTATE),
+                    ("A non parent state callback table attached to a parent state interface descriptor\n"), NULL);
+
+    return pInterfaceParentState;
+}
+
 
 /** @name Configuration interface key handling flags.
  * @{
@@ -1217,8 +1301,8 @@ VBOXDDU_DECL(int) VDCreateDiff(PVBOXHDD pDisk, const char *pszBackend,
  * @return  VBox status code.
  * @return  VERR_VD_IMAGE_NOT_FOUND if image with specified number was not opened.
  * @param   pDisk           Pointer to HDD container.
- * @param   nImageFrom      Name of the image file to merge from.
- * @param   nImageTo        Name of the image file to merge to.
+ * @param   nImageFrom      Image number to merge from, counts from 0. 0 is always base image of container.
+ * @param   nImageTo        Image number to merge to, counts from 0. 0 is always base image of container.
  * @param   pVDIfsOperation Pointer to the per-operation VD interface list.
  */
 VBOXDDU_DECL(int) VDMerge(PVBOXHDD pDisk, unsigned nImageFrom,
@@ -1240,13 +1324,15 @@ VBOXDDU_DECL(int) VDMerge(PVBOXHDD pDisk, unsigned nImageFrom,
  * @param   nImage          Image number, counts from 0. 0 is always base image of container.
  * @param   pDiskTo         Pointer to destination HDD container.
  * @param   pszBackend      Name of the image file backend to use (may be NULL to use the same as the source, case insensitive).
- * @param   pszFilename     New name of the image (may be NULL if pDiskFrom == pDiskTo).
+ * @param   pszFilename     New name of the image (may be NULL to specify that the
+ *                          copy destination is the destination container, or
+ *                          if pDiskFrom == pDiskTo, i.e. when moving).
  * @param   fMoveByRename   If true, attempt to perform a move by renaming (if successful the new size is ignored).
  * @param   cbSize          New image size (0 means leave unchanged).
  * @param   uImageFlags     Flags specifying special destination image features.
  * @param   pDstUuid        New UUID of the destination image. If NULL, a new UUID is created.
  *                          This parameter is used if and only if a true copy is created.
- *                          In all rename/move cases the UUIDs are copied over.
+ *                          In all rename/move cases or copy to existing image cases the modification UUIDs are copied over.
  * @param   pVDIfsOperation Pointer to the per-operation VD interface list.
  * @param   pDstVDIfsImage  Pointer to the per-image VD interface list, for the
  *                          destination image.
@@ -1260,6 +1346,25 @@ VBOXDDU_DECL(int) VDCopy(PVBOXHDD pDiskFrom, unsigned nImage, PVBOXHDD pDiskTo,
                          PVDINTERFACE pVDIfsOperation,
                          PVDINTERFACE pDstVDIfsImage,
                          PVDINTERFACE pDstVDIfsOperation);
+
+/**
+ * Optimizes the storage consumption of an image. Typically the unused blocks
+ * have to be wiped with zeroes to achieve a substantial reduced storage use.
+ * Another optimization done is reordering the image blocks, which can provide
+ * a significant performance boost, as reads and writes tend to use less random
+ * file offsets.
+ *
+ * @return  VBox status code.
+ * @return  VERR_VD_IMAGE_NOT_FOUND if image with specified number was not opened.
+ * @return  VERR_VD_IMAGE_READ_ONLY if image is not writable.
+ * @return  VERR_NOT_SUPPORTED if this kind of image can be compacted, but
+ *                             this isn't supported yet.
+ * @param   pDisk           Pointer to HDD container.
+ * @param   nImage          Image number, counts from 0. 0 is always base image of container.
+ * @param   pVDIfsOperation Pointer to the per-operation VD interface list.
+ */
+VBOXDDU_DECL(int) VDCompact(PVBOXHDD pDisk, unsigned nImage,
+                            PVDINTERFACE pVDIfsOperation);
 
 /**
  * Closes the last opened image file in HDD container.
@@ -1631,7 +1736,7 @@ VBOXDDU_DECL(int) VDAsyncWrite(PVBOXHDD pDisk, uint64_t uOffset, size_t cbWrite,
                                void *pvUser);
 
 
-__END_DECLS
+RT_C_DECLS_END
 
 /** @} */
 

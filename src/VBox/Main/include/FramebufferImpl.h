@@ -1,10 +1,12 @@
+/* $Id$ */
+
 /** @file
  *
- * VirtualBox COM class implementation
+ * Frame buffer COM class implementation
  */
 
 /*
- * Copyright (C) 2006-2007 Sun Microsystems, Inc.
+ * Copyright (C) 2009 Sun Microsystems, Inc.
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -19,80 +21,70 @@
  * additional information or have any questions.
  */
 
-#ifndef ____H_FRAMEBUFFERIMPL
-#define ____H_FRAMEBUFFERIMPL
+#ifndef ____H_H_FRAMEBUFFERIMPL
+#define ____H_H_FRAMEBUFFERIMPL
 
 #include "VirtualBoxBase.h"
+#include "VirtualBoxImpl.h"
 
-
-class ATL_NO_VTABLE InternalFramebuffer :
-    public VirtualBoxBase,
-    public IFramebuffer
+class ATL_NO_VTABLE Framebuffer :
+    public VirtualBoxBaseNEXT,
+    public VirtualBoxSupportErrorInfoImpl <Framebuffer, IFramebuffer>,
+    public VirtualBoxSupportTranslation <Framebuffer>,
+    VBOX_SCRIPTABLE_IMPL(IFramebuffer)
 {
 public:
-    InternalFramebuffer();
-    virtual ~InternalFramebuffer();
 
-    DECLARE_NOT_AGGREGATABLE(InternalFramebuffer)
+    VIRTUALBOXBASE_ADD_ERRORINFO_SUPPORT (Framebuffer)
+
+    DECLARE_NOT_AGGREGATABLE (Framebuffer)
 
     DECLARE_PROTECT_FINAL_CONSTRUCT()
 
-    BEGIN_COM_MAP(InternalFramebuffer)
-        COM_INTERFACE_ENTRY(IFramebuffer)
+    BEGIN_COM_MAP (Framebuffer)
+        COM_INTERFACE_ENTRY (ISupportErrorInfo)
+        COM_INTERFACE_ENTRY (IFramebuffer)
+        COM_INTERFACE_ENTRY (IDispatch)
     END_COM_MAP()
 
     NS_DECL_ISUPPORTS
 
-    // public methods only for internal purposes
-    HRESULT init (ULONG width, ULONG height, ULONG depth);
+    DECLARE_EMPTY_CTOR_DTOR (Framebuffer)
 
-    // IFramebuffer properties
-    STDMETHOD(COMGETTER(Address)) (BYTE **address);
-    STDMETHOD(COMGETTER(Width)) (ULONG *width);
-    STDMETHOD(COMGETTER(Height)) (ULONG *height);
-    STDMETHOD(COMGETTER(BitsPerPixel)) (ULONG *bitsPerPixel);
-    STDMETHOD(COMGETTER(BytesPerLine)) (ULONG *bytesPerLine);
-    STDMETHOD(COMGETTER(PixelFormat)) (ULONG *pixelFormat);
-    STDMETHOD(COMGETTER(UsesGuestVRAM)) (BOOL *usesGuestVRAM);
-    STDMETHOD(COMGETTER(HeightReduction)) (ULONG *heightReduction);
-    STDMETHOD(COMGETTER(Overlay)) (IFramebufferOverlay **aOverlay);
-    STDMETHOD(COMGETTER(WinId)) (ULONG64 *winId);
+    /* IFramebuffer properties */
+    STDMETHOD(COMGETTER(Address)) (BYTE **aAddress) = 0;
+    STDMETHOD(COMGETTER(Width)) (ULONG *aWidth) = 0;
+    STDMETHOD(COMGETTER(Height)) (ULONG *aHeight) = 0;
+    STDMETHOD(COMGETTER(BitsPerPixel)) (ULONG *aBitsPerPixel) = 0;
+    STDMETHOD(COMGETTER(BytesPerLine)) (ULONG *aBytesPerLine) = 0;
+    STDMETHOD(COMGETTER(PixelFormat)) (ULONG *aPixelFormat) = 0;
+    STDMETHOD(COMGETTER(UsesGuestVRAM)) (BOOL *aUsesGuestVRAM) = 0;
+    STDMETHOD(COMGETTER(HeightReduction)) (ULONG *aHeightReduction) = 0;
+    STDMETHOD(COMGETTER(Overlay)) (IFramebufferOverlay **aOverlay) = 0;
+    STDMETHOD(COMGETTER(WinId)) (ULONG64 *winId) = 0;
 
-    // IFramebuffer methods
-    STDMETHOD(Lock)();
-    STDMETHOD(Unlock)();
-    STDMETHOD(NotifyUpdate)(ULONG x, ULONG y,
-                            ULONG w, ULONG h,
-                            BOOL *finished);
-    STDMETHOD(RequestResize)(ULONG uScreenId, ULONG pixelFormat, BYTE *vram,
-                             ULONG bpp, ULONG bpl, ULONG w, ULONG h,
-                             BOOL *finished);
-    STDMETHOD(OperationSupported)(FramebufferAccelerationOperation_T operation,
-                                  BOOL *supported);
-    STDMETHOD(VideoModeSupported)(ULONG width, ULONG height, ULONG bpp, BOOL *supported);
-    STDMETHOD(SolidFill)(ULONG x, ULONG y, ULONG width, ULONG height,
-                         ULONG color, BOOL *handled);
-    STDMETHOD(CopyScreenBits)(ULONG xDst, ULONG yDst, ULONG xSrc, ULONG ySrc,
-                              ULONG width, ULONG height, BOOL *handled);
+    /* IFramebuffer methods */
+    STDMETHOD(Lock)() = 0;
+    STDMETHOD(Unlock)() = 0;
 
-    STDMETHOD(GetVisibleRegion)(BYTE *aRectangles, ULONG aCount, ULONG *aCountCopied);
-    STDMETHOD(SetVisibleRegion)(BYTE *aRectangles, ULONG aCount);
+    STDMETHOD(RequestResize) (ULONG aScreenId, ULONG aPixelFormat,
+                              BYTE *aVRAM, ULONG aBitsPerPixel, ULONG aBytesPerLine,
+                              ULONG aWidth, ULONG aHeight,
+                              BOOL *aFinished) = 0;
 
-private:
-    // FIXME: declare these here until VBoxSupportsTranslation base
-    //        is available in this class.
-    static const char *tr (const char *a) { return a; }
-    static HRESULT setError (HRESULT rc, const char *a,
-                             const char *b, void *c) { return rc; }
+    STDMETHOD(VideoModeSupported) (ULONG aWidth, ULONG aHeight, ULONG aBPP,
+                                   BOOL *aSupported) = 0;
 
-    int mWidth;
-    int mHeight;
-    int mBitsPerPixel;
-    int mBytesPerLine;
-    uint8_t *mData;
-    RTSEMMUTEX mMutex;
+    STDMETHOD(GetVisibleRegion)(BYTE *aRectangles, ULONG aCount, 
+                               ULONG *aCountCopied) = 0; 
+    STDMETHOD(SetVisibleRegion)(BYTE *aRectangles, ULONG aCount) = 0;
+
+    STDMETHOD(ProcessVHWACommand)(BYTE *pCommand) = 0;
+
+    // for VirtualBoxSupportErrorInfoImpl
+    static const wchar_t *getComponentName() { return L"Framebuffer"; }
+
 };
 
-
-#endif // ____H_FRAMEBUFFERIMPL
+#endif // ____H_H_FRAMEBUFFERIMPL
 /* vi: set tabstop=4 shiftwidth=4 expandtab: */

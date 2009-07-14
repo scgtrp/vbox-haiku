@@ -88,6 +88,8 @@
 </xsl:text>
 </xsl:template>
 
+<!-- Emits the fully prefixed class name, if necessary, of the given type. This dies
+     if $name is not defined in XIDL; in other words, do not call this for built-in types. -->
 <xsl:template name="fullClassName">
   <xsl:param name="name" />
   <xsl:param name="origname" />
@@ -112,8 +114,13 @@
      <xsl:when test="//interface[@name=$name]/@wsmap='struct' or //interface[@name=$origname]/@wsmap='struct'">
        <xsl:value-of select="concat($G_virtualBoxPackage,  concat('.', $name))" />
      </xsl:when>
-     <xsl:otherwise>
+     <xsl:when test="//interface[@name=$name]">
        <xsl:value-of select="concat($G_virtualBoxPackage2,  concat('.', $name))" />
+     </xsl:when>
+     <xsl:otherwise>
+      <xsl:call-template name="fatalError">
+        <xsl:with-param name="msg" select="concat('fullClassName: Type &quot;', $name, '&quot; is not supported.')" />
+      </xsl:call-template>
      </xsl:otherwise>
    </xsl:choose>
 </xsl:template>
@@ -137,20 +144,13 @@
     <xsl:value-of select="'List&lt;'" />
   </xsl:if>
 
+  <!-- look up Java type from IDL type from table array in websrv-shared.inc.xsl -->
+  <xsl:variable name="javatypefield" select="exsl:node-set($G_aSharedTypes)/type[@idlname=$type]/@javaname" />
+
   <xsl:choose>
-    <xsl:when test="$type='wstring'">String</xsl:when>
-    <xsl:when test="$type='boolean'">Boolean</xsl:when>
-<!--     <xsl:when test="$type='double'">double</xsl:when> -->
-<!--     <xsl:when test="$type='float'">float</xsl:when> -->
-    <!-- <xsl:when test="$type='octet'">byte</xsl:when> -->
-<!--     <xsl:when test="$type='short'">short</xsl:when> -->
-    <xsl:when test="$type='unsigned short'">Integer</xsl:when>
-    <xsl:when test="$type='long'">Integer</xsl:when>
-    <xsl:when test="$type='long long'">Long</xsl:when>
-    <xsl:when test="$type='unsigned long'">Long</xsl:when>
-    <xsl:when test="$type='unsigned long long'">BigInteger</xsl:when>
-    <xsl:when test="$type='result'">Long</xsl:when>
-    <xsl:when test="$type='uuid'">UUID</xsl:when>
+    <xsl:when test="string-length($javatypefield)">
+      <xsl:value-of select="$javatypefield" />
+    </xsl:when>
     <!-- not a standard type: then it better be one of the types defined in the XIDL -->
     <xsl:when test="$type='$unknown'">IUnknown</xsl:when>
     <xsl:otherwise>
@@ -159,11 +159,6 @@
         <xsl:with-param name="collPrefix" select="''"/>
       </xsl:call-template>
     </xsl:otherwise>
- <!--    <xsl:otherwise> -->
-<!--       <xsl:call-template name="fatalError"> -->
-<!--         <xsl:with-param name="msg" select="concat('typeIdl2Glue: Type &quot;', $type, '&quot; in arg &quot;', $name, '&quot; of method &quot;', $ifname, '::', $method, '&quot; is not supported.')" /> -->
-<!--       </xsl:call-template> -->
-<!--     </xsl:otherwise> -->
   </xsl:choose>
 
   <xsl:if test="$needarray">
@@ -187,20 +182,13 @@
     <xsl:value-of select="'List&lt;'" />
   </xsl:if>
 
+  <!-- look up Java type from IDL type from table array in websrv-shared.inc.xsl -->
+  <xsl:variable name="javatypefield" select="exsl:node-set($G_aSharedTypes)/type[@idlname=$type]/@javaname" />
+
   <xsl:choose>
-    <xsl:when test="$type='wstring'">String</xsl:when>
-    <xsl:when test="$type='boolean'">Boolean</xsl:when>
-    <!--     <xsl:when test="$type='double'">double</xsl:when> -->
-    <!--     <xsl:when test="$type='float'">float</xsl:when> -->
-    <!-- <xsl:when test="$type='octet'">byte</xsl:when> -->
-    <!--     <xsl:when test="$type='short'">short</xsl:when> -->
-    <xsl:when test="$type='unsigned short'">int</xsl:when>
-    <xsl:when test="$type='long'">Integer</xsl:when>
-    <xsl:when test="$type='long long'">Long</xsl:when>
-    <xsl:when test="$type='unsigned long'">Long</xsl:when>
-    <xsl:when test="$type='unsigned long long'">BigInteger</xsl:when>
-    <xsl:when test="$type='result'">Long</xsl:when>
-    <xsl:when test="$type='uuid'">String</xsl:when>
+    <xsl:when test="string-length($javatypefield)">
+      <xsl:value-of select="$javatypefield" />
+    </xsl:when>
     <xsl:when test="$type='$unknown'">String</xsl:when>
     <xsl:when test="//interface[@name=$type]/@wsmap='managed'">String</xsl:when>
     <xsl:otherwise>
@@ -209,11 +197,6 @@
         <xsl:with-param name="collPrefix" select="'ArrayOf'"/>
       </xsl:call-template>
     </xsl:otherwise>
-   <!--  <xsl:otherwise> -->
-<!--       <xsl:call-template name="fatalError"> -->
-<!--         <xsl:with-param name="msg" select="concat('typeIdl2Java: Type &quot;', $type, '&quot; in arg &quot;', $name, '&quot; of method &quot;', $ifname, '::', $method, '&quot; is not supported.')" /> -->
-<!--       </xsl:call-template> -->
-<!--     </xsl:otherwise> -->
   </xsl:choose>
   <xsl:if test="$safearray">
     <xsl:value-of select="'&gt;'" />
@@ -288,7 +271,8 @@
                <xsl:with-param name="safearray" select="$safearray" />
              </xsl:call-template>
            </xsl:variable>
-           <xsl:value-of select="concat('new ', $gluetype, '(', $value,', port)')" />
+           <!-- if the MOR string is empty, that means NULL, so return NULL instead of an object then -->
+           <xsl:value-of select="concat('(', $value, '.length() > 0) ? new ', $gluetype, '(', $value,', port) : null')" />
         </xsl:otherwise>
       </xsl:choose>
     </xsl:when>
@@ -504,7 +488,7 @@ class PortPool
  <xsl:text><![CDATA[
     private Map<VboxPortType, Integer> known;
     private boolean initStarted;
-    private VboxService svc;    
+    private VboxService svc;
 
     PortPool(boolean usePreinit)
     {
@@ -828,8 +812,22 @@ public class IWebsessionManager {
 
         <xsl:otherwise>
 
+          <xsl:variable name="extends" select="//interface[@name=$ifname]/@extends" />
+          <xsl:choose>
+            <xsl:when test="($extends = '$unknown') or ($extends = '$dispatched')">
+              <xsl:value-of select="concat('public class ', $ifname, ' extends IUnknown {&#10;&#10;')" />
+            </xsl:when>
+            <xsl:when test="//interface[@name=$extends]">
+              <xsl:value-of select="concat('public class ', $ifname, ' extends ', $extends, ' {&#10;&#10;')" />
+            </xsl:when>
+            <xsl:otherwise>
+              <xsl:call-template name="fatalError">
+                <xsl:with-param name="msg" select="concat('Interface generation: interface &quot;', $ifname, '&quot; has invalid &quot;extends&quot; value ', $extends, '.')" />
+              </xsl:call-template>
+            </xsl:otherwise>>
+          </xsl:choose>
+
           <!-- interface (class) constructor -->
-          <xsl:value-of select="concat('public class ', $ifname, ' extends IUnknown {&#10;&#10;')" />
           <xsl:value-of select="concat('    public static ', $ifname, ' cast(IUnknown other) {&#10;')" />
           <xsl:value-of select="concat('        return new ', $ifname,
                               '(other.getRef(), other.getRemoteWSPort());&#10;    }&#10;&#10;')"/>
@@ -935,7 +933,8 @@ public class IWebsessionManager {
             <!-- method header: return value "int", method name, soap arguments -->
             <!-- skip this method if it has parameters of a type that has wsmap="suppress" -->
             <xsl:choose>
-              <xsl:when test="param[@type=($G_setSuppressedInterfaces/@name)]">
+              <xsl:when test="   (param[@type=($G_setSuppressedInterfaces/@name)])
+                              or (param[@mod='ptr'])" >
                 <xsl:comment><xsl:value-of select="concat('Skipping method ', $methodname, ' for it has parameters with suppressed types')" /></xsl:comment>
               </xsl:when>
               <xsl:otherwise>

@@ -63,12 +63,12 @@
 /*******************************************************************************
 *   Internal Functions                                                         *
 *******************************************************************************/
-__BEGIN_DECLS
+RT_C_DECLS_BEGIN
 PDMBOTHCBDECL(int) kbdIOPortDataRead(PPDMDEVINS pDevIns, void *pvUser, RTIOPORT Port, uint32_t *pu32, unsigned cb);
 PDMBOTHCBDECL(int) kbdIOPortDataWrite(PPDMDEVINS pDevIns, void *pvUser, RTIOPORT Port, uint32_t u32, unsigned cb);
 PDMBOTHCBDECL(int) kbdIOPortStatusRead(PPDMDEVINS pDevIns, void *pvUser, RTIOPORT Port, uint32_t *pu32, unsigned cb);
 PDMBOTHCBDECL(int) kbdIOPortCommandWrite(PPDMDEVINS pDevIns, void *pvUser, RTIOPORT Port, uint32_t u32, unsigned cb);
-__END_DECLS
+RT_C_DECLS_END
 #endif /* !VBOX_DEVICE_STRUCT_TESTCASE */
 #endif /* VBOX */
 
@@ -778,10 +778,15 @@ static void pc_kbd_mouse_event(void *opaque,
     s->mouse_dx += dx;
     s->mouse_dy -= dy;
     s->mouse_dz += dz;
+#ifndef VBOX
     /* XXX: SDL sometimes generates nul events: we delete them */
     if (s->mouse_dx == 0 && s->mouse_dy == 0 && s->mouse_dz == 0 &&
         s->mouse_buttons == buttons_state)
 	return;
+#else
+    /* This issue does not affect VBox, and under some circumstances (which?)
+     * we may wish to send null events to make mouse integration work. */
+#endif
     s->mouse_buttons = buttons_state;
 
 #ifdef VBOX
@@ -1522,13 +1527,19 @@ static DECLCALLBACK(int) kbdMousePutEvent(PPDMIMOUSEPORT pInterface, int32_t i32
  * @returns VBox status code.
  * @param   pDevIns     The device instance.
  * @param   iLUN        The logical unit which is being detached.
+ * @param   fFlags      Flags, combination of the PDMDEVATT_FLAGS_* \#defines.
  * @remark  The keyboard controller doesn't support this action, this is just
  *          implemented to try out the driver<->device structure.
  */
-static DECLCALLBACK(int)  kbdAttach(PPDMDEVINS pDevIns, unsigned iLUN)
+static DECLCALLBACK(int)  kbdAttach(PPDMDEVINS pDevIns, unsigned iLUN, uint32_t fFlags)
 {
     int         rc;
     KBDState   *pThis = PDMINS_2_DATA(pDevIns, KBDState *);
+
+    AssertMsgReturn(fFlags & PDMDEVATT_FLAGS_NOT_HOT_PLUG,
+                    ("PS/2 device does not support hotplugging\n"),
+                    VERR_INVALID_PARAMETER);
+
     switch (iLUN)
     {
         /* LUN #0: keyboard */
@@ -1593,10 +1604,11 @@ static DECLCALLBACK(int)  kbdAttach(PPDMDEVINS pDevIns, unsigned iLUN)
  *
  * @param   pDevIns     The device instance.
  * @param   iLUN        The logical unit which is being detached.
+ * @param   fFlags      Flags, combination of the PDMDEVATT_FLAGS_* \#defines.
  * @remark  The keyboard controller doesn't support this action, this is just
  *          implemented to try out the driver<->device structure.
  */
-static DECLCALLBACK(void)  kbdDetach(PPDMDEVINS pDevIns, unsigned iLUN)
+static DECLCALLBACK(void)  kbdDetach(PPDMDEVINS pDevIns, unsigned iLUN, uint32_t fFlags)
 {
 #if 0
     /*
@@ -1717,10 +1729,10 @@ static DECLCALLBACK(int) kbdConstruct(PPDMDEVINS pDevIns, int iInstance, PCFGMNO
     /*
      * Attach to the keyboard and mouse drivers.
      */
-    rc = kbdAttach(pDevIns, 0 /* keyboard LUN # */);
+    rc = kbdAttach(pDevIns, 0 /* keyboard LUN # */, PDMDEVATT_FLAGS_NOT_HOT_PLUG);
     if (RT_FAILURE(rc))
         return rc;
-    rc = kbdAttach(pDevIns, 1 /* aux/mouse LUN # */);
+    rc = kbdAttach(pDevIns, 1 /* aux/mouse LUN # */, PDMDEVATT_FLAGS_NOT_HOT_PLUG);
     if (RT_FAILURE(rc))
         return rc;
 

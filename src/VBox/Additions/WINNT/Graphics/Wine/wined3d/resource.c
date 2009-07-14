@@ -34,7 +34,55 @@
 #include "wined3d_private.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(d3d);
-#define GLINFO_LOCATION ((IWineD3DImpl *)(((IWineD3DDeviceImpl *)This->resource.wineD3DDevice)->wineD3D))->gl_info
+
+HRESULT resource_init(IWineD3DResource *iface, WINED3DRESOURCETYPE resource_type,
+        IWineD3DDeviceImpl *device, UINT size, DWORD usage, const struct GlPixelFormatDesc *format_desc,
+        WINED3DPOOL pool, IUnknown *parent)
+{
+    struct IWineD3DResourceClass *resource = &((IWineD3DResourceImpl *)iface)->resource;
+
+    resource->wineD3DDevice = device;
+    resource->parent = parent;
+    resource->resourceType = resource_type;
+    resource->ref = 1;
+    resource->pool = pool;
+    resource->format_desc = format_desc;
+    resource->usage = usage;
+    resource->size = size;
+    resource->priority = 0;
+    list_init(&resource->privateData);
+
+    if (size)
+    {
+        resource->heapMemory = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, size + RESOURCE_ALIGNMENT);
+        if (!resource->heapMemory)
+        {
+            ERR("Out of memory!\n");
+            return WINED3DERR_OUTOFVIDEOMEMORY;
+        }
+    }
+    else
+    {
+        resource->heapMemory = NULL;
+    }
+    resource->allocatedMemory = (BYTE *)(((ULONG_PTR)resource->heapMemory + (RESOURCE_ALIGNMENT - 1)) & ~(RESOURCE_ALIGNMENT - 1));
+
+    /* Check that we have enough video ram left */
+    if (pool == WINED3DPOOL_DEFAULT)
+    {
+        if (size > IWineD3DDevice_GetAvailableTextureMem((IWineD3DDevice *)device))
+        {
+            ERR("Out of adapter memory\n");
+            HeapFree(GetProcessHeap(), 0, resource->heapMemory);
+            return WINED3DERR_OUTOFVIDEOMEMORY;
+        }
+        WineD3DAdapterChangeGLRam(device, size);
+    }
+
+    device_resource_add(device, iface);
+
+    return WINED3D_OK;
+}
 
 void resource_cleanup(IWineD3DResource *iface)
 {
@@ -61,10 +109,7 @@ void resource_cleanup(IWineD3DResource *iface)
     This->resource.allocatedMemory = 0;
     This->resource.heapMemory = 0;
 
-    if (This->resource.wineD3DDevice != NULL) {
-        IWineD3DDevice_ResourceReleased((IWineD3DDevice *)This->resource.wineD3DDevice, iface);
-    }/* NOTE: this is not really an error for system memory resources */
-    return;
+    if (This->resource.wineD3DDevice) device_resource_released(This->resource.wineD3DDevice, iface);
 }
 
 HRESULT resource_get_device(IWineD3DResource *iface, IWineD3DDevice** ppDevice)

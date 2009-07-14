@@ -260,6 +260,10 @@ RTR3DECL(int)  RTFileOpen(PRTFILE pFile, const char *pszFilename, unsigned fOpen
     dwFlagsAndAttributes = FILE_ATTRIBUTE_NORMAL;
     if (fOpen & RTFILE_O_WRITE_THROUGH)
         dwFlagsAndAttributes |= FILE_FLAG_WRITE_THROUGH;
+    if (fOpen & RTFILE_O_ASYNC_IO)
+        dwFlagsAndAttributes |= FILE_FLAG_OVERLAPPED;
+    if (fOpen & RTFILE_O_NO_CACHE)
+        dwFlagsAndAttributes |= FILE_FLAG_NO_BUFFERING;
 
     /*
      * Open/Create the file.

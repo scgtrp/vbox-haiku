@@ -54,8 +54,6 @@
 #include <os2ddk/bsekee.h>
 
 #include "VBoxGuestInternal.h"
-#include <VBox/VBoxGuest.h>
-#include <VBox/VBoxDev.h>               /* VMMDEV_RAM_SIZE */
 #include <VBox/version.h>
 #include <iprt/initterm.h>
 #include <iprt/string.h>
@@ -87,7 +85,7 @@ static PVBOXGUESTSESSION    g_apSessionHashTab[19];
 /** Calculates the index into g_apSessionHashTab.*/
 #define SESSION_HASH(sfn) ((sfn) % RT_ELEMENTS(g_apSessionHashTab))
 
-__BEGIN_DECLS
+RT_C_DECLS_BEGIN
 /* Defined in VBoxGuestA-os2.asm */
 extern uint32_t             g_PhysMMIOBase;
 extern uint32_t             g_cbMMIO; /* 0 currently not set. */
@@ -108,7 +106,7 @@ extern char                 g_szLog[];
 extern char                 g_szInitText[];
 extern uint16_t             g_cchInitText;
 extern uint16_t             g_cchInitTextMax;
-__END_DECLS
+RT_C_DECLS_END
 
 
 /*******************************************************************************
@@ -158,10 +156,12 @@ DECLASM(int) VBoxGuestOS2Init(const char *pszArgs)
                 rc = VBoxGuestInitDevExt(&g_DevExt, g_IOPortBase,
                                          RTR0MemObjAddress(g_MemMapMMIO),
                                          RTR0MemObjSize(g_MemMapMMIO),
-                                         vboxGuestOS2DetectVersion());
+                                         vboxGuestOS2DetectVersion(),
+                                         0);
             else
                 rc = VBoxGuestInitDevExt(&g_DevExt, g_IOPortBase, NULL, 0,
-                                         vboxGuestOS2DetectVersion());
+                                         vboxGuestOS2DetectVersion(),
+                                         0);
             if (RT_SUCCESS(rc))
             {
                 /*
@@ -606,9 +606,8 @@ DECLASM(int) VBoxGuestOS2IOCtl(uint16_t sfn, uint8_t iCat, uint8_t iFunction, vo
         /*
          * Process the IOCtl.
          */
-        size_t cbDataReturned = 0;
-        rc = VBoxGuestCommonIOCtl(iFunction, &g_DevExt, pSession,
-                                  pvParm, *pcbParm, &cbDataReturned);
+        size_t cbDataReturned;
+        rc = VBoxGuestCommonIOCtl(iFunction, &g_DevExt, pSession, pvParm, *pcbParm, &cbDataReturned);
 
         /*
          * Unlock the buffers.

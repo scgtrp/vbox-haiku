@@ -30,7 +30,7 @@
 #include <VBox/com/Guid.h>
 #include <VBox/com/array.h>
 #include <VBox/com/ErrorInfo.h>
-#include <VBox/com/errorprint2.h>
+#include <VBox/com/errorprint.h>
 #include <VBox/com/EventQueue.h>
 
 #include <VBox/com/VirtualBox.h>
@@ -201,7 +201,7 @@ int handleImportAppliance(HandlerArg *a)
                 break;
 
             case VINF_GETOPT_NOT_OPTION:
-                if (!strOvfFilename)
+                if (strOvfFilename.isEmpty())
                     strOvfFilename = ValueUnion.psz;
                 else
                     return errorSyntax(USAGE_IMPORTAPPLIANCE, "Invalid parameter '%s'", ValueUnion.psz);
@@ -224,7 +224,7 @@ int handleImportAppliance(HandlerArg *a)
         }
     }
 
-    if (!strOvfFilename)
+    if (strOvfFilename.isEmpty())
         return errorSyntax(USAGE_IMPORTAPPLIANCE, "Not enough arguments for \"import\" command.");
 
     do
@@ -646,7 +646,11 @@ int handleImportAppliance(HandlerArg *a)
                 showProgress(progress);
 
                 if (SUCCEEDED(rc))
-                    progress->COMGETTER(ResultCode)(&rc);
+                {
+                    LONG iRc;
+                    progress->COMGETTER(ResultCode)(&iRc);
+                    rc = iRc;
+                }
 
                 if (FAILED(rc))
                 {
@@ -766,7 +770,7 @@ int handleExportAppliance(HandlerArg *a)
                     // must be machine: try UUID or name
                     ComPtr<IMachine> machine;
                     /* assume it's a UUID */
-                    rc = a->virtualBox->GetMachine(Guid(strMachine), machine.asOutParam());
+                    rc = a->virtualBox->GetMachine(Bstr(strMachine), machine.asOutParam());
                     if (FAILED(rc) || !machine)
                     {
                         /* must be a name */
@@ -891,7 +895,11 @@ int handleExportAppliance(HandlerArg *a)
         showProgress(progress);
 
         if (SUCCEEDED(rc))
-            progress->COMGETTER(ResultCode)(&rc);
+        {
+            LONG iRc;
+            progress->COMGETTER(ResultCode)(&iRc);
+            rc = iRc;
+        }
 
         if (FAILED(rc))
         {

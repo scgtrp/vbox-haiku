@@ -47,7 +47,9 @@
  *      Adam Jackson (ajax@redhat.com)
  */
 
-#include <VBox/VBoxGuest.h>
+#include <VBox/VMMDev.h>
+#include <VBox/VBoxGuestLib.h>
+#include <iprt/err.h>
 #include <xf86.h>
 #include <xf86Xinput.h>
 #include <exevents.h>
@@ -128,7 +130,8 @@ VBoxProc(DeviceIntPtr device, int what)
         if (device->public.on)
             break;
         /* Tell the host that we want absolute co-ordinates */
-        rc = VbglR3SetMouseStatus(VBOXGUEST_MOUSE_GUEST_CAN_ABSOLUTE);
+        rc = VbglR3SetMouseStatus(  VMMDEV_MOUSE_GUEST_CAN_ABSOLUTE
+                                  | VMMDEV_MOUSE_GUEST_USES_VMMDEV);
         if (!RT_SUCCESS(rc)) {
             xf86Msg(X_ERROR, "%s: Failed to switch guest mouse into absolute mode\n",
                     pInfo->name);
@@ -138,7 +141,7 @@ VBoxProc(DeviceIntPtr device, int what)
         xf86AddEnabledDevice(pInfo);
         device->public.on = TRUE;
         break;
-    
+
     case DEVICE_OFF:
         xf86Msg(X_INFO, "%s: Off.\n", pInfo->name);
         VbglR3SetMouseStatus(0);
@@ -188,10 +191,10 @@ VBoxPreInit(InputDriverPtr drv, IDevPtr dev, int flags)
             XI86_ALWAYS_CORE;
 
     xf86CollectInputOptions(pInfo, NULL, NULL);
-    xf86ProcessCommonOptions(pInfo, pInfo->options); 
+    xf86ProcessCommonOptions(pInfo, pInfo->options);
 
     device = xf86CheckStrOption(dev->commonOptions, "Device",
-                                "/dev/vboxadd");
+                                "/dev/vboxguest");
 
     xf86Msg(X_CONFIG, "%s: Device: \"%s\"\n", pInfo->name, device);
     do {

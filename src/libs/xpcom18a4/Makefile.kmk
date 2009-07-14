@@ -102,7 +102,7 @@ TEMPLATE_XPCOM_DEFS.solaris        = OSTYPE=\"Solaris10\"   OSARCH=\"Solaris\" X
 ifdef VBOX_WITH_RUNPATH
 TEMPLATE_XPCOM_LDFLAGS            += '$(VBOX_GCC_RPATH_OPT)$(VBOX_WITH_RUNPATH)'
 else ifdef VBOX_WITH_ORIGIN
-TEMPLATE_XPCOM_LDFLAGS            += '$(VBOX_GCC_RPATH_OPT)$$(VBOX_ORIGIN)/'
+TEMPLATE_XPCOM_LDFLAGS            += '$(VBOX_GCC_RPATH_OPT)$$(VBOX_ORIGIN)'
 endif
 TEMPLATE_XPCOM_LDFLAGS.x86         = -m32
 TEMPLATE_XPCOM_LDFLAGS.amd64       = -m64
@@ -1335,10 +1335,10 @@ VBoxXPCOMIPCD_SOURCES = \
 	ipc/ipcd/daemon/src/ipcCommandModule.cpp
 ifeq ($(KBUILD_TARGET),win)
  VBoxXPCOMIPCD_SOURCES += \
- 	ipc/ipcd/daemon/src/ipcdWin.cpp
+	ipc/ipcd/daemon/src/ipcdWin.cpp
 else
  VBoxXPCOMIPCD_SOURCES += \
- 	ipc/ipcd/daemon/src/ipcdUnix.cpp
+	ipc/ipcd/daemon/src/ipcdUnix.cpp
 endif
 
 
@@ -1348,6 +1348,9 @@ endif
 
 # Find the Python headers for the Python<->XPCOM bridge if enabled.
 ifdef VBOX_WITH_PYTHON
+ifdef VBOX_WITH_MULTIVERSION_PYTHON
+ include $(PATH_SUB_CURRENT)/python/Makefile.kmk
+else
  if "$(KBUILD_TARGET)" == "darwin" && !defined(VBOX_PATH_PYTHON_INC) && !defined(VBOX_LIB_PYTHON)
   ifndef VBOX_PYTHON_FRAMEWORK
    # Does -framework really work with CXXFLAGS and CFLAGS?
@@ -1356,10 +1359,17 @@ ifdef VBOX_WITH_PYTHON
   endif
  else  # !darwin || configured darwin
   ifndef VBOX_PATH_PYTHON_INC
+   # As we build Solaris on newer Nevadas (109 currently) we want to use libpython2.4 for IPS compatiblity
+   # with older Nevada/OpenSolaris versions upon importing/installing the package. Otherwise we pick the
+   # highest libpython2.X available on the build box (2.6 on 109). We thus hardcode it to 2.4 here...
+   ifeq ($(KBUILD_TARGET),solaris)
+    VBOX_PATH_PYTHON_INC := /usr/include/python2.4
+   else
     VBOX_PATH_PYTHON_INC := $(patsubst %/Python.h,%, $(lastword $(sort $(wildcard \
-    	/usr/include/python2.*/Python.h \
-    	/usr/local/include/python2.*/Python.h \
-    	))))
+	/usr/include/python2.*/Python.h \
+	/usr/local/include/python2.*/Python.h \
+	))))
+   endif
    ifeq ($(VBOX_PATH_PYTHON_INC),)
     $(warning Unable to determine the python include directory (VBOX_PATH_PYTHON_INC).)
    endif
@@ -1368,13 +1378,13 @@ ifdef VBOX_WITH_PYTHON
   ifndef VBOX_LIB_PYTHON
    VBOX_TMP := $(if $(eq $(KBUILD_TARGET).$(KBUILD_TARGET_ARCH),solaris.amd64),64/,)
    VBOX_LIB_PYTHON := $(firstword $(wildcard \
-   	/usr/lib/$(VBOX_TMP)libpython$(VBOX_PYTHON_VER)$(SUFF_DLL) \
-   	/usr/local/lib/$(VBOX_TMP)libpython$(VBOX_PYTHON_VER)$(SUFF_DLL) \
-   	/usr/lib/$(VBOX_TMP)libpython2$(SUFF_DLL) \
-   	/usr/local/lib/$(VBOX_TMP)libpython2$(SUFF_DLL) \
-   	/usr/lib/$(VBOX_TMP)libpython$(SUFF_DLL) \
-   	/usr/local/lib/$(VBOX_TMP)libpython$(SUFF_DLL) \
-   	))
+	/usr/lib/$(VBOX_TMP)libpython$(VBOX_PYTHON_VER)$(SUFF_DLL) \
+	/usr/local/lib/$(VBOX_TMP)libpython$(VBOX_PYTHON_VER)$(SUFF_DLL) \
+	/usr/lib/$(VBOX_TMP)libpython2$(SUFF_DLL) \
+	/usr/local/lib/$(VBOX_TMP)libpython2$(SUFF_DLL) \
+	/usr/lib/$(VBOX_TMP)libpython$(SUFF_DLL) \
+	/usr/local/lib/$(VBOX_TMP)libpython$(SUFF_DLL) \
+	))
    ifeq ($(VBOX_LIB_PYTHON),)
     $(warning Unable to determine the python library (VBOX_LIB_PYTHON).)
    endif
@@ -1384,8 +1394,13 @@ ifdef VBOX_WITH_PYTHON
   DLLS += VBoxPython
  endif
  INSTALLS += VBoxPython-inst-py-xpcom
- INSTALLS += VBoxPython-inst-sample
-endif
+
+ # Kind of hack: we don't want to limit VBoxPython.so to single Python version
+ # on Linux, where we can avoid putting explicit libpythonX.Y.so dependency
+ # to VBoxPython.so
+ if "$(KBUILD_TARGET)" == "linux"
+  VBOX_LIB_PYTHON=
+ endif
 
 # Python Client Module - the C++/XPCOM bits.
 VBoxPython_TEMPLATE = XPCOM
@@ -1443,6 +1458,21 @@ VBoxPython2_5_INCS = \
 	$(VBOX_PATH_MACOSX_SDK_10_5)/System/Library/Frameworks/Python.framework/Headers
 endif
 
+if defined(VBOX_WITH_VBOXPYTHON25_FOR_SOLARIS) && "$(KBUILD_TARGET)" == "solaris"
+# Same VBoxPython except built against the newer python version.
+DLLS += VBoxPython2_5
+VBoxPython2_5_EXTENDS = VBoxPython
+VBoxPython2_5_TEMPLATE = XPCOM
+VBoxPython2_5_NAME = VBoxPython2_5
+VBoxPython2_5_INCS = \
+	python/src \
+	/usr/include/python2.5
+VBoxPython2_5_LIBS = \
+	$(PATH_LIB)/VBoxCOM$(VBOX_SUFF_LIB) \
+	$(PATH_BIN)/VBoxXPCOM$(VBOX_SUFF_DLL) \
+	/usr/lib/$(VBOX_TMP)libpython2.5$(SUFF_DLL)
+endif
+
 # Python Client Module - the Python bits.
 VBoxPython-inst-py-xpcom_INST = $(INST_SDK)bindings/xpcom/python/xpcom/
 VBoxPython-inst-py-xpcom_SOURCES = \
@@ -1462,11 +1492,8 @@ VBoxPython-inst-py-xpcom_SOURCES = \
 	python/server/module.py=>server/module.py \
 	python/server/policy.py=>server/policy.py
 
-# Python Client Module - a sample script.
-VBoxPython-inst-sample_INST = $(INST_SDK)bindings/xpcom/python/sample/
-VBoxPython-inst-sample_SOURCES = \
-	$(PATH_ROOT)/src/VBox/Frontends/VBoxShell/xpcom/vboxshell.py \
-	$(PATH_ROOT)/src/VBox/Frontends/VBoxShell/shellcommon.py
+endif # !VBOX_WITH_MULTIVERSION_PYTHON
+endif # VBOX_WITH_PYTHON
 
 #
 # testcases

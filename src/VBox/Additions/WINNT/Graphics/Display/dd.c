@@ -25,7 +25,7 @@
 *
 * Module Name: ddenable.c
 *
-* Content:    
+* Content:
 *
 * Copyright (c) 1994-1998 3Dlabs Inc. Ltd. All rights reserved.
 * Copyright (c) 1995-1999 Microsoft Corporation.  All rights reserved.
@@ -36,11 +36,19 @@
 #undef CO_E_NOTINITIALIZED
 #include <winerror.h>
 
-
 #if 0
 static DWORD APIENTRY DdCreateSurface(PDD_CREATESURFACEDATA  lpCreateSurface);
 #endif
 
+#ifdef VBOX_WITH_VIDEOHWACCEL
+#include <iprt/asm.h>
+
+#define VBOXVHWA_CAP(_pdev, _cap) ((_pdev)->vhwaInfo.caps & (_cap))
+static bool getDDHALInfo(PPDEV pDev, DD_HALINFO* pHALInfo);
+static DECLCALLBACK(void) vboxVHWAFreeCmdCompletion(PPDEV ppdev, VBOXVHWACMD * pCmd, void * pContext);
+static DECLCALLBACK(void) vboxVHWASurfBltCompletion(PPDEV ppdev, VBOXVHWACMD * pCmd, void * pContext);
+static DECLCALLBACK(void) vboxVHWASurfFlipCompletion(PPDEV ppdev, VBOXVHWACMD * pCmd, void * pContext);
+#endif
 
 /**
  * DrvGetDirectDrawInfo
@@ -48,7 +56,7 @@ static DWORD APIENTRY DdCreateSurface(PDD_CREATESURFACEDATA  lpCreateSurface);
  * The DrvGetDirectDrawInfo function returns the capabilities of the graphics hardware.
  *
  * Parameters:
- * 
+ *
  * dhpdev
  *     Handle to the PDEV returned by the driver’s DrvEnablePDEV routine.
  * pHalInfo
@@ -60,7 +68,7 @@ static DWORD APIENTRY DdCreateSurface(PDD_CREATESURFACEDATA  lpCreateSurface);
  * pdwNumFourCCCodes
  *     Points to the location in which the driver should return the number of DWORDs pointed to by pdwFourCC.
  * pdwFourCC
- *     Points to an array of DWORDs in which the driver should return information about each FOURCC that it supports. The driver should ignore this parameter when it is NULL. 
+ *     Points to an array of DWORDs in which the driver should return information about each FOURCC that it supports. The driver should ignore this parameter when it is NULL.
  *
  * Return Value:
  *
@@ -88,11 +96,23 @@ BOOL APIENTRY DrvGetDirectDrawInfo(
 
     /* Setup the HAL driver caps. */
     pHalInfo->dwSize    = sizeof(DD_HALINFO);
+#ifndef VBOX_WITH_VIDEOHWACCEL
     pHalInfo->dwFlags   = 0;
+#endif
 
-    if (!(pvmList && pdwFourCC)) 
+    if (!(pvmList && pdwFourCC))
     {
+#ifdef VBOX_WITH_VIDEOHWACCEL
+        vboxVHWAInit();
+
+        memset(pHalInfo, 0, sizeof(DD_HALINFO));
+        pHalInfo->dwSize    = sizeof(DD_HALINFO);
+
+        vboxVHWAInitHostInfo1(pDev);
+#else
         memset(&pHalInfo->ddCaps, 0, sizeof(DDNTCORECAPS));
+#endif
+
         pHalInfo->ddCaps.dwSize         = sizeof(DDNTCORECAPS);
         pHalInfo->ddCaps.dwVidMemTotal  = pDev->layout.cbDDRAWHeap;
         pHalInfo->ddCaps.dwVidMemFree   = pHalInfo->ddCaps.dwVidMemTotal;
@@ -104,7 +124,7 @@ BOOL APIENTRY DrvGetDirectDrawInfo(
         pHalInfo->ddCaps.dwCaps2 |= DDCAPS2_WIDESURFACES;
 
         pHalInfo->ddCaps.ddsCaps.dwCaps = DDSCAPS_PRIMARYSURFACE;
-        
+
         /* Create primary surface attributes */
         pHalInfo->vmiData.pvPrimary                 = pDev->pjScreen;
         pHalInfo->vmiData.fpPrimary                 = 0;
@@ -135,8 +155,18 @@ BOOL APIENTRY DrvGetDirectDrawInfo(
         pHalInfo->vmiData.dwOffscreenAlign          = 4;
         pHalInfo->vmiData.dwZBufferAlign            = 4;
         pHalInfo->vmiData.dwTextureAlign            = 4;
+
+
+#ifdef VBOX_WITH_VIDEOHWACCEL
+        if(pDev->vhwaInfo.bVHWAEnabled)
+        {
+            pHalInfo->vmiData.dwOverlayAlign = 4;
+
+            pDev->vhwaInfo.bVHWAEnabled = getDDHALInfo(pDev, pHalInfo);
+        }
+#endif
     }
-    
+
     cHeaps = 0;
 
     /* Do we have sufficient videomemory to create an off-screen heap for DDraw? */
@@ -170,18 +200,46 @@ BOOL APIENTRY DrvGetDirectDrawInfo(
             pVm->dwFlags        = VIDMEM_ISLINEAR ;
             pVm->fpStart        = pDev->layout.offDDRAWHeap;
             pVm->fpEnd          = pDev->layout.offDDRAWHeap + pDev->layout.cbDDRAWHeap - 1; /* inclusive */
-
+#ifndef VBOX_WITH_VIDEOHWACCEL
             pVm->ddsCaps.dwCaps = DDSCAPS_OFFSCREENPLAIN;
+#endif
             DISPDBG((0, "fpStart %x fpEnd %x\n", pVm->fpStart, pVm->fpEnd));
 
             pVm++;
         }
     }
 
-#if 0 /* not mandatory */
-    /* DX5 and up */
-    pHalInfo->GetDriverInfo = DdGetDriverInfo;
-    pHalInfo->dwFlags |= DDHALINFO_GETDRIVERINFOSET;
+#ifdef VBOX_WITH_VIDEOHWACCEL
+    if(pDev->vhwaInfo.bVHWAEnabled)
+    {
+//        // TODO: filter out hw-unsupported fourccs
+//#define FOURCC_YUV422  (MAKEFOURCC('Y','U','Y','2'))
+//#define FOURCC_YUV411  (MAKEFOURCC('Y','4','1','1'))
+//
+//        static DWORD fourCC[] =  { FOURCC_YUV422, FOURCC_YUV411 };  // The FourCC's we support
+
+        *pdwNumFourCCCodes = pDev->vhwaInfo.numFourCC;
+
+        if (pdwFourCC && pDev->vhwaInfo.numFourCC)
+        {
+            int rc = vboxVHWAInitHostInfo2(pDev, pdwFourCC);
+            if(RT_FAILURE(rc))
+            {
+                *pdwNumFourCCCodes = 0;
+                pDev->vhwaInfo.numFourCC = 0;
+            }
+        }
+    }
+#endif
+
+#ifdef VBOX_WITH_VIDEOHWACCEL
+    if(pDev->vhwaInfo.bVHWAEnabled)
+    {
+        /* we need it to set DDHAL_PRIVATECAP_NOTIFYPRIMARYCREATION to make ddraw call us for primary surface creation */
+        /* DX5 and up */
+        pHalInfo->GetDriverInfo = DdGetDriverInfo;
+        pHalInfo->dwFlags |= DDHALINFO_GETDRIVERINFOSET;
+    }
 #endif
 
 #if 0
@@ -197,11 +255,11 @@ BOOL APIENTRY DrvGetDirectDrawInfo(
 
 /**
  * DrvEnableDirectDraw
- * 
+ *
  * The DrvEnableDirectDraw function enables hardware for DirectDraw use.
- * 
+ *
  * Parameters
- * 
+ *
  * dhpdev
  *     Handle to the PDEV returned by the driver’s DrvEnablePDEV routine.
  * pCallBacks
@@ -209,10 +267,10 @@ BOOL APIENTRY DrvGetDirectDrawInfo(
  * pSurfaceCallBacks
  *     Points to the DD_SURFACECALLBACKS structure to be initialized by the driver.
  * pPaletteCallBacks
- *     Points to the DD_PALETTECALLBACKS structure to be initialized by the driver. 
- * 
+ *     Points to the DD_PALETTECALLBACKS structure to be initialized by the driver.
+ *
  * Return Value
- * 
+ *
  * DrvEnableDirectDraw returns TRUE if it succeeds; otherwise, it returns FALSE.
  *
  */
@@ -223,6 +281,11 @@ BOOL APIENTRY DrvEnableDirectDraw(
     DD_PALETTECALLBACKS    *pPaletteCallBacks
     )
 {
+#ifdef VBOX_WITH_VIDEOHWACCEL
+    PPDEV pDev = (PPDEV)dhpdev;
+
+#endif
+
     DISPDBG((0, "%s: %p, %p, %p, %p\n", __FUNCTION__, dhpdev, pCallBacks, pSurfaceCallBacks, pPaletteCallBacks));
 
     /* Fill in the HAL Callback pointers */
@@ -235,7 +298,7 @@ BOOL APIENTRY DrvEnableDirectDraw(
     pCallBacks->MapMemory             = DdMapMemory;
     // pCallBacks->WaitForVerticalBlank  = DdWaitForVerticalBlank;
     // pCallBacks->GetScanLine           = DdGetScanLine;
-    // DDHAL_CB32_WAITFORVERTICALBLANK | DDHAL_CB32_GETSCANLINE 
+    // DDHAL_CB32_WAITFORVERTICALBLANK | DDHAL_CB32_GETSCANLINE
     /* Note: pCallBacks->SetMode & pCallBacks->DestroyDriver are unused in Windows 2000 and up */
 
     /* Fill in the Surface Callback pointers */
@@ -261,16 +324,49 @@ BOOL APIENTRY DrvEnableDirectDraw(
     pPaletteCallBacks->dwSize           = sizeof(DD_PALETTECALLBACKS);
     pPaletteCallBacks->dwFlags          = 0;
 
+#ifdef VBOX_WITH_VIDEOHWACCEL
+    if(pDev->vhwaInfo.bVHWAEnabled)
+    {
+        //TODO: filter out those we do not need in case not supported by hw
+        pSurfaceCallBacks->DestroySurface = DdDestroySurface;
+//        pSurfaceCallBacks->Lock = DdLock;
+//        pSurfaceCallBacks->Unlock = DdUnlock;
+        pSurfaceCallBacks->GetBltStatus = DdGetBltStatus;
+        pSurfaceCallBacks->GetFlipStatus = DdGetFlipStatus;
+        pSurfaceCallBacks->SetColorKey = DdSetColorKey;
+        pSurfaceCallBacks->Flip = DdFlip;
+        pSurfaceCallBacks->Blt = DdBlt;
+
+        pSurfaceCallBacks->dwFlags |= DDHAL_SURFCB32_DESTROYSURFACE     |
+                         DDHAL_SURFCB32_FLIP
+//                         | DDHAL_SURFCB32_LOCK
+                         | DDHAL_SURFCB32_BLT                |
+                         DDHAL_SURFCB32_GETBLTSTATUS       |
+                         DDHAL_SURFCB32_GETFLIPSTATUS      |
+                         DDHAL_SURFCB32_SETCOLORKEY
+//                         | DDHAL_SURFCB32_UNLOCK
+                         ;
+
+        if(pDev->vhwaInfo.caps & VBOXVHWA_CAPS_OVERLAY)
+        {
+            pSurfaceCallBacks->UpdateOverlay = DdUpdateOverlay;   // Now supporting overlays.
+            pSurfaceCallBacks->SetOverlayPosition = DdSetOverlayPosition;
+            pSurfaceCallBacks->dwFlags |=
+                             DDHAL_SURFCB32_UPDATEOVERLAY      | // Now supporting
+                             DDHAL_SURFCB32_SETOVERLAYPOSITION ; // overlays.
+        }
+    }
+#endif
     return TRUE;
 }
 
 /**
  * DrvDisableDirectDraw
- * 
+ *
  * The DrvDisableDirectDraw function disables hardware for DirectDraw use.
- * 
+ *
  * Parameters
- * 
+ *
  * dhpdev
  *     Handle to the PDEV returned by the driver’s DrvEnablePDEV routine.
  *
@@ -282,16 +378,16 @@ VOID APIENTRY DrvDisableDirectDraw( DHPDEV dhpdev)
 
 /**
  * DdGetDriverInfo
- * 
+ *
  * The DdGetDriverInfo function queries the driver for additional DirectDraw and Direct3D functionality that the driver supports.
- * 
+ *
  * Parameters
  * lpGetDriverInfo
  *     Points to a DD_GETDRIVERINFODATA structure that contains the information required to perform the query.
- * 
+ *
  * Return Value
- * 
- * DdGetDriverInfo must return DDHAL_DRIVER_HANDLED. 
+ *
+ * DdGetDriverInfo must return DDHAL_DRIVER_HANDLED.
  *
  */
 DWORD CALLBACK DdGetDriverInfo(DD_GETDRIVERINFODATA *lpData)
@@ -309,37 +405,37 @@ DWORD CALLBACK DdGetDriverInfo(DD_GETDRIVERINFODATA *lpData)
     {
         DISPDBG((0, " -> GUID_D3DCallbacks3\n"));
     }
-    else 
+    else
     if (IsEqualIID(&lpData->guidInfo, &GUID_D3DExtendedCaps))
     {
         DISPDBG((0, " -> GUID_D3DExtendedCaps\n"));
     }
-    else 
+    else
     if (IsEqualIID(&lpData->guidInfo, &GUID_ZPixelFormats))
     {
         DISPDBG((0, " -> GUID_ZPixelFormats\n"));
     }
-    else 
+    else
     if (IsEqualIID(&(lpData->guidInfo), &GUID_D3DParseUnknownCommandCallback))
     {
         DISPDBG((0, " -> GUID_D3DParseUnknownCommandCallback\n"));
     }
-    else 
+    else
     if (IsEqualIID(&(lpData->guidInfo), &GUID_Miscellaneous2Callbacks))
     {
         DISPDBG((0, " -> GUID_Miscellaneous2Callbacks\n"));
     }
-    else 
+    else
     if (IsEqualIID(&(lpData->guidInfo), &GUID_UpdateNonLocalHeap))
     {
         DISPDBG((0, " -> GUID_UpdateNonLocalHeap\n"));
     }
-    else 
+    else
     if (IsEqualIID(&(lpData->guidInfo), &GUID_GetHeapAlignment))
     {
         DISPDBG((0, " -> GUID_GetHeapAlignment\n"));
     }
-    else 
+    else
     if (IsEqualIID(&(lpData->guidInfo), &GUID_NTPrivateDriverCaps))
     {
         DD_NTPRIVATEDRIVERCAPS DDPrivateDriverCaps;
@@ -348,8 +444,11 @@ DWORD CALLBACK DdGetDriverInfo(DD_GETDRIVERINFODATA *lpData)
 
         memset(&DDPrivateDriverCaps, 0, sizeof(DDPrivateDriverCaps));
         DDPrivateDriverCaps.dwSize=sizeof(DDPrivateDriverCaps);
-
+#ifndef VBOX_WITH_VIDEOHWACCEL
         DDPrivateDriverCaps.dwPrivateCaps = 0; /* DDHAL_PRIVATECAP_NOTIFYPRIMARYCREATION -> call CreateSurface for the primary surface */
+#else
+        DDPrivateDriverCaps.dwPrivateCaps = DDHAL_PRIVATECAP_NOTIFYPRIMARYCREATION; /* -> call CreateSurface for the primary surface */
+#endif
 
         lpData->dwActualSize =sizeof(DDPrivateDriverCaps);
 
@@ -357,9 +456,10 @@ DWORD CALLBACK DdGetDriverInfo(DD_GETDRIVERINFODATA *lpData)
         memcpy(lpData->lpvData, &DDPrivateDriverCaps, dwSize);
         lpData->ddRVal = DD_OK;
     }
-    else 
+    else
     if (IsEqualIID(&(lpData->guidInfo), &GUID_DDMoreSurfaceCaps))
     {
+#ifndef VBOX_WITH_VIDEOHWACCEL
         DD_MORESURFACECAPS DDMoreSurfaceCaps;
         DDSCAPSEX   ddsCapsEx, ddsCapsExAlt;
 
@@ -393,20 +493,24 @@ DWORD CALLBACK DdGetDriverInfo(DD_GETDRIVERINFODATA *lpData)
         }
 
         lpData->ddRVal = DD_OK;
+#else
+        DISPDBG((0, " -> GUID_DDMoreSurfaceCaps\n"));
+#endif
     }
-    else 
+    else
     if (IsEqualIID(&(lpData->guidInfo), &GUID_DDStereoMode))
     {
         DISPDBG((0, " -> GUID_DDStereoMode\n"));
     }
-    else 
+    else
     if (IsEqualIID(&(lpData->guidInfo), &GUID_NonLocalVidMemCaps))
     {
         DISPDBG((0, " -> GUID_NonLocalVidMemCaps\n"));
-    } 
-    else 
+    }
+    else
     if (IsEqualIID(&lpData->guidInfo, &GUID_NTCallbacks))
     {
+#ifndef VBOX_WITH_VIDEOHWACCEL
         DD_NTCALLBACKS NtCallbacks;
 
         DISPDBG((0, " -> GUID_NTCallbacks\n"));
@@ -426,6 +530,9 @@ DWORD CALLBACK DdGetDriverInfo(DD_GETDRIVERINFODATA *lpData)
         memcpy(lpData->lpvData, &NtCallbacks, dwSize);
 
         lpData->ddRVal = DD_OK;
+#else
+        DISPDBG((0, " -> GUID_NTCallbacks\n"));
+#endif
     }
     else
     if (IsEqualIID(&lpData->guidInfo, &GUID_KernelCaps))
@@ -474,18 +581,18 @@ DWORD CALLBACK DdGetDriverInfo(DD_GETDRIVERINFODATA *lpData)
 
 /**
  * DdCreateSurface
- * 
+ *
  * The DdCreateSurface callback function creates a DirectDraw surface.
- * 
+ *
  * lpCreateSurface
  *     Points to a DD_CREATESURFACEDATA structure that contains the information required to create a surface.
- * 
+ *
  * Return Value
- * 
+ *
  * DdCreateSurface returns one of the following callback codes:
  * DDHAL_DRIVER_HANDLED
  * DDHAL_DRIVER_NOTHANDLED
- * 
+ *
  */
 DWORD APIENTRY DdCreateSurface(PDD_CREATESURFACEDATA  lpCreateSurface)
 {
@@ -498,9 +605,128 @@ DWORD APIENTRY DdCreateSurface(PDD_CREATESURFACEDATA  lpCreateSurface)
     DISPDBG((0, "%s: %p\n", __FUNCTION__, pDev));
 
     lpSurfaceLocal                  = lpCreateSurface->lplpSList[0];
-    lpSurfaceGlobal                 = lpSurfaceLocal->lpGbl;    
+    lpSurfaceGlobal                 = lpSurfaceLocal->lpGbl;
     lpSurfaceDesc                   = lpCreateSurface->lpDDSurfaceDesc;
 
+#ifdef VBOX_WITH_VIDEOHWACCEL
+    if(pDev->vhwaInfo.bVHWAEnabled)
+    {
+        VBOXVHWACMD* pCmd;
+        DDPIXELFORMAT * pFormat = &lpSurfaceGlobal->ddpfSurface;
+
+        if(lpSurfaceLocal->ddsCaps.dwCaps & DDSCAPS_PRIMARYSURFACE)
+        {
+            lBpp = pDev->ulBitCount;
+            lPitch = pDev->lDeltaScreen;
+        }
+        else
+        {
+            if (pFormat->dwFlags & DDPF_PALETTEINDEXED4)
+            {
+                lBpp = 4;
+                lPitch = lpSurfaceGlobal->wWidth/2;
+                lPitch = (lPitch + 31) & ~31;
+            }
+            else
+            if (pFormat->dwFlags & DDPF_PALETTEINDEXED8)
+            {
+                lBpp = 8;
+                lPitch = lpSurfaceGlobal->wWidth;
+                lPitch = (lPitch + 31) & ~31;
+            }
+            else
+            {
+                lBpp   = pFormat->dwRGBBitCount;
+                lPitch = lpSurfaceGlobal->wWidth*(lBpp/8);
+            }
+        }
+
+        DISPDBG((0, "New surface (%d,%d)\n", lpSurfaceGlobal->wWidth, lpSurfaceGlobal->wHeight));
+        DISPDBG((0, "BPP %d lPitch=%d\n", lBpp, lPitch));
+#if 1
+        lpSurfaceGlobal->dwBlockSizeX   = lPitch;
+        lpSurfaceGlobal->dwBlockSizeY   = lpSurfaceGlobal->wHeight;
+        lpSurfaceGlobal->lPitch         = lPitch;
+#else
+        lpSurfaceGlobal->dwBlockSizeX   = lPitch * lpSurfaceGlobal->wHeight;
+        lpSurfaceGlobal->dwBlockSizeY   = 1;
+        lpSurfaceGlobal->lPitch         = lPitch;
+#endif
+
+#if 1
+        lpSurfaceDesc->lPitch   = lpSurfaceGlobal->lPitch;
+        lpSurfaceDesc->dwFlags |= DDSD_PITCH;
+#endif
+
+        //
+        // Modify surface descriptions as appropriate and let Direct
+        // Draw perform the allocation if the surface was not the primary
+        //
+        if (lpSurfaceLocal->ddsCaps.dwCaps & DDSCAPS_PRIMARYSURFACE)
+        {
+            DISPDBG((0, "-> primary surface\n"));
+            lpSurfaceGlobal->fpVidMem       = 0;
+        }
+        else
+        {
+            DISPDBG((0, "-> secondary surface\n"));
+            lpSurfaceGlobal->fpVidMem       = DDHAL_PLEASEALLOC_BLOCKSIZE;
+        }
+
+        pCmd = vboxVHWACommandCreate (pDev, VBOXVHWACMD_TYPE_SURF_CREATE, sizeof(VBOXVHWACMD_SURF_CREATE));
+        if(pCmd)
+        {
+            VBOXVHWACMD_SURF_CREATE * pBody = VBOXVHWACMD_BODY(pCmd, VBOXVHWACMD_SURF_CREATE);
+            PVBOXVHWASURFDESC pDesc;
+            int rc;
+
+            memset(pBody, 0, sizeof(VBOXVHWACMD_SURF_CREATE));
+
+            rc = vboxVHWAFromDDSURFACEDESC(&pBody->u.in.SurfInfo, lpSurfaceDesc);
+
+            pBody->u.in.SurfInfo.surfCaps = vboxVHWAFromDDSCAPS(lpSurfaceLocal->ddsCaps.dwCaps);
+            pBody->u.in.SurfInfo.flags |= DDSD_CAPS;
+
+            pBody->u.in.SurfInfo.height = lpSurfaceGlobal->wHeight;
+            pBody->u.in.SurfInfo.width = lpSurfaceGlobal->wWidth;
+            pBody->u.in.SurfInfo.flags |= DDSD_HEIGHT | DDSD_WIDTH;
+
+            vboxVHWAFromDDPIXELFORMAT(&pBody->u.in.SurfInfo.PixelFormat, pFormat);
+            pBody->u.in.SurfInfo.flags |= VBOXVHWA_SD_PIXELFORMAT;
+
+            if (lpSurfaceLocal->ddsCaps.dwCaps & DDSCAPS_PRIMARYSURFACE)
+            {
+                pBody->u.in.offSurface = 0;
+            }
+            else
+            {
+                pBody->u.in.offSurface = VBOXVHWA_OFFSET64_VOID;
+            }
+
+
+            pDesc = vboxVHWASurfDescAlloc();
+            if(pDesc)
+            {
+                pDesc->cBitsPerPixel = lBpp;
+                vboxVHWACommandSubmit(pDev, pCmd);
+                Assert(pCmd->rc == VINF_SUCCESS);
+                if(pCmd->rc == VINF_SUCCESS)
+                {
+                    pDesc->hHostHandle = pBody->u.out.hSurf;
+                    lpSurfaceGlobal->dwReserved1 = (ULONG_PTR)pDesc;
+                    lpCreateSurface->ddRVal = DD_OK;
+                }
+                else
+                {
+                    vboxVHWASurfDescFree(pDesc);
+                    lpCreateSurface->ddRVal = DDERR_GENERIC;
+                }
+            }
+            vboxVHWACommandFree(pDev, pCmd);
+        }
+        return DDHAL_DRIVER_NOTHANDLED;
+    }
+#endif
     lpSurfaceGlobal->dwReserved1    = 0;
 
     if (lpSurfaceDesc->ddpfPixelFormat.dwFlags & DDPF_PALETTEINDEXED4)
@@ -509,7 +735,7 @@ DWORD APIENTRY DdCreateSurface(PDD_CREATESURFACEDATA  lpCreateSurface)
         lPitch = lpSurfaceGlobal->wWidth/2;
         lPitch = (lPitch + 31) & ~31;
     }
-    else 
+    else
     if (lpSurfaceDesc->ddpfPixelFormat.dwFlags & DDPF_PALETTEINDEXED8)
     {
         lBpp = 8;
@@ -528,6 +754,9 @@ DWORD APIENTRY DdCreateSurface(PDD_CREATESURFACEDATA  lpCreateSurface)
     lpSurfaceGlobal->dwBlockSizeY   = lpSurfaceGlobal->wHeight;
     lpSurfaceGlobal->lPitch         = lPitch;
 
+    lpSurfaceDesc->lPitch   = lpSurfaceGlobal->lPitch;
+    lpSurfaceDesc->dwFlags |= DDSD_PITCH;
+
     //
     // Modify surface descriptions as appropriate and let Direct
     // Draw perform the allocation if the surface was not the primary
@@ -542,28 +771,24 @@ DWORD APIENTRY DdCreateSurface(PDD_CREATESURFACEDATA  lpCreateSurface)
         DISPDBG((0, "-> secondary surface\n"));
         lpSurfaceGlobal->fpVidMem       = DDHAL_PLEASEALLOC_BLOCKSIZE;
     }
-    
-    lpSurfaceDesc->lPitch   = lpSurfaceGlobal->lPitch;
-    lpSurfaceDesc->dwFlags |= DDSD_PITCH;
-
 
     return DDHAL_DRIVER_NOTHANDLED;
 }
 
 /**
  * DdCanCreateSurface
- * 
+ *
  * The DdCanCreateSurface callback function indicates whether the driver can create a surface of the specified surface description.
- * 
- * 
+ *
+ *
  * Parameters
  * lpCanCreateSurface
  *     Points to the DD_CANCREATESURFACEDATA structure containing the information required for the driver to determine whether a surface can be created.
- * 
+ *
  * Return Value
- * 
+ *
  * DdCanCreateSurface returns one of the following callback codes:
- * 
+ *
  * DDHAL_DRIVER_HANDLED
  * DDHAL_DRIVER_NOTHANDLED
  *
@@ -575,6 +800,66 @@ DWORD APIENTRY DdCanCreateSurface(PDD_CANCREATESURFACEDATA lpCanCreateSurface)
     PDD_SURFACEDESC lpDDS = lpCanCreateSurface->lpDDSurfaceDesc;
 
     DISPDBG((0, "%s: %p\n", __FUNCTION__, pDev));
+
+#ifdef VBOX_WITH_VIDEOHWACCEL
+    if(pDev->vhwaInfo.bVHWAEnabled)
+    {
+        VBOXVHWACMD* pCmd;
+        uint32_t unsupportedSCaps = vboxVHWAUnsupportedDDSCAPS(lpDDS->ddsCaps.dwCaps);
+        Assert(!unsupportedSCaps);
+        if(unsupportedSCaps)
+        {
+            VHWADBG(("vboxVHWASurfCanCreate: unsupported ddscaps: 0x%x", unsupportedSCaps));
+            lpCanCreateSurface->ddRVal = DDERR_INVALIDCAPS;
+            return DDHAL_DRIVER_HANDLED;
+        }
+
+        unsupportedSCaps = vboxVHWAUnsupportedDDPFS(lpDDS->ddpfPixelFormat.dwFlags);
+        Assert(!unsupportedSCaps);
+        if(unsupportedSCaps)
+        {
+            VHWADBG(("vboxVHWASurfCanCreate: unsupported pixel format: 0x%x", unsupportedSCaps));
+            lpCanCreateSurface->ddRVal = DDERR_INVALIDPIXELFORMAT;
+            return DDHAL_DRIVER_HANDLED;
+        }
+
+        pCmd = vboxVHWACommandCreate (pDev, VBOXVHWACMD_TYPE_SURF_CANCREATE, sizeof(VBOXVHWACMD_SURF_CANCREATE));
+        if(pCmd)
+        {
+            int rc;
+            VBOXVHWACMD_SURF_CANCREATE * pBody = VBOXVHWACMD_BODY(pCmd, VBOXVHWACMD_SURF_CANCREATE);
+            memset(pBody, 0, sizeof(VBOXVHWACMD_SURF_CANCREATE));
+
+            rc = vboxVHWAFromDDSURFACEDESC(&pBody->u.in.SurfInfo, lpDDS);
+            pBody->u.in.bIsDifferentPixelFormat = lpCanCreateSurface->bIsDifferentPixelFormat;
+
+            vboxVHWACommandSubmit(pDev, pCmd);
+            Assert(pCmd->rc == VINF_SUCCESS);
+            if(pCmd->rc == VINF_SUCCESS)
+            {
+                Assert(!pBody->u.out.ErrInfo);
+                if(pBody->u.out.ErrInfo)
+                {
+                    lpCanCreateSurface->ddRVal = DDERR_GENERIC;
+                }
+                else
+                {
+                    lpCanCreateSurface->ddRVal = DD_OK;
+                }
+            }
+            else
+            {
+                lpCanCreateSurface->ddRVal = DDERR_GENERIC;
+            }
+            vboxVHWACommandFree(pDev, pCmd);
+        }
+        else
+        {
+            lpCanCreateSurface->ddRVal = DDERR_GENERIC;
+        }
+        return DDHAL_DRIVER_HANDLED;
+    }
+#endif
 
     if (lpDDS->ddsCaps.dwCaps & DDSCAPS_ZBUFFER)
     {
@@ -588,7 +873,6 @@ DWORD APIENTRY DdCanCreateSurface(PDD_CANCREATESURFACEDATA lpCanCreateSurface)
         lpCanCreateSurface->ddRVal = DDERR_INVALIDPIXELFORMAT;
         return DDHAL_DRIVER_HANDLED;
     }
-
     if (lpCanCreateSurface->bIsDifferentPixelFormat && (lpDDS->ddpfPixelFormat.dwFlags & DDPF_FOURCC))
     {
         DISPDBG((0, "FOURCC not supported\n"));
@@ -604,43 +888,43 @@ DWORD APIENTRY DdCanCreateSurface(PDD_CANCREATESURFACEDATA lpCanCreateSurface)
 //
 // DdMapMemory
 //
-// Maps application-modifiable portions of the frame buffer into the 
+// Maps application-modifiable portions of the frame buffer into the
 // user-mode address space of the specified process, or unmaps memory.
 //
-// DdMapMemory is called to perform memory mapping before the first call to 
-// DdLock. The handle returned by the driver in fpProcess will be passed to 
-// every DdLock call made on the driver. 
+// DdMapMemory is called to perform memory mapping before the first call to
+// DdLock. The handle returned by the driver in fpProcess will be passed to
+// every DdLock call made on the driver.
 //
-// DdMapMemory is also called to unmap memory after the last DdUnLock call is 
+// DdMapMemory is also called to unmap memory after the last DdUnLock call is
 // made.
 //
 // To prevent driver crashes, the driver must not map any portion of the frame
 // buffer that must not be modified by an application.
 //
 // Parameters
-//      lpMapMemory 
-//          Points to a DD_MAPMEMORYDATA structure that contains details for 
-//          the memory mapping or unmapping operation. 
+//      lpMapMemory
+//          Points to a DD_MAPMEMORYDATA structure that contains details for
+//          the memory mapping or unmapping operation.
 //
-//          .lpDD 
-//              Points to a DD_DIRECTDRAW_GLOBAL structure that represents 
-//              the driver. 
-//          .bMap 
-//              Specifies the memory operation that the driver should perform. 
-//              A value of TRUE indicates that the driver should map memory; 
-//              FALSE means that the driver should unmap memory. 
-//          .hProcess 
-//              Specifies a handle to the process whose address space is 
-//              affected. 
-//          .fpProcess 
-//              Specifies the location in which the driver should return the 
-//              base address of the process's memory mapped space when bMap 
-//              is TRUE. When bMap is FALSE, fpProcess contains the base 
+//          .lpDD
+//              Points to a DD_DIRECTDRAW_GLOBAL structure that represents
+//              the driver.
+//          .bMap
+//              Specifies the memory operation that the driver should perform.
+//              A value of TRUE indicates that the driver should map memory;
+//              FALSE means that the driver should unmap memory.
+//          .hProcess
+//              Specifies a handle to the process whose address space is
+//              affected.
+//          .fpProcess
+//              Specifies the location in which the driver should return the
+//              base address of the process's memory mapped space when bMap
+//              is TRUE. When bMap is FALSE, fpProcess contains the base
 //              address of the memory to be unmapped by the driver.
-//          .ddRVal 
-//              Specifies the location in which the driver writes the return 
-//              value of the DdMapMemory callback. A return code of DD_OK 
-//              indicates success. 
+//          .ddRVal
+//              Specifies the location in which the driver writes the return
+//              value of the DdMapMemory callback. A return code of DD_OK
+//              indicates success.
 //
 //-----------------------------------------------------------------------------
 
@@ -682,13 +966,13 @@ DWORD CALLBACK DdMapMemory(PDD_MAPMEMORYDATA lpMapMemory)
             DISPDBG((0, "Failed IOCTL_VIDEO_SHARE_MEMORY\n"));
 
             lpMapMemory->ddRVal = DDERR_GENERIC;
-     
+
             DISPDBG((0, "DdMapMemory: Exit GEN, DDHAL_DRIVER_HANDLED\n"));
-            
+
             return(DDHAL_DRIVER_HANDLED);
         }
 
-        lpMapMemory->fpProcess = 
+        lpMapMemory->fpProcess =
                             (FLATPTR) ShareMemoryInformation.VirtualAddress;
     }
     else
@@ -717,17 +1001,17 @@ DWORD CALLBACK DdMapMemory(PDD_MAPMEMORYDATA lpMapMemory)
 
 /**
  * DdLock
- * 
+ *
  * The DdLock callback function locks a specified area of surface memory and provides a valid pointer to a block of memory associated with a surface.
- * 
+ *
  * Parameters
  * lpLock
  *     Points to a DD_LOCKDATA structure that contains the information required to perform the lockdown.
- * 
+ *
  * Return Value
- * 
+ *
  * DdLock returns one of the following callback codes:
- * 
+ *
  * DDHAL_DRIVER_HANDLED
  * DDHAL_DRIVER_NOTHANDLED
  *
@@ -735,11 +1019,80 @@ DWORD CALLBACK DdMapMemory(PDD_MAPMEMORYDATA lpMapMemory)
 DWORD APIENTRY DdLock(PDD_LOCKDATA lpLock)
 {
     PPDEV pDev = (PPDEV)lpLock->lpDD->dhpdev;
-    
-    PDD_SURFACE_LOCAL lpSurfaceLocal = lpLock->lpDDSurface;
+    DD_SURFACE_LOCAL*   lpSurfaceLocal = lpLock->lpDDSurface;
 
     DISPDBG((0, "%s: %p bHasRect = %d fpProcess = %p\n", __FUNCTION__, pDev, lpLock->bHasRect, lpLock->fpProcess));
 
+#ifdef VBOX_WITH_VIDEOHWACCEL
+    if(pDev->vhwaInfo.bVHWAEnabled)
+    {
+        DD_SURFACE_GLOBAL*  lpSurfaceGlobal = lpSurfaceLocal->lpGbl;
+        PVBOXVHWASURFDESC pDesc = (PVBOXVHWASURFDESC)lpSurfaceGlobal->dwReserved1;
+        VBOXVHWACMD* pCmd;
+        /* ensure we have host cmds processed to update pending blits and flips */
+        vboxVHWACommandCheckHostCmds(pDev);
+
+    //    if(VBOXDD_CHECKFLAG(lpLock, DDLOCK_DONOTWAIT))
+        {
+            if(ASMAtomicUoReadU32(&pDesc->cPendingBltsSrc)
+                    || ASMAtomicUoReadU32(&pDesc->cPendingBltsDst)
+                    || ASMAtomicUoReadU32(&pDesc->cPendingFlipsTarg)
+                    || ASMAtomicUoReadU32(&pDesc->cPendingFlipsCurr))
+            {
+                lpLock->ddRVal = DDERR_WASSTILLDRAWING;
+                return DDHAL_DRIVER_HANDLED;
+            }
+        }
+
+//        if(VBOXDD_CHECKFLAG(lpLock->dwFlags, DDLOCK_SURFACEMEMORYPTR))
+//        {
+//            lpLock->lpSurfData = (LPVOID)(lpSurfaceGlobal->fpVidMem + lpSurfaceGlobal->lPitch * lpLock->rArea.top
+//                + lpLock->rArea.left * pDesc->cBitsPerPixel/8);
+//        }
+
+        pCmd = vboxVHWACommandCreate (pDev, VBOXVHWACMD_TYPE_SURF_LOCK, sizeof(VBOXVHWACMD_SURF_LOCK));
+        if(pCmd)
+        {
+            VBOXVHWACMD_SURF_LOCK * pBody = VBOXVHWACMD_BODY(pCmd, VBOXVHWACMD_SURF_LOCK);
+            memset(pBody, 0, sizeof(VBOXVHWACMD_SURF_LOCK));
+
+            pBody->u.in.offSurface = (uint64_t)lpSurfaceGlobal->fpVidMem;
+
+            if (lpLock->bHasRect)
+            {
+                DISPDBG((0, "%d,%d %dx%d\n", lpLock->rArea.left, lpLock->rArea.top, lpLock->rArea.right - lpLock->rArea.left, lpLock->rArea.bottom - lpLock->rArea.top));
+                vboxVHWAFromRECTL(&pBody->u.in.rect, &lpLock->rArea);
+                pBody->u.in.rectValid = 1;
+            }
+            else
+            {
+                pBody->u.in.rectValid = 0;
+            }
+
+            pBody->u.in.hSurf = pDesc->hHostHandle;
+
+            if(VBOXDD_CHECKFLAG(lpLock->dwFlags, DDLOCK_DISCARDCONTENTS))
+            {
+                pBody->u.in.flags |= VBOXVHWA_LOCK_DISCARDCONTENTS;
+                /* we're not interested in completion, just send the command */
+                vboxVHWACommandSubmitAsynch(pDev, pCmd, vboxVHWAFreeCmdCompletion, NULL);
+            }
+            else
+            {
+                /* wait for the surface to be locked and memory buffer updated */
+                vboxVHWACommandSubmit(pDev, pCmd);
+                vboxVHWACommandFree(pDev, pCmd);
+            }
+
+            lpLock->ddRVal = DD_OK;
+        }
+        else
+        {
+            lpLock->ddRVal = DDERR_GENERIC;
+        }
+        return DDHAL_DRIVER_NOTHANDLED;
+    }
+#endif
     if (lpSurfaceLocal->ddsCaps.dwCaps & DDSCAPS_PRIMARYSURFACE)
     {
         /* The updated rectangle must be reported only for the primary surface. */
@@ -773,17 +1126,17 @@ DWORD APIENTRY DdLock(PDD_LOCKDATA lpLock)
 
 /**
  * DdUnlock
- * 
+ *
  * The DdUnLock callback function releases the lock held on the specified surface.
- * 
+ *
  * Parameters
  * lpUnlock
- *     Points to a DD_UNLOCKDATA structure that contains the information required to perform the lock release. * 
- * 
+ *     Points to a DD_UNLOCKDATA structure that contains the information required to perform the lock release. *
+ *
  * Return Value
- * 
+ *
  * DdLock returns one of the following callback codes:
- * 
+ *
  * DDHAL_DRIVER_HANDLED
  * DDHAL_DRIVER_NOTHANDLED
  *
@@ -792,11 +1145,52 @@ DWORD APIENTRY DdUnlock(PDD_UNLOCKDATA lpUnlock)
 {
     PPDEV pDev = (PPDEV)lpUnlock->lpDD->dhpdev;
     DISPDBG((0, "%s: %p\n", __FUNCTION__, pDev));
+#ifdef VBOX_WITH_VIDEOHWACCEL
+    if (pDev->vhwaInfo.bVHWAEnabled)
+    {
+        DD_SURFACE_LOCAL*   lpSurfaceLocal = lpUnlock->lpDDSurface;
+        DD_SURFACE_GLOBAL*  lpSurfaceGlobal = lpSurfaceLocal->lpGbl;
+        PVBOXVHWASURFDESC pDesc = (PVBOXVHWASURFDESC)lpSurfaceGlobal->dwReserved1;
+        VBOXVHWACMD* pCmd;
 
+        //TODO: hadle vrdp properly
+        if (  pDev->pVBVA->u32HostEvents
+            & VBOX_VIDEO_INFO_HOST_EVENTS_F_VRDP_RESET)
+        {
+            vrdpReset (pDev);
+
+            pDev->pVBVA->u32HostEvents &=
+                      ~VBOX_VIDEO_INFO_HOST_EVENTS_F_VRDP_RESET;
+        }
+
+        /* ensure we have host cmds processed to update pending blits and flips */
+        vboxVHWACommandCheckHostCmds(pDev);
+
+        pCmd = vboxVHWACommandCreate (pDev, VBOXVHWACMD_TYPE_SURF_UNLOCK, sizeof(VBOXVHWACMD_SURF_UNLOCK));
+    //    int rc = VERR_GENERAL_FAILURE;
+        if(pCmd)
+        {
+            VBOXVHWACMD_SURF_UNLOCK * pBody = VBOXVHWACMD_BODY(pCmd, VBOXVHWACMD_SURF_UNLOCK);
+            memset(pBody, 0, sizeof(VBOXVHWACMD_SURF_UNLOCK));
+
+            pBody->u.in.hSurf = pDesc->hHostHandle;
+
+            vboxVHWACommandSubmitAsynch(pDev, pCmd, vboxVHWAFreeCmdCompletion, NULL);
+
+            lpUnlock->ddRVal = DD_OK;
+        }
+        else
+        {
+            lpUnlock->ddRVal = DDERR_GENERIC;
+        }
+
+        return DDHAL_DRIVER_NOTHANDLED;
+    }
+#endif
     if (pDev->ddLock.bLocked)
     {
         DISPDBG((0, "%d,%d %dx%d\n", pDev->ddLock.rArea.left, pDev->ddLock.rArea.top, pDev->ddLock.rArea.right - pDev->ddLock.rArea.left, pDev->ddLock.rArea.bottom - pDev->ddLock.rArea.top));
-        
+
 #ifndef VBOX_WITH_HGSMI
         if (pDev->pInfo && vboxHwBufferBeginUpdate (pDev))
         {
@@ -852,27 +1246,59 @@ DWORD APIENTRY DdUnlock(PDD_UNLOCKDATA lpUnlock)
 
 /**
  * DdDestroySurface
- * 
+ *
  * The DdDestroySurface callback function destroys a DirectDraw surface.
- * 
+ *
  * Parameters
  * lpDestroySurface
  *     Points to a DD_DESTROYSURFACEDATA structure that contains the information needed to destroy a surface.
- * 
+ *
  * Return Value
- * 
+ *
  * DdDestroySurface returns one of the following callback codes:
- * 
+ *
  * DDHAL_DRIVER_HANDLED
  * DDHAL_DRIVER_NOTHANDLED
  *
  */
 DWORD APIENTRY DdDestroySurface(PDD_DESTROYSURFACEDATA lpDestroySurface)
 {
+#ifdef VBOX_WITH_VIDEOHWACCEL
     PPDEV pDev = (PPDEV)lpDestroySurface->lpDD->dhpdev;
-    DISPDBG((0, "%s: %p\n", __FUNCTION__, pDev));
+    if(pDev->vhwaInfo.bVHWAEnabled)
+    {
+        DD_SURFACE_LOCAL*   lpSurfaceLocal = lpDestroySurface->lpDDSurface;
+        DD_SURFACE_GLOBAL*  lpSurfaceGlobal = lpSurfaceLocal->lpGbl;
+        VBOXVHWACMD* pCmd;
 
-    lpDestroySurface->ddRVal = DD_OK;
+        DISPDBG((0, "%s: %p\n", __FUNCTION__, pDev));
+
+        pCmd = vboxVHWACommandCreate (pDev, VBOXVHWACMD_TYPE_SURF_DESTROY, sizeof(VBOXVHWACMD_SURF_DESTROY));
+    //    int rc = VERR_GENERAL_FAILURE;
+        if(pCmd)
+        {
+            VBOXVHWACMD_SURF_DESTROY * pBody = VBOXVHWACMD_BODY(pCmd, VBOXVHWACMD_SURF_DESTROY);
+            PVBOXVHWASURFDESC pDesc = (PVBOXVHWASURFDESC)lpSurfaceGlobal->dwReserved1;
+
+            memset(pBody, 0, sizeof(VBOXVHWACMD_SURF_DESTROY));
+
+            pBody->u.in.hSurf = pDesc->hHostHandle;
+
+            /* we're not interested in completion, just send the command */
+            vboxVHWACommandSubmitAsynch(pDev, pCmd, vboxVHWAFreeCmdCompletion, NULL);
+
+            vboxVHWASurfDescFree(pDesc);
+
+            lpDestroySurface->ddRVal = DD_OK;
+        }
+        else
+        {
+            lpDestroySurface->ddRVal = DDERR_GENERIC;
+        }
+    }
+    else
+#endif
+        lpDestroySurface->ddRVal = DD_OK;
     return DDHAL_DRIVER_HANDLED;
 }
 
@@ -955,6 +1381,714 @@ DWORD APIENTRY DdFreeDriverMemory(PDD_FREEDRIVERMEMORYDATA lpFreeDriverMemory)
     lpFreeDriverMemory->ddRVal = DDERR_OUTOFMEMORY;
     return DDHAL_DRIVER_HANDLED;
 }
+
+#ifdef VBOX_WITH_VIDEOHWACCEL
+DWORD APIENTRY DdSetColorKey(PDD_SETCOLORKEYDATA  lpSetColorKey)
+{
+    PPDEV pDev = (PPDEV)lpSetColorKey->lpDD->dhpdev;
+    DD_SURFACE_LOCAL*   lpSurfaceLocal = lpSetColorKey->lpDDSurface;
+    DD_SURFACE_GLOBAL*  lpSurfaceGlobal = lpSurfaceLocal->lpGbl;
+    VBOXVHWACMD* pCmd;
+
+    DISPDBG((0, "%s\n", __FUNCTION__));
+
+    pCmd = vboxVHWACommandCreate (pDev, VBOXVHWACMD_TYPE_SURF_COLORKEY_SET, sizeof(VBOXVHWACMD_SURF_COLORKEY_SET));
+    //    int rc = VERR_GENERAL_FAILURE;
+    if(pCmd)
+    {
+        VBOXVHWACMD_SURF_COLORKEY_SET * pBody = VBOXVHWACMD_BODY(pCmd, VBOXVHWACMD_SURF_COLORKEY_SET);
+        PVBOXVHWASURFDESC pDesc = (PVBOXVHWASURFDESC)lpSurfaceGlobal->dwReserved1;
+        memset(pBody, 0, sizeof(VBOXVHWACMD_SURF_COLORKEY_SET));
+
+        pBody->u.in.offSurface = (uint64_t)lpSurfaceGlobal->fpVidMem;
+        pBody->u.in.hSurf = pDesc->hHostHandle;
+        pBody->u.in.flags = vboxVHWAFromDDCKEYs(lpSetColorKey->dwFlags);
+        vboxVHWAFromDDCOLORKEY(&pBody->u.in.CKey, &lpSetColorKey->ckNew);
+
+        vboxVHWACommandSubmitAsynch(pDev, pCmd, vboxVHWAFreeCmdCompletion, NULL);
+        lpSetColorKey->ddRVal = DD_OK;
+    }
+    return DDHAL_DRIVER_HANDLED;
+}
+
+DWORD APIENTRY DdAddAttachedSurface(PDD_ADDATTACHEDSURFACEDATA  lpAddAttachedSurface)
+{
+    DISPDBG((0, "%s\n", __FUNCTION__));
+    lpAddAttachedSurface->ddRVal = DD_OK;
+    return DDHAL_DRIVER_HANDLED;
+}
+
+DWORD APIENTRY DdBlt(PDD_BLTDATA  lpBlt)
+{
+    PPDEV pDev = (PPDEV)lpBlt->lpDD->dhpdev;
+    DISPDBG((0, "%s\n", __FUNCTION__));
+#if DX9_DDI
+    if(VBOXDD_CHECKFLAG(lpBlt->dwFlags, DDBLT_EXTENDED_PRESENTATION_STRETCHFACTOR))
+    {
+        lpBlt->ddRVal = DD_OK;
+    }
+    else
+#endif
+    {
+        DD_SURFACE_LOCAL*   lpDestSurfaceLocal = lpBlt->lpDDDestSurface;
+        DD_SURFACE_GLOBAL*  lpDestSurfaceGlobal = lpDestSurfaceLocal->lpGbl;
+        DD_SURFACE_LOCAL*   lpSrcSurfaceLocal = lpBlt->lpDDSrcSurface;
+        DD_SURFACE_GLOBAL*  lpSrcSurfaceGlobal = lpSrcSurfaceLocal->lpGbl;
+        VBOXVHWACMD* pCmd = vboxVHWACommandCreate (pDev, VBOXVHWACMD_TYPE_SURF_BLT, sizeof(VBOXVHWACMD_SURF_BLT));
+    //    int rc = VERR_GENERAL_FAILURE;
+        if(pCmd)
+        {
+            VBOXVHWACMD_SURF_BLT * pBody = VBOXVHWACMD_BODY(pCmd, VBOXVHWACMD_SURF_BLT);
+            PVBOXVHWASURFDESC pSrcDesc = (PVBOXVHWASURFDESC)lpSrcSurfaceGlobal->dwReserved1;
+            PVBOXVHWASURFDESC pDestDesc = (PVBOXVHWASURFDESC)lpDestSurfaceGlobal->dwReserved1;
+            memset(pBody, 0, sizeof(VBOXVHWACMD_SURF_BLT));
+
+            pBody->u.in.offSrcSurface = (uint64_t)lpSrcSurfaceGlobal->fpVidMem;
+            pBody->u.in.offDstSurface = (uint64_t)lpDestSurfaceGlobal->fpVidMem;
+
+            pBody->u.in.hDstSurf = pDestDesc->hHostHandle;
+            vboxVHWAFromRECTL(&pBody->u.in.dstRect, &lpBlt->rDest);
+            pBody->u.in.hSrcSurf = pSrcDesc->hHostHandle;
+            vboxVHWAFromRECTL(&pBody->u.in.srcRect, &lpBlt->rSrc);
+            pBody->DstGuestSurfInfo = (uint64_t)pDestDesc;
+            pBody->SrcGuestSurfInfo = (uint64_t)pSrcDesc;
+
+            pBody->u.in.flags = vboxVHWAFromDDBLTs(lpBlt->dwFlags);
+            vboxVHWAFromDDBLTFX(&pBody->u.in.desc, &lpBlt->bltFX);
+
+            ASMAtomicIncU32(&pSrcDesc->cPendingBltsSrc);
+            ASMAtomicIncU32(&pDestDesc->cPendingBltsDst);
+
+//            if(VBOXDD_CHECKFLAG(lpBlt->dwFlags, DDBLT_ASYNC))
+//            {
+                vboxVHWACommandSubmitAsynch(pDev, pCmd, vboxVHWASurfBltCompletion, NULL);
+//            }
+//            else
+//            {
+//                vboxVHWACommandSubmit(pDev, pCmd);
+//            }
+            lpBlt->ddRVal = DD_OK;
+        }
+        else
+        {
+            lpBlt->ddRVal = DDERR_GENERIC;
+        }
+    }
+
+    return DDHAL_DRIVER_HANDLED;
+}
+
+//DWORD APIENTRY DdDestroySurface(PDD_DESTROYSURFACEDATA  lpDestroySurface)
+//{
+//    DISPDBG((0, "%s\n", __FUNCTION__));
+//    lpDestroySurface->ddRVal = DD_OK;
+//    return DDHAL_DRIVER_HANDLED;
+//}
+
+DWORD APIENTRY DdFlip(PDD_FLIPDATA  lpFlip)
+{
+    PPDEV pDev = (PPDEV)lpFlip->lpDD->dhpdev;
+    DD_SURFACE_LOCAL*   lpTargSurfaceLocal = lpFlip->lpSurfTarg;
+    DD_SURFACE_GLOBAL*  lpTargSurfaceGlobal = lpTargSurfaceLocal->lpGbl;
+    DD_SURFACE_LOCAL*   lpCurrSurfaceLocal = lpFlip->lpSurfCurr;
+    DD_SURFACE_GLOBAL*  lpCurrSurfaceGlobal = lpCurrSurfaceLocal->lpGbl;
+    PVBOXVHWASURFDESC pCurrDesc = (PVBOXVHWASURFDESC)lpCurrSurfaceGlobal->dwReserved1;
+    PVBOXVHWASURFDESC pTargDesc = (PVBOXVHWASURFDESC)lpTargSurfaceGlobal->dwReserved1;
+    VBOXVHWACMD* pCmd;
+
+    DISPDBG((0, "%s\n", __FUNCTION__));
+
+    /* ensure we have host cmds processed to update pending blits and flips */
+    vboxVHWACommandCheckHostCmds(pDev);
+
+//    if(VBOXDD_CHECKFLAG(lpLock, DDLOCK_DONOTWAIT))
+    {
+        if(
+//                ASMAtomicUoReadU32(&pDesc->cPendingBltsSrc)
+//                || ASMAtomicUoReadU32(&pDesc->cPendingBltsDst)
+//                ||
+                ASMAtomicUoReadU32(&pCurrDesc->cPendingFlipsTarg)
+                || ASMAtomicUoReadU32(&pCurrDesc->cPendingFlipsCurr)
+                || ASMAtomicUoReadU32(&pTargDesc->cPendingFlipsTarg)
+                || ASMAtomicUoReadU32(&pTargDesc->cPendingFlipsCurr))
+        {
+            lpFlip->ddRVal = DDERR_WASSTILLDRAWING;
+            return DDHAL_DRIVER_HANDLED;
+        }
+    }
+
+    pCmd = vboxVHWACommandCreate (pDev, VBOXVHWACMD_TYPE_SURF_FLIP, sizeof(VBOXVHWACMD_SURF_FLIP));
+    //    int rc = VERR_GENERAL_FAILURE;
+    if(pCmd)
+    {
+        VBOXVHWACMD_SURF_FLIP * pBody = VBOXVHWACMD_BODY(pCmd, VBOXVHWACMD_SURF_FLIP);
+
+        memset(pBody, 0, sizeof(VBOXVHWACMD_SURF_FLIP));
+
+        pBody->u.in.offCurrSurface = (uint64_t)lpCurrSurfaceGlobal->fpVidMem;
+        pBody->u.in.offTargSurface = (uint64_t)lpTargSurfaceGlobal->fpVidMem;
+
+        pBody->u.in.hTargSurf = pTargDesc->hHostHandle;
+        pBody->u.in.hCurrSurf = pCurrDesc->hHostHandle;
+        pBody->TargGuestSurfInfo = (uint64_t)pTargDesc;
+        pBody->CurrGuestSurfInfo = (uint64_t)pCurrDesc;
+
+//        pBody->u.in.flags = vboxVHWAFromDDFLIPs(lpFlip->dwFlags);
+
+        ASMAtomicIncU32(&pCurrDesc->cPendingFlipsCurr);
+        ASMAtomicIncU32(&pTargDesc->cPendingFlipsTarg);
+
+        vboxVHWACommandSubmitAsynch(pDev, pCmd, vboxVHWASurfFlipCompletion, NULL);
+
+        lpFlip->ddRVal = DD_OK;
+    }
+    else
+    {
+        lpFlip->ddRVal = DDERR_GENERIC;
+    }
+    return DDHAL_DRIVER_HANDLED;
+}
+
+DWORD APIENTRY DdGetBltStatus(PDD_GETBLTSTATUSDATA  lpGetBltStatus)
+{
+    PPDEV pDev = (PPDEV)lpGetBltStatus->lpDD->dhpdev;
+
+    DISPDBG((0, "%s\n", __FUNCTION__));
+
+    if(lpGetBltStatus->dwFlags == DDGBS_CANBLT)
+    {
+        lpGetBltStatus->ddRVal = DD_OK;
+    }
+    else /* DDGBS_ISBLTDONE */
+    {
+        DD_SURFACE_LOCAL*   lpSurfaceLocal = lpGetBltStatus->lpDDSurface;
+        DD_SURFACE_GLOBAL*  lpSurfaceGlobal = lpSurfaceLocal->lpGbl;
+        PVBOXVHWASURFDESC pDesc = (PVBOXVHWASURFDESC)lpSurfaceGlobal->dwReserved1;
+
+        /* ensure we have host cmds processed to update pending blits and flips */
+        vboxVHWACommandCheckHostCmds(pDev);
+
+        if(
+                    ASMAtomicUoReadU32(&pDesc->cPendingBltsSrc)
+                    || ASMAtomicUoReadU32(&pDesc->cPendingBltsDst)
+    //                || ASMAtomicUoReadU32(&pDesc->cPendingFlipsTarg)
+    //                || ASMAtomicUoReadU32(&pDesc->cPendingFlipsCurr)
+                    )
+        {
+            lpGetBltStatus->ddRVal = DDERR_WASSTILLDRAWING;
+        }
+        else
+        {
+            lpGetBltStatus->ddRVal = DD_OK;
+        }
+    }
+
+    return DDHAL_DRIVER_HANDLED;
+}
+
+DWORD APIENTRY DdGetFlipStatus(PDD_GETFLIPSTATUSDATA  lpGetFlipStatus)
+{
+    PPDEV pDev = (PPDEV)lpGetFlipStatus->lpDD->dhpdev;
+    DD_SURFACE_LOCAL*   lpSurfaceLocal = lpGetFlipStatus->lpDDSurface;
+    DD_SURFACE_GLOBAL*  lpSurfaceGlobal = lpSurfaceLocal->lpGbl;
+    PVBOXVHWASURFDESC pDesc = (PVBOXVHWASURFDESC)lpSurfaceGlobal->dwReserved1;
+
+    DISPDBG((0, "%s\n", __FUNCTION__));
+
+    /* ensure we have host cmds processed to update pending blits and flips */
+    vboxVHWACommandCheckHostCmds(pDev);
+
+    if(
+//                ASMAtomicUoReadU32(&pDesc->cPendingBltsSrc)
+//                || ASMAtomicUoReadU32(&pDesc->cPendingBltsDst)
+//                ||
+                ASMAtomicUoReadU32(&pDesc->cPendingFlipsTarg)
+                || ASMAtomicUoReadU32(&pDesc->cPendingFlipsCurr)
+                )
+    {
+        lpGetFlipStatus->ddRVal = DDERR_WASSTILLDRAWING;
+    }
+    else
+    {
+        lpGetFlipStatus->ddRVal = DD_OK;
+    }
+
+//    if(lpGetFlipStatus->dwFlags == DDGFS_CANFLIP)
+//    {
+//        lpGetFlipStatus->ddRVal = DD_OK;
+//    }
+//    else
+//    {
+//        lpGetFlipStatus->ddRVal = DD_OK;
+//    }
+
+    return DDHAL_DRIVER_HANDLED;
+}
+
+DWORD APIENTRY DdSetOverlayPosition(PDD_SETOVERLAYPOSITIONDATA  lpSetOverlayPosition)
+{
+    PPDEV pDev = (PPDEV)lpSetOverlayPosition->lpDD->dhpdev;
+    DD_SURFACE_LOCAL*   lpDestSurfaceLocal = lpSetOverlayPosition->lpDDDestSurface;
+    DD_SURFACE_GLOBAL*  lpDestSurfaceGlobal = lpDestSurfaceLocal->lpGbl;
+    DD_SURFACE_LOCAL*   lpSrcSurfaceLocal = lpSetOverlayPosition->lpDDSrcSurface;
+    DD_SURFACE_GLOBAL*  lpSrcSurfaceGlobal = lpSrcSurfaceLocal->lpGbl;
+    VBOXVHWACMD* pCmd;
+    PVBOXVHWASURFDESC pSrcDesc = (PVBOXVHWASURFDESC)lpSrcSurfaceGlobal->dwReserved1;
+    PVBOXVHWASURFDESC pDestDesc = (PVBOXVHWASURFDESC)lpDestSurfaceGlobal->dwReserved1;
+
+    DISPDBG((0, "%s\n", __FUNCTION__));
+
+    if(pSrcDesc->bHidden)
+    {
+        lpSetOverlayPosition->ddRVal = DDERR_GENERIC;
+        return DDHAL_DRIVER_HANDLED;
+    }
+
+    pCmd = vboxVHWACommandCreate (pDev, VBOXVHWACMD_TYPE_SURF_OVERLAY_SETPOSITION, sizeof(VBOXVHWACMD_SURF_OVERLAY_SETPOSITION));
+    //    int rc = VERR_GENERAL_FAILURE;
+    if(pCmd)
+    {
+        VBOXVHWACMD_SURF_OVERLAY_SETPOSITION * pBody = VBOXVHWACMD_BODY(pCmd, VBOXVHWACMD_SURF_OVERLAY_SETPOSITION);
+
+        memset(pBody, 0, sizeof(VBOXVHWACMD_SURF_OVERLAY_SETPOSITION));
+
+        pBody->u.in.offSrcSurface = (uint64_t)lpSrcSurfaceGlobal->fpVidMem;
+        pBody->u.in.offDstSurface = (uint64_t)lpDestSurfaceGlobal->fpVidMem;
+
+        pBody->u.in.hDstSurf = pDestDesc->hHostHandle;
+        pBody->u.in.hSrcSurf = pSrcDesc->hHostHandle;
+
+        pBody->u.in.xPos = lpSetOverlayPosition->lXPos;
+        pBody->u.in.yPos = lpSetOverlayPosition->lYPos;
+
+        vboxVHWACommandSubmitAsynch(pDev, pCmd, vboxVHWAFreeCmdCompletion, NULL);
+        lpSetOverlayPosition->ddRVal = DD_OK;
+    }
+
+    return DDHAL_DRIVER_HANDLED;
+}
+
+DWORD APIENTRY DdUpdateOverlay(PDD_UPDATEOVERLAYDATA  lpUpdateOverlay)
+{
+    PPDEV pDev = (PPDEV)lpUpdateOverlay->lpDD->dhpdev;
+    DD_SURFACE_LOCAL*   lpDestSurfaceLocal = lpUpdateOverlay->lpDDDestSurface;
+    DD_SURFACE_LOCAL*   lpSrcSurfaceLocal = lpUpdateOverlay->lpDDSrcSurface;
+    DD_SURFACE_GLOBAL*  lpSrcSurfaceGlobal = lpSrcSurfaceLocal->lpGbl;
+    VBOXVHWACMD* pCmd;
+    PVBOXVHWASURFDESC pSrcDesc = (PVBOXVHWASURFDESC)lpSrcSurfaceGlobal->dwReserved1;
+
+    DISPDBG((0, "%s\n", __FUNCTION__));
+
+//    if(pSrcDesc->bHidden)
+//    {
+//        lpUpdateOverlay->ddRVal = DDERR_GENERIC;
+//        return DDHAL_DRIVER_HANDLED;
+//    }
+
+    pCmd = vboxVHWACommandCreate (pDev, VBOXVHWACMD_TYPE_SURF_OVERLAY_UPDATE, sizeof(VBOXVHWACMD_SURF_OVERLAY_UPDATE));
+    //    int rc = VERR_GENERAL_FAILURE;
+    if(pCmd)
+    {
+        VBOXVHWACMD_SURF_OVERLAY_UPDATE * pBody = VBOXVHWACMD_BODY(pCmd, VBOXVHWACMD_SURF_OVERLAY_UPDATE);
+
+        memset(pBody, 0, sizeof(VBOXVHWACMD_SURF_OVERLAY_UPDATE));
+
+        pBody->u.in.offSrcSurface = (uint64_t)lpSrcSurfaceGlobal->fpVidMem;
+
+        pBody->u.in.hSrcSurf = pSrcDesc->hHostHandle;
+
+        vboxVHWAFromRECTL(&pBody->u.in.dstRect, &lpUpdateOverlay->rDest);
+        vboxVHWAFromRECTL(&pBody->u.in.srcRect, &lpUpdateOverlay->rSrc);
+
+        pBody->u.in.flags = vboxVHWAFromDDOVERs(lpUpdateOverlay->dwFlags);
+        vboxVHWAFromDDOVERLAYFX(&pBody->u.in.desc, &lpUpdateOverlay->overlayFX);
+
+        if(lpUpdateOverlay->dwFlags & DDOVER_HIDE)
+        {
+            pSrcDesc->bHidden = true;
+        }
+        else if(lpUpdateOverlay->dwFlags & DDOVER_SHOW)
+        {
+            pSrcDesc->bHidden = false;
+        }
+
+        if(lpDestSurfaceLocal)
+        {
+            DD_SURFACE_GLOBAL* lpDestSurfaceGlobal = lpDestSurfaceLocal->lpGbl;
+            PVBOXVHWASURFDESC pDestDesc = (PVBOXVHWASURFDESC)lpDestSurfaceGlobal->dwReserved1;
+            pBody->u.in.hDstSurf = pDestDesc->hHostHandle;
+            pBody->u.in.offDstSurface = (uint64_t)lpDestSurfaceGlobal->fpVidMem;
+        }
+
+        vboxVHWACommandSubmitAsynch(pDev, pCmd, vboxVHWAFreeCmdCompletion, NULL);
+        lpUpdateOverlay->ddRVal = DD_OK;
+    }
+
+    return DDHAL_DRIVER_HANDLED;
+}
+
+//-----------------------------------------------------------------------------
+// setupRops
+//
+// Build array for supported ROPS
+//-----------------------------------------------------------------------------
+static void
+setupRops(
+    LPBYTE proplist,
+    LPDWORD proptable,
+    int cnt )
+{
+    int         i;
+    DWORD       idx;
+    DWORD       bit;
+    DWORD       rop;
+
+    for(i=0; i<cnt; i++)
+    {
+        rop = proplist[i];
+        idx = rop / 32;
+        bit = 1L << ((DWORD)(rop % 32));
+        proptable[idx] |= bit;
+    }
+
+} // setupRops
+
+//-----------------------------------------------------------------------------
+//
+// Function: __GetDDHALInfo
+//
+// Returns: void
+//
+// Description:
+//
+// Takes a pointer to a partially or fully filled in pThisDisplay and a pointer
+// to an empty DDHALINFO and fills in the DDHALINFO.  This eases porting to NT
+// and means that caps changes are done in only one place.  The pThisDisplay
+// may not be fully constructed here, so you should only:
+// a) Query the registry
+// b) DISPDBG
+// If you need to add anything to pThisDisplay for NT, you should fill it in
+// during the DrvGetDirectDraw call.
+//
+// The problem here is when the code is run on NT.  If there was any other way...
+//
+// The following caps have been found to cause NT to bail....
+// DDCAPS_GDI, DDFXCAPS_BLTMIRRORUPDOWN, DDFXCAPS_BLTMIRRORLEFTRIGHT
+//
+//
+//-----------------------------------------------------------------------------
+
+//
+// use bits to indicate which ROPs you support.
+//
+// DWORD 0, bit 0 == ROP 0
+// DWORD 8, bit 31 == ROP 255
+//
+
+//static DWORD ropsAGP[DD_ROP_SPACE] = { 0 };
+static BYTE ropListNT[] =
+{
+    SRCCOPY >> 16
+//    WHITENESS >> 16,
+//        BLACKNESS >> 16
+};
+
+static DWORD rops[DD_ROP_SPACE] = { 0 };
+
+static bool
+getDDHALInfo(
+    PPDEV pDev,
+    DD_HALINFO* pHALInfo)
+{
+    int i;
+    if(!VBOXVHWA_CAP(pDev, VBOXVHWA_CAPS_BLT) && !VBOXVHWA_CAP(pDev, VBOXVHWA_CAPS_OVERLAY))
+        return false;
+
+    pHALInfo->ddCaps.dwCaps |= vboxVHWAToDDCAPS(pDev->vhwaInfo.caps);
+
+    if(VBOXVHWA_CAP(pDev, VBOXVHWA_CAPS_BLT))
+    {
+        // Setup the ROPS we do.
+        //TODO: hardcoded for now
+        setupRops( ropListNT,
+                     rops,
+                     sizeof(ropListNT)/sizeof(ropListNT[0]));
+    }
+
+//                                | DDCAPS_READSCANLINE
+
+
+    pHALInfo->ddCaps.ddsCaps.dwCaps |= vboxVHWAToDDSCAPS(pDev->vhwaInfo.surfaceCaps);
+
+//disabled
+//    pHALInfo->ddCaps.dwCaps |= DDCAPS_3D           |
+//                               DDCAPS_BLTDEPTHFILL;
+//
+//    pHALInfo->ddCaps.ddsCaps.dwCaps |= DDSCAPS_3DDEVICE |
+//                                       DDSCAPS_ZBUFFER |
+//                                       DDSCAPS_ALPHA;
+    pHALInfo->ddCaps.dwCaps2 = vboxVHWAToDDCAPS2(pDev->vhwaInfo.caps2);
+
+
+
+//#if DX7_TEXMANAGEMENT
+    // We need to set this bit up in order to be able to do
+    // out own texture management
+//    pHALInfo->ddCaps.dwCaps2 |= DDCAPS2_CANMANAGETEXTURE;
+//#if DX8_DDI
+//    pHALInfo->ddCaps.dwCaps2 |= DDCAPS2_CANMANAGERESOURCE;
+//#endif
+//#endif
+
+//#if DX8_DDI
+    // We need to flag we can run in windowed mode, otherwise we
+    // might get restricted by apps to run in fullscreen only
+    pHALInfo->ddCaps.dwCaps2 |= DDCAPS2_CANRENDERWINDOWED;
+
+    // Also permit surfaces wider than the display buffer.
+    pHALInfo->ddCaps.dwCaps2 |= DDCAPS2_WIDESURFACES;
+//#endif
+
+//#if DX8_DDI
+    // We need to flag we support dynamic textures. That is , apps can
+        // lock with high frequency video memory textures without paying a
+        // penalty for it. Since on this sample driver we only support
+        // linear memory formats for textures we don't need to do anything
+        // else for this support. Otherwise we would have to keep two surfaces
+        // for textures created with the DDSCAPS2_HINTDYNAMIC hint in order
+        // to efficiently do the linear<->swizzled transformation or keep the
+        // texture permanantly in an unswizzled state.
+//        pHALInfo->ddCaps.dwCaps2 |= DDCAPS2_DYNAMICTEXTURES;
+    #if DX9_DDI
+        // Notice that dynamic textures MUST be supported in order to instantiate a DX9 device
+    #endif // DX9_DDI
+//#endif
+
+//    pHALInfo->ddCaps.dwFXCaps = 0;
+
+    // P3RX can do:
+    // 1. Stretching/Shrinking
+    // 2. YUV->RGB conversion
+    // 3. Mirroring in X and Y
+    // 4. ColorKeying from a source color and a source color space
+    if(VBOXVHWA_CAP(pDev, VBOXVHWA_CAPS_BLT)
+            && VBOXVHWA_CAP(pDev, VBOXVHWA_CAPS_BLTSTRETCH))
+    {
+        // Special effects caps
+        //TODO: filter them out
+        pHALInfo->ddCaps.dwFXCaps |= DDFXCAPS_BLTSTRETCHY  |
+                                    DDFXCAPS_BLTSTRETCHX  |
+                                    DDFXCAPS_BLTSTRETCHYN |
+                                    DDFXCAPS_BLTSTRETCHXN |
+                                    DDFXCAPS_BLTSHRINKY   |
+                                    DDFXCAPS_BLTSHRINKX   |
+                                    DDFXCAPS_BLTSHRINKYN  |
+                                    DDFXCAPS_BLTSHRINKXN;
+
+        //        DDFXCAPS_BLTARITHSTRETCHY
+        //        DDFXCAPS_BLTARITHSTRETCHYN
+        //        DDFXCAPS_BLTMIRRORLEFTRIGHT
+        //        DDFXCAPS_BLTMIRRORUPDOWN
+        //        DDFXCAPS_BLTROTATION90
+    }
+
+    if(VBOXVHWA_CAP(pDev, VBOXVHWA_CAPS_OVERLAY)
+            && VBOXVHWA_CAP(pDev, VBOXVHWA_CAPS_OVERLAYSTRETCH))
+    {
+        // Special effects caps
+        //TODO: filter them out
+        pHALInfo->ddCaps.dwFXCaps |= DDFXCAPS_OVERLAYSTRETCHY  |
+                                    DDFXCAPS_OVERLAYSTRETCHX  |
+                                    DDFXCAPS_OVERLAYSTRETCHYN |
+                                    DDFXCAPS_OVERLAYSTRETCHXN |
+                                    DDFXCAPS_OVERLAYSHRINKY   |
+                                    DDFXCAPS_OVERLAYSHRINKX   |
+                                    DDFXCAPS_OVERLAYSHRINKYN  |
+                                    DDFXCAPS_OVERLAYSHRINKXN;
+
+        //        DDFXCAPS_OVERLAYARITHSTRETCHY
+        //        DDFXCAPS_OVERLAYARITHSTRETCHYN
+        //        DDFXCAPS_OVERLAYMIRRORLEFTRIGHT
+        //        DDFXCAPS_OVERLAYMIRRORUPDOWN
+
+    }
+
+    if(VBOXVHWA_CAP(pDev, VBOXVHWA_CAPS_BLT)
+            && VBOXVHWA_CAP(pDev, VBOXVHWA_CAPS_BLTFOURCC))
+    {
+        pHALInfo->ddCaps.dwCaps |= DDCAPS_BLTFOURCC;
+
+        // Enable copy blts between Four CC formats for DShow acceleration
+        pHALInfo->ddCaps.dwCaps2 |= DDCAPS2_COPYFOURCC;
+    }
+
+    if((VBOXVHWA_CAP(pDev, VBOXVHWA_CAPS_BLT) || VBOXVHWA_CAP(pDev, VBOXVHWA_CAPS_OVERLAY))
+            && VBOXVHWA_CAP(pDev, VBOXVHWA_CAPS_COLORKEY))
+    {
+        pHALInfo->ddCaps.dwCKeyCaps = vboxVHWAToDDCKEYCAPS(pDev->vhwaInfo.colorKeyCaps);
+    }
+
+//    pHALInfo->ddCaps.dwSVBCaps = DDCAPS_BLT;
+
+//    // We can do a texture from sysmem to video mem.
+//    pHALInfo->ddCaps.dwSVBCKeyCaps |= DDCKEYCAPS_DESTBLT         |
+//                                     DDCKEYCAPS_DESTBLTCLRSPACE;
+    pHALInfo->ddCaps.dwSVBFXCaps = 0;
+
+//    // Fill in the sysmem->vidmem rops (only can copy);
+//    for( i=0;i<DD_ROP_SPACE;i++ )
+//    {
+//        pHALInfo->ddCaps.dwSVBRops[i] = rops[i];
+//    }
+
+
+
+//disabled
+//    pHALInfo->ddCaps.ddsCaps.dwCaps |= DDSCAPS_TEXTURE;
+
+//#if DX7_STEREO
+//    // Report the stereo capability back to runtime
+//    pHALInfo->ddCaps.dwCaps2 |= DDCAPS2_STEREO;
+//    pHALInfo->ddCaps.dwSVCaps = DDSVCAPS_STEREOSEQUENTIAL;
+//#endif
+
+    // Z Buffer is only 16 Bits
+//    pHALInfo->ddCaps.dwZBufferBitDepths = DDBD_16;
+//    pHALInfo->ddCaps.ddsCaps.dwCaps |= DDSCAPS_MIPMAP;
+
+    {
+//#ifdef SUPPORT_VIDEOPORT
+//        // We support 1 video port.  Must set CurrVideoPorts to 0
+//        // We can't do interleaved bobbing yet - maybe in the future.
+//        pHALInfo->ddCaps.dwCaps2 |= DDCAPS2_VIDEOPORT            |
+//                                    DDCAPS2_CANBOBNONINTERLEAVED;
+//
+//        pHALInfo->ddCaps.dwMaxVideoPorts = 1;
+//        pHALInfo->ddCaps.dwCurrVideoPorts = 0;
+//
+//
+//#endif // SUPPORT_VIDEOPORT
+
+        if(VBOXVHWA_CAP(pDev, VBOXVHWA_CAPS_OVERLAY)) /* no overlay support for now */
+        {
+            // Overlay is free to use.
+            pHALInfo->ddCaps.dwMaxVisibleOverlays = pDev->vhwaInfo.numOverlays;
+            pHALInfo->ddCaps.dwCurrVisibleOverlays = 0;
+
+            // Indicates that Perm3 has no stretch ratio limitation
+            pHALInfo->ddCaps.dwMinOverlayStretch = 1;
+            pHALInfo->ddCaps.dwMaxOverlayStretch = 32000;
+        }
+    }
+
+//#ifdef W95_DDRAW
+//#ifdef USE_DD_CONTROL_COLOR
+//    // Enable colour control asc brightness, contrast, gamma.
+//    pHALInfo->ddCaps.dwCaps2 |= DDCAPS2_COLORCONTROLPRIMARY;
+//#endif
+//#endif
+
+
+    // Won't do Video-Sys mem Blits.
+    pHALInfo->ddCaps.dwVSBCaps = 0;
+    pHALInfo->ddCaps.dwVSBCKeyCaps = 0;
+    pHALInfo->ddCaps.dwVSBFXCaps = 0;
+    for( i=0;i<DD_ROP_SPACE;i++ )
+    {
+        pHALInfo->ddCaps.dwVSBRops[i] = 0;
+    }
+
+    // Won't do Sys-Sys mem Blits
+    pHALInfo->ddCaps.dwSSBCaps = 0;
+    pHALInfo->ddCaps.dwSSBCKeyCaps = 0;
+    pHALInfo->ddCaps.dwSSBFXCaps = 0;
+    for( i=0;i<DD_ROP_SPACE;i++ )
+    {
+        pHALInfo->ddCaps.dwSSBRops[i] = 0;
+    }
+
+    //
+    // bit depths supported for alpha and Z
+    //
+//    pHALInfo->ddCaps.dwAlphaBltConstBitDepths = DDBD_2 |
+//                                                DDBD_4 |
+//                                                DDBD_8;
+//
+//    pHALInfo->ddCaps.dwAlphaBltPixelBitDepths = DDBD_1 |
+//                                                DDBD_8;
+//    pHALInfo->ddCaps.dwAlphaBltSurfaceBitDepths = DDBD_1 |
+//                                                  DDBD_2 |
+//                                                  DDBD_4 |
+//                                                  DDBD_8;
+
+//disabled
+//    // No alpha blending for overlays, so I'm not sure what these should be.
+//    // Because we support 32bpp overlays, it's just that you can't use the
+//    // alpha bits for blending. Pass.
+//    pHALInfo->ddCaps.dwAlphaBltConstBitDepths = DDBD_2 |
+//                                                DDBD_4 |
+//                                                DDBD_8;
+//
+//    pHALInfo->ddCaps.dwAlphaBltPixelBitDepths = DDBD_1 |
+//                                                DDBD_8;
+//
+//    pHALInfo->ddCaps.dwAlphaBltSurfaceBitDepths = DDBD_1 |
+//                                                  DDBD_2 |
+//                                                  DDBD_4 |
+//                                                  DDBD_8;
+
+    //
+    // ROPS supported
+    //
+    for( i=0;i<DD_ROP_SPACE;i++ )
+    {
+        pHALInfo->ddCaps.dwRops[i] = rops[i];
+    }
+
+//Reenable:    // For DX5 and beyond we support this new informational callback.
+//    pHALInfo->GetDriverInfo = DdGetDriverInfo;
+//    pHALInfo->dwFlags |= DDHALINFO_GETDRIVERINFOSET;
+//
+//#if DX8_DDI
+//    // Flag our support for a new class of GUIDs that may come through
+//    // GetDriverInfo for DX8 drivers. (This support will be compulsory)
+//    pHALInfo->dwFlags |= DDHALINFO_GETDRIVERINFO2;
+//#endif DX8_DDI
+
+    return true;
+} // getDDHALInfo
+
+static DECLCALLBACK(void) vboxVHWAFreeCmdCompletion(PPDEV ppdev, VBOXVHWACMD * pCmd, void * pContext)
+{
+    vboxVHWACommandFree(ppdev, pCmd);
+}
+
+static DECLCALLBACK(void) vboxVHWASurfBltCompletion(PPDEV ppdev, VBOXVHWACMD * pCmd, void * pContext)
+{
+    VBOXVHWACMD_SURF_BLT * pBody = VBOXVHWACMD_BODY(pCmd, VBOXVHWACMD_SURF_BLT);
+    PVBOXVHWASURFDESC pSrcDesc = (PVBOXVHWASURFDESC)pBody->SrcGuestSurfInfo;
+    PVBOXVHWASURFDESC pDestDesc = (PVBOXVHWASURFDESC)pBody->DstGuestSurfInfo;
+
+    ASMAtomicDecU32(&pSrcDesc->cPendingBltsSrc);
+    ASMAtomicDecU32(&pDestDesc->cPendingBltsDst);
+
+    vboxVHWACommandFree(ppdev, pCmd);
+}
+
+static DECLCALLBACK(void) vboxVHWASurfFlipCompletion(PPDEV ppdev, VBOXVHWACMD * pCmd, void * pContext)
+{
+    VBOXVHWACMD_SURF_FLIP * pBody = VBOXVHWACMD_BODY(pCmd, VBOXVHWACMD_SURF_FLIP);
+    PVBOXVHWASURFDESC pCurrDesc = (PVBOXVHWASURFDESC)pBody->CurrGuestSurfInfo;
+    PVBOXVHWASURFDESC pTargDesc = (PVBOXVHWASURFDESC)pBody->TargGuestSurfInfo;
+
+    ASMAtomicDecU32(&pCurrDesc->cPendingFlipsCurr);
+    ASMAtomicDecU32(&pTargDesc->cPendingFlipsTarg);
+
+    vboxVHWACommandFree(ppdev, pCmd);
+}
+
+#endif
+
 
 
 #endif /* VBOX_WITH_DDRAW */

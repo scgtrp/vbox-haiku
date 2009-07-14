@@ -1,9 +1,10 @@
 /** @file
+ * VBoxMouse - VirtualBox Win32 guest mouse filter driver
  *
- * VBoxGuest -- VirtualBox Win32 guest mouse filter driver
- *
- * Based on a Microsoft DDK sample
- *
+ * Based on a Microsoft DDK sample.
+ */
+
+/*
  * Copyright (C) 2006-2007 Sun Microsystems, Inc.
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
@@ -24,13 +25,13 @@
 #define VBOXMOUSE_H
 
 #include <iprt/assert.h>
-__BEGIN_DECLS
+RT_C_DECLS_BEGIN
 #include "ntddk.h"
 #include "kbdmou.h"
 #include <ntddmou.h>
 #include <ntdd8042.h>
-__END_DECLS
-#include <VBox/VBoxGuest.h>
+RT_C_DECLS_END
+#include <VBox/VMMDev.h>
 
 #define VBOXMOUSE_POOL_TAG (ULONG) 'oMBV'
 #undef ExAllocatePool
@@ -150,7 +151,7 @@ typedef struct _DEVICE_EXTENSION
 //
 // Prototypes
 //
-__BEGIN_DECLS
+RT_C_DECLS_BEGIN
 
 NTSTATUS
 VBoxMouse_AddDevice(
@@ -225,6 +226,6 @@ VBoxDispatchIo(
     IN PIRP              Irp
     );
 
-__END_DECLS
+RT_C_DECLS_END
 
 #endif  // VBOXMOUSE_H

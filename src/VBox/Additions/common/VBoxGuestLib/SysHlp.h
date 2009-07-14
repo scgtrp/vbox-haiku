@@ -1,7 +1,6 @@
+/* $Revision$ */
 /** @file
- *
- * VBoxGuestLib - A support library for VirtualBox guest additions:
- * System dependent helpers internal header
+ * VBoxGuestLibR0 - System dependent helpers internal header.
  */
 
 /*
@@ -20,8 +19,8 @@
  * additional information or have any questions.
  */
 
-#ifndef __SYSHLP__H
-#define __SYSHLP__H
+#ifndef __VBoxGuestLib_SysHlp_h
+#define __VBoxGuestLib_SysHlp_h
 
 #ifdef RT_OS_WINDOWS
 # if (_MSC_VER >= 1400) && !defined(VBOX_WITH_PATCHED_DDK)
@@ -31,18 +30,18 @@
 #  define _InterlockedCompareExchange    _InterlockedCompareExchange_StupidDDKVsCompilerCrap
 #  define _InterlockedAddLargeStatistic  _InterlockedAddLargeStatistic_StupidDDKVsCompilerCrap
 #  pragma warning(disable : 4163)
-__BEGIN_DECLS
+RT_C_DECLS_BEGIN
 #  include <ntddk.h>
-__END_DECLS
+RT_C_DECLS_END
 #  pragma warning(default : 4163)
 #  undef  _InterlockedExchange
 #  undef  _InterlockedExchangeAdd
 #  undef  _InterlockedCompareExchange
 #  undef  _InterlockedAddLargeStatistic
 # else
-__BEGIN_DECLS
+RT_C_DECLS_BEGIN
 #  include <ntddk.h>
-__END_DECLS
+RT_C_DECLS_END
 # endif
 /* XP DDK #defines ExFreePool to ExFreePoolWithTag. The latter does not exist on NT4, so...
  * The same for ExAllocatePool.
@@ -56,20 +55,14 @@ typedef struct _VBGLDRIVER
 #ifdef RT_OS_WINDOWS
     PDEVICE_OBJECT pDeviceObject;
     PFILE_OBJECT pFileObject;
-#elif defined (RT_OS_LINUX)
-    void *opaque;
 #elif defined (RT_OS_OS2)
     uint32_t u32Session; /**< just for sanity checking. */
-#elif defined (RT_OS_SOLARIS)
+#else /* PORTME */
     void *pvOpaque;
-#elif defined (RT_OS_FREEBSD)
-    void *pvOpaque;
-#else
-# error "Port me"
 #endif
 } VBGLDRIVER;
 
-int vbglLockLinear (void **ppvCtx, void *pv, uint32_t u32Size, bool fWriteAccess);
+int vbglLockLinear (void **ppvCtx, void *pv, uint32_t u32Size, bool fWriteAccess, uint32_t fFlags);
 void vbglUnlockLinear (void *pvCtx, void *pv, uint32_t u32Size);
 
 
@@ -107,4 +100,5 @@ void vbglDriverClose (VBGLDRIVER *pDriver);
 
 #endif
 
-#endif /* __SYSHLP__H */
+#endif /* !__VBoxGuestLib_SysHlp_h */
+

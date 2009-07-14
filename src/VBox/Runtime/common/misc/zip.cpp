@@ -53,6 +53,8 @@
 #endif
 
 #include <iprt/zip.h>
+#include "internal/iprt.h"
+
 #include <iprt/alloc.h>
 #include <iprt/assert.h>
 #include <iprt/err.h>
@@ -110,11 +112,7 @@ typedef const RTZIPLZFHDR *PCRTZIPLZFHDR;
 typedef struct RTZIPCOMP
 {
     /** Output buffer. */
-#ifdef RTZIP_USE_LZF
-    uint8_t             abBuffer[128 * 1024];
-#else
-    uint8_t             abBuffer[64 * 1024];
-#endif
+    uint8_t             abBuffer[_128K];
     /** Compression output consumer. */
     PFNRTZIPOUT         pfnOut;
     /** User argument for the callback. */
@@ -182,7 +180,7 @@ typedef struct RTZIPCOMP
 typedef struct RTZIPDECOMP
 {
     /** Input buffer. */
-    uint8_t             abBuffer[1024 * 64];
+    uint8_t             abBuffer[_128K];
     /** Decompression input producer. */
     PFNRTZIPIN          pfnIn;
     /** User argument for the callback. */
@@ -1346,6 +1344,7 @@ RTDECL(int)     RTZipCompCreate(PRTZIPCOMP *ppZip, void *pvUser, PFNRTZIPOUT pfn
         RTMemFree(pZip);
     return rc;
 }
+RT_EXPORT_SYMBOL(RTZipCompCreate);
 
 
 /**
@@ -1362,6 +1361,7 @@ RTDECL(int)     RTZipCompress(PRTZIPCOMP pZip, const void *pvBuf, size_t cbBuf)
         return VINF_SUCCESS;
     return pZip->pfnCompress(pZip, pvBuf, cbBuf);
 }
+RT_EXPORT_SYMBOL(RTZipCompress);
 
 
 /**
@@ -1375,6 +1375,7 @@ RTDECL(int)     RTZipCompFinish(PRTZIPCOMP pZip)
 {
     return pZip->pfnFinish(pZip);
 }
+RT_EXPORT_SYMBOL(RTZipCompFinish);
 
 
 /**
@@ -1398,6 +1399,7 @@ RTDECL(int)     RTZipCompDestroy(PRTZIPCOMP pZip)
     RTMemFree(pZip);
     return VINF_SUCCESS;
 }
+RT_EXPORT_SYMBOL(RTZipCompDestroy);
 
 
 /**
@@ -1456,6 +1458,7 @@ RTDECL(int)     RTZipDecompCreate(PRTZIPDECOMP *ppZip, void *pvUser, PFNRTZIPIN 
     *ppZip = pZip;
     return VINF_SUCCESS;
 }
+RT_EXPORT_SYMBOL(RTZipDecompCreate);
 
 
 /**
@@ -1567,6 +1570,8 @@ RTDECL(int)     RTZipDecompress(PRTZIPDECOMP pZip, void *pvBuf, size_t cbBuf, si
      */
     return pZip->pfnDecompress(pZip, pvBuf, cbBuf, pcbWritten);
 }
+RT_EXPORT_SYMBOL(RTZipDecompress);
+
 
 /**
  * Destroys the decompressor instance.
@@ -1589,5 +1594,5 @@ RTDECL(int)     RTZipDecompDestroy(PRTZIPDECOMP pZip)
     RTMemFree(pZip);
     return rc;
 }
-
+RT_EXPORT_SYMBOL(RTZipDecompDestroy);
 

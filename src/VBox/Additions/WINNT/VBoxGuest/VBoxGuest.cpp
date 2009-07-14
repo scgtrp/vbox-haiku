@@ -73,15 +73,15 @@ static VOID     vboxIdleThread(PVOID context);
 }
 
 #ifdef VBOX_WITH_HGCM
-DECLVBGL(void) VBoxHGCMCallback(VMMDevHGCMRequestHeader *pHeader, void *pvData, uint32_t u32Data);
+DECLVBGL(int) VBoxHGCMCallback(VMMDevHGCMRequestHeader *pHeader, void *pvData, uint32_t u32Data);
 #endif
 
 /*******************************************************************************
 *   Exported Functions                                                         *
 *******************************************************************************/
-__BEGIN_DECLS
+RT_C_DECLS_BEGIN
 ULONG DriverEntry(PDRIVER_OBJECT pDrvObj, PUNICODE_STRING pRegPath);
-__END_DECLS
+RT_C_DECLS_END
 
 #ifdef ALLOC_PRAGMA
 #pragma alloc_text (INIT, DriverEntry)
@@ -398,7 +398,7 @@ NTSTATUS VBoxGuestClose(PDEVICE_OBJECT pDevObj, PIRP pIrp)
                     Info.u32ClientID = pSession->aHGCMClientIds[i];
                     pSession->aHGCMClientIds[i] = 0;
                     dprintf(("VBoxGuestClose: disconnecting HGCM client id %#RX32\n", Info.u32ClientID));
-                    VbglHGCMDisconnect(&Info, VBoxHGCMCallback, pDevExt, RT_INDEFINITE_WAIT);
+                    VbglR0HGCMInternalDisconnect(&Info, VBoxHGCMCallback, pDevExt, RT_INDEFINITE_WAIT);
                 }
             RTMemFree(pSession);
         }
@@ -414,8 +414,8 @@ NTSTATUS VBoxGuestClose(PDEVICE_OBJECT pDevObj, PIRP pIrp)
 }
 
 #ifdef VBOX_WITH_HGCM
-void VBoxHGCMCallbackWorker (VMMDevHGCMRequestHeader *pHeader, PVBOXGUESTDEVEXT pDevExt,
-                             uint32_t u32Timeout, bool fInterruptible)
+static void VBoxHGCMCallbackWorker (VMMDevHGCMRequestHeader *pHeader, PVBOXGUESTDEVEXT pDevExt,
+                                    uint32_t u32Timeout, bool fInterruptible, KPROCESSOR_MODE ProcessorMode)
 {
     /* Possible problem with request completion right between the fu32Flags check and KeWaitForSingleObject
      * call; introduce a timeout to make sure we don't wait indefinitely.
@@ -433,7 +433,7 @@ void VBoxHGCMCallbackWorker (VMMDevHGCMRequestHeader *pHeader, PVBOXGUESTDEVEXT 
     {
         /* Specifying UserMode so killing the user process will abort the wait. */
         NTSTATUS rc = KeWaitForSingleObject (&pDevExt->keventNotification, Executive,
-                                             UserMode,
+                                             ProcessorMode,
                                              fInterruptible ? TRUE : FALSE, /* Alertable */
                                              &timeout
                                             );
@@ -453,21 +453,32 @@ void VBoxHGCMCallbackWorker (VMMDevHGCMRequestHeader *pHeader, PVBOXGUESTDEVEXT 
     return;
 }
 
-DECLVBGL(void) VBoxHGCMCallback (VMMDevHGCMRequestHeader *pHeader, void *pvData, uint32_t u32Data)
+DECLVBGL(int) VBoxHGCMCallback (VMMDevHGCMRequestHeader *pHeader, void *pvData, uint32_t u32Data)
 {
     PVBOXGUESTDEVEXT pDevExt = (PVBOXGUESTDEVEXT)pvData;
 
     dprintf(("VBoxHGCMCallback\n"));
-    VBoxHGCMCallbackWorker (pHeader, pDevExt, u32Data, false);
+    VBoxHGCMCallbackWorker (pHeader, pDevExt, u32Data, false, UserMode);
+    return VINF_SUCCESS;
 }
 
-DECLVBGL(void) VBoxHGCMCallbackInterruptible (VMMDevHGCMRequestHeader *pHeader, void *pvData,
-                                              uint32_t u32Data)
+DECLVBGL(int) VBoxHGCMCallbackKernelMode (VMMDevHGCMRequestHeader *pHeader, void *pvData, uint32_t u32Data)
+{
+    PVBOXGUESTDEVEXT pDevExt = (PVBOXGUESTDEVEXT)pvData;
+
+    dprintf(("VBoxHGCMCallback\n"));
+    VBoxHGCMCallbackWorker (pHeader, pDevExt, u32Data, false, KernelMode);
+    return VINF_SUCCESS;
+}
+
+DECLVBGL(int) VBoxHGCMCallbackInterruptible (VMMDevHGCMRequestHeader *pHeader, void *pvData,
+                                             uint32_t u32Data)
 {
     PVBOXGUESTDEVEXT pDevExt = (PVBOXGUESTDEVEXT)pvData;
 
     dprintf(("VBoxHGCMCallbackInterruptible\n"));
-    VBoxHGCMCallbackWorker (pHeader, pDevExt, u32Data, true);
+    VBoxHGCMCallbackWorker (pHeader, pDevExt, u32Data, true, UserMode);
+    return VINF_SUCCESS;
 }
 
 NTSTATUS vboxHGCMVerifyIOBuffers (PIO_STACK_LOCATION pStack, unsigned cb)
@@ -1009,7 +1020,8 @@ NTSTATUS VBoxGuestDeviceControl(PDEVICE_OBJECT pDevObj, PIRP pIrp)
 
             dprintf(("a) ptr->u32ClientID = %d\n", ptr->u32ClientID));
 
-            int rc = VbglHGCMConnect (ptr, VBoxHGCMCallback, pDevExt, RT_INDEFINITE_WAIT);
+            int rc = VbglR0HGCMInternalConnect (ptr, pIrp->RequestorMode == KernelMode? VBoxHGCMCallbackKernelMode :VBoxHGCMCallback,
+                                                pDevExt, RT_INDEFINITE_WAIT);
 
             dprintf(("b) ptr->u32ClientID = %d\n", ptr->u32ClientID));
 
@@ -1053,7 +1065,7 @@ NTSTATUS VBoxGuestDeviceControl(PDEVICE_OBJECT pDevObj, PIRP pIrp)
                         VBoxGuestHGCMDisconnectInfo Info;
                         Info.result = 0;
                         Info.u32ClientID = ptr->u32ClientID;
-                        VbglHGCMDisconnect(&Info, VBoxHGCMCallback, pDevExt, RT_INDEFINITE_WAIT);
+                        VbglR0HGCMInternalDisconnect(&Info, pIrp->RequestorMode == KernelMode? VBoxHGCMCallbackKernelMode :VBoxHGCMCallback, pDevExt, RT_INDEFINITE_WAIT);
                         Status = STATUS_UNSUCCESSFUL;
                         break;
                     }
@@ -1132,7 +1144,7 @@ NTSTATUS VBoxGuestDeviceControl(PDEVICE_OBJECT pDevObj, PIRP pIrp)
              * flag is set, returns.
              */
 
-            int rc = VbglHGCMDisconnect (ptr, VBoxHGCMCallback, pDevExt, RT_INDEFINITE_WAIT);
+            int rc = VbglR0HGCMInternalDisconnect (ptr, pIrp->RequestorMode == KernelMode? VBoxHGCMCallbackKernelMode :VBoxHGCMCallback, pDevExt, RT_INDEFINITE_WAIT);
 
             if (RT_FAILURE(rc))
             {
@@ -1180,8 +1192,11 @@ NTSTATUS VBoxGuestDeviceControl(PDEVICE_OBJECT pDevObj, PIRP pIrp)
             }
 
             VBoxGuestHGCMCallInfo *ptr = (VBoxGuestHGCMCallInfo *)pBuf;
+            uint32_t fFlags = pIrp->RequestorMode == KernelMode ? VBGLR0_HGCMCALL_F_KERNEL : VBGLR0_HGCMCALL_F_USER;
 
-            rc = VbglHGCMCall32(ptr, VBoxHGCMCallback, pDevExt, RT_INDEFINITE_WAIT);
+            rc = VbglR0HGCMInternalCall32(ptr, pStack->Parameters.DeviceIoControl.InputBufferLength, fFlags,
+                                          pIrp->RequestorMode == KernelMode? VBoxHGCMCallbackKernelMode :VBoxHGCMCallback,
+                                          pDevExt, RT_INDEFINITE_WAIT);
 
             if (RT_FAILURE(rc))
             {
@@ -1212,8 +1227,11 @@ NTSTATUS VBoxGuestDeviceControl(PDEVICE_OBJECT pDevObj, PIRP pIrp)
             }
 
             VBoxGuestHGCMCallInfo *ptr = (VBoxGuestHGCMCallInfo *)pBuf;
+            uint32_t fFlags = pIrp->RequestorMode == KernelMode ? VBGLR0_HGCMCALL_F_KERNEL : VBGLR0_HGCMCALL_F_USER;
 
-            rc = VbglHGCMCall (ptr, VBoxHGCMCallback, pDevExt, RT_INDEFINITE_WAIT);
+            rc = VbglR0HGCMInternalCall (ptr, pStack->Parameters.DeviceIoControl.InputBufferLength, fFlags,
+                                         pIrp->RequestorMode == KernelMode? VBoxHGCMCallbackKernelMode :VBoxHGCMCallback,
+                                         pDevExt, RT_INDEFINITE_WAIT);
 
             if (RT_FAILURE(rc))
             {
@@ -1229,6 +1247,7 @@ NTSTATUS VBoxGuestDeviceControl(PDEVICE_OBJECT pDevObj, PIRP pIrp)
 
         case VBOXGUEST_IOCTL_HGCM_CALL_TIMED(0): /* (The size isn't relevant on NT.) */
         {
+            /* This IOCTL is not used by shared folders, so VBoxHGCMCallbackKernelMode is not used. */
             dprintf(("VBoxGuest::VBoxGuestDeviceControl: VBOXGUEST_IOCTL_HGCM_CALL_TIMED\n"));
 
             Status = vboxHGCMVerifyIOBuffers (pStack,
@@ -1244,17 +1263,20 @@ NTSTATUS VBoxGuestDeviceControl(PDEVICE_OBJECT pDevObj, PIRP pIrp)
             VBoxGuestHGCMCallInfo *ptr = &pInfo->info;
 
             int rc;
+            uint32_t fFlags = pIrp->RequestorMode == KernelMode ? VBGLR0_HGCMCALL_F_KERNEL : VBGLR0_HGCMCALL_F_USER;
             if (pInfo->fInterruptible)
             {
                 dprintf(("VBoxGuest::VBoxGuestDeviceControl: calling VBoxHGCMCall interruptible, timeout %lu ms\n",
                          pInfo->u32Timeout));
-                rc = VbglHGCMCall (ptr, VBoxHGCMCallbackInterruptible, pDevExt, pInfo->u32Timeout);
+                rc = VbglR0HGCMInternalCall (ptr, pStack->Parameters.DeviceIoControl.InputBufferLength, fFlags,
+                                             VBoxHGCMCallbackInterruptible, pDevExt, pInfo->u32Timeout);
             }
             else
             {
                 dprintf(("VBoxGuest::VBoxGuestDeviceControl: calling VBoxHGCMCall, timeout %lu ms\n",
                          pInfo->u32Timeout));
-                rc = VbglHGCMCall (ptr, VBoxHGCMCallback, pDevExt, pInfo->u32Timeout);
+                rc = VbglR0HGCMInternalCall (ptr, pStack->Parameters.DeviceIoControl.InputBufferLength, fFlags,
+                                             VBoxHGCMCallback, pDevExt, pInfo->u32Timeout);
             }
 
             if (RT_FAILURE(rc))
@@ -1680,7 +1702,7 @@ VOID reserveHypervisorMemory(PVBOXGUESTDEVEXT pDevExt)
             // 4MB more than we are actually supposed to in order to guarantee that. Maybe we
             // can come up with a less lavish algorithm lateron.
             PHYSICAL_ADDRESS physAddr;
-            physAddr.QuadPart = HYPERVISOR_PHYSICAL_START;
+            physAddr.QuadPart = VBOXGUEST_HYPERVISOR_PHYSICAL_START;
             pDevExt->hypervisorMappingSize = hypervisorSize + 0x400000;
             pDevExt->hypervisorMapping     = MmMapIoSpace(physAddr,
                                                           pDevExt->hypervisorMappingSize,

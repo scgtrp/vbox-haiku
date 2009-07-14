@@ -117,7 +117,148 @@ static const char * const g_apszVTxExitReasons[MAX_EXITREASON_STAT] =
 /** Exit reason descriptions for AMD-V, used to describe statistics. */
 static const char * const g_apszAmdVExitReasons[MAX_EXITREASON_STAT] =
 {
-    /** @todo fill in these. */
+    EXIT_REASON(SVM_EXIT_READ_CR0                   ,  0, "Read CR0."),
+    EXIT_REASON(SVM_EXIT_READ_CR1                   ,  1, "Read CR1."),
+    EXIT_REASON(SVM_EXIT_READ_CR2                   ,  2, "Read CR2."),
+    EXIT_REASON(SVM_EXIT_READ_CR3                   ,  3, "Read CR3."),
+    EXIT_REASON(SVM_EXIT_READ_CR4                   ,  4, "Read CR4."),
+    EXIT_REASON(SVM_EXIT_READ_CR5                   ,  5, "Read CR5."),
+    EXIT_REASON(SVM_EXIT_READ_CR6                   ,  6, "Read CR6."),
+    EXIT_REASON(SVM_EXIT_READ_CR7                   ,  7, "Read CR7."),
+    EXIT_REASON(SVM_EXIT_READ_CR8                   ,  8, "Read CR8."),
+    EXIT_REASON(SVM_EXIT_READ_CR9                   ,  9, "Read CR9."),
+    EXIT_REASON(SVM_EXIT_READ_CR10                  , 10, "Read CR10."),
+    EXIT_REASON(SVM_EXIT_READ_CR11                  , 11, "Read CR11."),
+    EXIT_REASON(SVM_EXIT_READ_CR12                  , 12, "Read CR12."),
+    EXIT_REASON(SVM_EXIT_READ_CR13                  , 13, "Read CR13."),
+    EXIT_REASON(SVM_EXIT_READ_CR14                  , 14, "Read CR14."),
+    EXIT_REASON(SVM_EXIT_READ_CR15                  , 15, "Read CR15."),
+    EXIT_REASON(SVM_EXIT_WRITE_CR0                  , 16, "Write CR0."),
+    EXIT_REASON(SVM_EXIT_WRITE_CR1                  , 17, "Write CR1."),
+    EXIT_REASON(SVM_EXIT_WRITE_CR2                  , 18, "Write CR2."),
+    EXIT_REASON(SVM_EXIT_WRITE_CR3                  , 19, "Write CR3."),
+    EXIT_REASON(SVM_EXIT_WRITE_CR4                  , 20, "Write CR4."),
+    EXIT_REASON(SVM_EXIT_WRITE_CR5                  , 21, "Write CR5."),
+    EXIT_REASON(SVM_EXIT_WRITE_CR6                  , 22, "Write CR6."),
+    EXIT_REASON(SVM_EXIT_WRITE_CR7                  , 23, "Write CR7."),
+    EXIT_REASON(SVM_EXIT_WRITE_CR8                  , 24, "Write CR8."),
+    EXIT_REASON(SVM_EXIT_WRITE_CR9                  , 25, "Write CR9."),
+    EXIT_REASON(SVM_EXIT_WRITE_CR10                 , 26, "Write CR10."),
+    EXIT_REASON(SVM_EXIT_WRITE_CR11                 , 27, "Write CR11."),
+    EXIT_REASON(SVM_EXIT_WRITE_CR12                 , 28, "Write CR12."),
+    EXIT_REASON(SVM_EXIT_WRITE_CR13                 , 29, "Write CR13."),
+    EXIT_REASON(SVM_EXIT_WRITE_CR14                 , 30, "Write CR14."),
+    EXIT_REASON(SVM_EXIT_WRITE_CR15                 , 31, "Write CR15."),
+    EXIT_REASON(SVM_EXIT_READ_DR0                   , 32, "Read DR0."),
+    EXIT_REASON(SVM_EXIT_READ_DR1                   , 33, "Read DR1."),
+    EXIT_REASON(SVM_EXIT_READ_DR2                   , 34, "Read DR2."),
+    EXIT_REASON(SVM_EXIT_READ_DR3                   , 35, "Read DR3."),
+    EXIT_REASON(SVM_EXIT_READ_DR4                   , 36, "Read DR4."),
+    EXIT_REASON(SVM_EXIT_READ_DR5                   , 37, "Read DR5."),
+    EXIT_REASON(SVM_EXIT_READ_DR6                   , 38, "Read DR6."),
+    EXIT_REASON(SVM_EXIT_READ_DR7                   , 39, "Read DR7."),
+    EXIT_REASON(SVM_EXIT_READ_DR8                   , 40, "Read DR8."),
+    EXIT_REASON(SVM_EXIT_READ_DR9                   , 41, "Read DR9."),
+    EXIT_REASON(SVM_EXIT_READ_DR10                  , 42, "Read DR10."),
+    EXIT_REASON(SVM_EXIT_READ_DR11                  , 43, "Read DR11"),
+    EXIT_REASON(SVM_EXIT_READ_DR12                  , 44, "Read DR12."),
+    EXIT_REASON(SVM_EXIT_READ_DR13                  , 45, "Read DR13."),
+    EXIT_REASON(SVM_EXIT_READ_DR14                  , 46, "Read DR14."),
+    EXIT_REASON(SVM_EXIT_READ_DR15                  , 47, "Read DR15."),
+    EXIT_REASON(SVM_EXIT_WRITE_DR0                  , 48, "Write DR0."),
+    EXIT_REASON(SVM_EXIT_WRITE_DR1                  , 49, "Write DR1."),
+    EXIT_REASON(SVM_EXIT_WRITE_DR2                  , 50, "Write DR2."),
+    EXIT_REASON(SVM_EXIT_WRITE_DR3                  , 51, "Write DR3."),
+    EXIT_REASON(SVM_EXIT_WRITE_DR4                  , 52, "Write DR4."),
+    EXIT_REASON(SVM_EXIT_WRITE_DR5                  , 53, "Write DR5."),
+    EXIT_REASON(SVM_EXIT_WRITE_DR6                  , 54, "Write DR6."),
+    EXIT_REASON(SVM_EXIT_WRITE_DR7                  , 55, "Write DR7."),
+    EXIT_REASON(SVM_EXIT_WRITE_DR8                  , 56, "Write DR8."),
+    EXIT_REASON(SVM_EXIT_WRITE_DR9                  , 57, "Write DR9."),
+    EXIT_REASON(SVM_EXIT_WRITE_DR10                 , 58, "Write DR10."),
+    EXIT_REASON(SVM_EXIT_WRITE_DR11                 , 59, "Write DR11."),
+    EXIT_REASON(SVM_EXIT_WRITE_DR12                 , 60, "Write DR12."),
+    EXIT_REASON(SVM_EXIT_WRITE_DR13                 , 61, "Write DR13."),
+    EXIT_REASON(SVM_EXIT_WRITE_DR14                 , 62, "Write DR14."),
+    EXIT_REASON(SVM_EXIT_WRITE_DR15                 , 63, "Write DR15."),
+    EXIT_REASON(SVM_EXIT_EXCEPTION_0                , 64, "Exception Vector 0  (0x0)."),
+    EXIT_REASON(SVM_EXIT_EXCEPTION_1                , 65, "Exception Vector 1  (0x1)."),
+    EXIT_REASON(SVM_EXIT_EXCEPTION_2                , 66, "Exception Vector 2  (0x2)."),
+    EXIT_REASON(SVM_EXIT_EXCEPTION_3                , 67, "Exception Vector 3  (0x3)."),
+    EXIT_REASON(SVM_EXIT_EXCEPTION_4                , 68, "Exception Vector 4  (0x4)."),
+    EXIT_REASON(SVM_EXIT_EXCEPTION_5                , 69, "Exception Vector 5  (0x5)."),
+    EXIT_REASON(SVM_EXIT_EXCEPTION_6                , 70, "Exception Vector 6  (0x6)."),
+    EXIT_REASON(SVM_EXIT_EXCEPTION_7                , 71, "Exception Vector 7  (0x7)."),
+    EXIT_REASON(SVM_EXIT_EXCEPTION_8                , 72, "Exception Vector 8  (0x8)."),
+    EXIT_REASON(SVM_EXIT_EXCEPTION_9                , 73, "Exception Vector 9  (0x9)."),
+    EXIT_REASON(SVM_EXIT_EXCEPTION_A                , 74, "Exception Vector 10 (0xA)."),
+    EXIT_REASON(SVM_EXIT_EXCEPTION_B                , 75, "Exception Vector 11 (0xB)."),
+    EXIT_REASON(SVM_EXIT_EXCEPTION_C                , 76, "Exception Vector 12 (0xC)."),
+    EXIT_REASON(SVM_EXIT_EXCEPTION_D                , 77, "Exception Vector 13 (0xD)."),
+    EXIT_REASON(SVM_EXIT_EXCEPTION_E                , 78, "Exception Vector 14 (0xE)."),
+    EXIT_REASON(SVM_EXIT_EXCEPTION_F                , 79, "Exception Vector 15 (0xF)."),
+    EXIT_REASON(SVM_EXIT_EXCEPTION_10               , 80, "Exception Vector 16 (0x10)."),
+    EXIT_REASON(SVM_EXIT_EXCEPTION_11               , 81, "Exception Vector 17 (0x11)."),
+    EXIT_REASON(SVM_EXIT_EXCEPTION_12               , 82, "Exception Vector 18 (0x12)."),
+    EXIT_REASON(SVM_EXIT_EXCEPTION_13               , 83, "Exception Vector 19 (0x13)."),
+    EXIT_REASON(SVM_EXIT_EXCEPTION_14               , 84, "Exception Vector 20 (0x14)."),
+    EXIT_REASON(SVM_EXIT_EXCEPTION_15               , 85, "Exception Vector 22 (0x15)."),
+    EXIT_REASON(SVM_EXIT_EXCEPTION_16               , 86, "Exception Vector 22 (0x16)."),
+    EXIT_REASON(SVM_EXIT_EXCEPTION_17               , 87, "Exception Vector 23 (0x17)."),
+    EXIT_REASON(SVM_EXIT_EXCEPTION_18               , 88, "Exception Vector 24 (0x18)."),
+    EXIT_REASON(SVM_EXIT_EXCEPTION_19               , 89, "Exception Vector 25 (0x19)."),
+    EXIT_REASON(SVM_EXIT_EXCEPTION_1A               , 90, "Exception Vector 26 (0x1A)."),
+    EXIT_REASON(SVM_EXIT_EXCEPTION_1B               , 91, "Exception Vector 27 (0x1B)."),
+    EXIT_REASON(SVM_EXIT_EXCEPTION_1C               , 92, "Exception Vector 28 (0x1C)."),
+    EXIT_REASON(SVM_EXIT_EXCEPTION_1D               , 93, "Exception Vector 29 (0x1D)."),
+    EXIT_REASON(SVM_EXIT_EXCEPTION_1E               , 94, "Exception Vector 30 (0x1E)."),
+    EXIT_REASON(SVM_EXIT_EXCEPTION_1F               , 95, "Exception Vector 31 (0x1F)."),
+    EXIT_REASON(SVM_EXIT_EXCEPTION_INTR             , 96, "Physical maskable interrupt."),
+    EXIT_REASON(SVM_EXIT_EXCEPTION_NMI              , 97, "Physical non-maskable interrupt."),
+    EXIT_REASON(SVM_EXIT_EXCEPTION_SMI              , 98, "System management interrupt."),
+    EXIT_REASON(SVM_EXIT_EXCEPTION_INIT             , 99, "Physical INIT signal."),
+    EXIT_REASON(SVM_EXIT_EXCEPTION_VINTR            ,100, "Visual interrupt."),
+    EXIT_REASON(SVM_EXIT_EXCEPTION_CR0_SEL_WRITE    ,101, "Write to CR0 that changed any bits other than CR0.TS or CR0.MP."),
+    EXIT_REASON(SVM_EXIT_EXCEPTION_IDTR_READ        ,102, "Read IDTR"),
+    EXIT_REASON(SVM_EXIT_EXCEPTION_GDTR_READ        ,103, "Read GDTR"),
+    EXIT_REASON(SVM_EXIT_EXCEPTION_LDTR_READ        ,104, "Read LDTR."),
+    EXIT_REASON(SVM_EXIT_EXCEPTION_TR_READ          ,105, "Read TR."),
+    EXIT_REASON(SVM_EXIT_EXCEPTION_TR_READ          ,106, "Write IDTR."),
+    EXIT_REASON(SVM_EXIT_EXCEPTION_TR_READ          ,107, "Write GDTR."),
+    EXIT_REASON(SVM_EXIT_EXCEPTION_TR_READ          ,108, "Write LDTR."),
+    EXIT_REASON(SVM_EXIT_EXCEPTION_TR_READ          ,109, "Write TR."),
+    EXIT_REASON(SVM_EXIT_RDTSC                      ,110, "RDTSC instruction."),
+    EXIT_REASON(SVM_EXIT_RDPMC                      ,111, "RDPMC instruction."),
+    EXIT_REASON(SVM_EXIT_PUSHF                      ,112, "PUSHF instruction."),
+    EXIT_REASON(SVM_EXIT_POPF                       ,113, "POPF instruction."),
+    EXIT_REASON(SVM_EXIT_CPUID                      ,114, "CPUID instruction."),
+    EXIT_REASON(SVM_EXIT_RSM                        ,115, "RSM instruction."),
+    EXIT_REASON(SVM_EXIT_IRET                       ,116, "IRET instruction."),
+    EXIT_REASON(SVM_EXIT_SWINT                      ,117, "Software interrupt (INTn instructions)."),
+    EXIT_REASON(SVM_EXIT_INVD                       ,118, "INVD instruction."),
+    EXIT_REASON(SVM_EXIT_PAUSE                      ,119, "PAUSE instruction."),
+    EXIT_REASON(SVM_EXIT_HLT                        ,120, "HLT instruction."),
+    EXIT_REASON(SVM_EXIT_INVLPG                     ,121, "INVLPG instruction."),
+    EXIT_REASON(SVM_EXIT_INVLPGA                    ,122, "INVLPGA instruction."),
+    EXIT_REASON(SVM_EXIT_IOIO                       ,123, "IN/OUT accessing protected port (EXITINFO1 field provides more information)."),
+    EXIT_REASON(SVM_EXIT_MSR                        ,124, "RDMSR or WRMSR access to protected MSR."),
+    EXIT_REASON(SVM_EXIT_TASK_SWITCH                ,125, "Task switch."),
+    EXIT_REASON(SVM_EXIT_FERR_FREEZE                ,126, "FP legacy handling enabled, and processor is frozen in an x87/mmx instruction waiting for an interrupt"),
+    EXIT_REASON(SVM_EXIT_TASK_SHUTDOWN              ,127, "Shutdown."),
+    EXIT_REASON(SVM_EXIT_TASK_VMRUN                 ,128, "VMRUN instruction."),
+    EXIT_REASON(SVM_EXIT_TASK_VMCALL                ,129, "VMCALL instruction."),
+    EXIT_REASON(SVM_EXIT_TASK_VMLOAD                ,130, "VMLOAD instruction."),
+    EXIT_REASON(SVM_EXIT_TASK_VMSAVE                ,131, "VMSAVE instruction."),
+    EXIT_REASON(SVM_EXIT_TASK_STGI                  ,132, "STGI instruction."),
+    EXIT_REASON(SVM_EXIT_TASK_CLGI                  ,133, "CLGI instruction."),
+    EXIT_REASON(SVM_EXIT_TASK_SKINIT                ,134, "SKINIT instruction."),
+    EXIT_REASON(SVM_EXIT_TASK_RDTSCP                ,135, "RDTSCP instruction."),
+    EXIT_REASON(SVM_EXIT_TASK_ICEBP                 ,136, "ICEBP instruction."),
+    EXIT_REASON(SVM_EXIT_TASK_WBINVD                ,137, "WBINVD instruction."),
+    EXIT_REASON(SVM_EXIT_TASK_MONITOR               ,138, "MONITOR instruction."),
+    EXIT_REASON(SVM_EXIT_MWAIT_UNCOND               ,139, "MWAIT instruction unconditional."),
+    EXIT_REASON(SVM_EXIT_MWAIT_ARMED                ,140, "MWAIT instruction when armed."),
+    EXIT_REASON(SVM_EXIT_MWAIT_NPF                  ,1024, "Nested paging: host-level page fault occurred (EXITINFO1 contains fault errorcode; EXITINFO2 contains the guest physical address causing the fault)."),
     EXIT_REASON_NIL()
 };
 # undef EXIT_REASON
@@ -144,8 +285,8 @@ VMMR3DECL(int) HWACCMR3Init(PVM pVM)
     /*
      * Assert alignment and sizes.
      */
-    AssertRelease(!(RT_OFFSETOF(VM, hwaccm.s) & 31));
-    AssertRelease(sizeof(pVM->hwaccm.s) <= sizeof(pVM->hwaccm.padding));
+    AssertCompileMemberAlignment(VM, hwaccm.s, 32);
+    AssertCompile(sizeof(pVM->hwaccm.s) <= sizeof(pVM->hwaccm.padding));
 
     /* Some structure checks. */
     AssertReleaseMsg(RT_OFFSETOF(SVM_VMCB, u8Reserved3) == 0xC0, ("u8Reserved3 offset = %x\n", RT_OFFSETOF(SVM_VMCB, u8Reserved3)));
@@ -177,7 +318,6 @@ VMMR3DECL(int) HWACCMR3Init(PVM pVM)
     pVM->hwaccm.s.vmx.fEnabled   = false;
     pVM->hwaccm.s.svm.fEnabled   = false;
 
-    pVM->hwaccm.s.fActive        = false;
     pVM->hwaccm.s.fNestedPaging  = false;
 
     /* Disabled by default. */
@@ -235,6 +375,10 @@ VMMR3DECL(int) HWACCMR3Init(PVM pVM)
     AssertLogRelRCReturn(rc, rc);
 #endif
 
+    /* Max number of resume loops. */
+    rc = CFGMR3QueryU32Def(pHWVirtExt, "MaxResumeLoops", &pVM->hwaccm.s.cMaxResumeLoops, 0 /* set by R0 later */);
+    AssertRC(rc);
+
     return VINF_SUCCESS;
 }
 
@@ -247,6 +391,13 @@ VMMR3DECL(int) HWACCMR3Init(PVM pVM)
 VMMR3DECL(int) HWACCMR3InitCPU(PVM pVM)
 {
     LogFlow(("HWACCMR3InitCPU\n"));
+
+    for (unsigned i=0;i<pVM->cCPUs;i++)
+    {
+        PVMCPU pVCpu = &pVM->aCpus[i];
+
+        pVCpu->hwaccm.s.fActive = false;
+    }
 
 #ifdef VBOX_WITH_STATISTICS
     /*
@@ -307,6 +458,9 @@ VMMR3DECL(int) HWACCMR3InitCPU(PVM pVM)
         HWACCM_REG_COUNTER(&pVCpu->hwaccm.s.StatExitCpuid,              "/HWACCM/CPU%d/Exit/Instr/Cpuid");
         HWACCM_REG_COUNTER(&pVCpu->hwaccm.s.StatExitRdtsc,              "/HWACCM/CPU%d/Exit/Instr/Rdtsc");
         HWACCM_REG_COUNTER(&pVCpu->hwaccm.s.StatExitRdpmc,              "/HWACCM/CPU%d/Exit/Instr/Rdpmc");
+        HWACCM_REG_COUNTER(&pVCpu->hwaccm.s.StatExitRdmsr,              "/HWACCM/CPU%d/Exit/Instr/Rdmsr");
+        HWACCM_REG_COUNTER(&pVCpu->hwaccm.s.StatExitWrmsr,              "/HWACCM/CPU%d/Exit/Instr/Wrmsr");
+        HWACCM_REG_COUNTER(&pVCpu->hwaccm.s.StatExitMwait,              "/HWACCM/CPU%d/Exit/Instr/Mwait");
         HWACCM_REG_COUNTER(&pVCpu->hwaccm.s.StatExitDRxWrite,           "/HWACCM/CPU%d/Exit/Instr/DR/Write");
         HWACCM_REG_COUNTER(&pVCpu->hwaccm.s.StatExitDRxRead,            "/HWACCM/CPU%d/Exit/Instr/DR/Read");
         HWACCM_REG_COUNTER(&pVCpu->hwaccm.s.StatExitCLTS,               "/HWACCM/CPU%d/Exit/Instr/CLTS");
@@ -324,6 +478,7 @@ VMMR3DECL(int) HWACCMR3InitCPU(PVM pVM)
         HWACCM_REG_COUNTER(&pVCpu->hwaccm.s.StatExitIOStringRead,       "/HWACCM/CPU%d/Exit/IO/ReadString");
         HWACCM_REG_COUNTER(&pVCpu->hwaccm.s.StatExitIrqWindow,          "/HWACCM/CPU%d/Exit/IrqWindow");
         HWACCM_REG_COUNTER(&pVCpu->hwaccm.s.StatExitMaxResume,          "/HWACCM/CPU%d/Exit/MaxResume");
+        HWACCM_REG_COUNTER(&pVCpu->hwaccm.s.StatExitPreemptPending,     "/HWACCM/CPU%d/Exit/PreemptPending");
 
         HWACCM_REG_COUNTER(&pVCpu->hwaccm.s.StatSwitchGuestIrq,         "/HWACCM/CPU%d/Switch/IrqPending");
         HWACCM_REG_COUNTER(&pVCpu->hwaccm.s.StatSwitchToR3,             "/HWACCM/CPU%d/Switch/ToR3");
@@ -341,6 +496,8 @@ VMMR3DECL(int) HWACCMR3InitCPU(PVM pVM)
         HWACCM_REG_COUNTER(&pVCpu->hwaccm.s.StatNoFlushTLBWorldSwitch,  "/HWACCM/CPU%d/Flush/TLB/Skipped");
         HWACCM_REG_COUNTER(&pVCpu->hwaccm.s.StatFlushASID,              "/HWACCM/CPU%d/Flush/TLB/ASID");
         HWACCM_REG_COUNTER(&pVCpu->hwaccm.s.StatFlushTLBInvlpga,        "/HWACCM/CPU%d/Flush/TLB/PhysInvl");
+        HWACCM_REG_COUNTER(&pVCpu->hwaccm.s.StatTlbShootdown,           "/HWACCM/CPU%d/Flush/Shootdown/Page");
+        HWACCM_REG_COUNTER(&pVCpu->hwaccm.s.StatTlbShootdownFlush,      "/HWACCM/CPU%d/Flush/Shootdown/TLB");
 
         HWACCM_REG_COUNTER(&pVCpu->hwaccm.s.StatTSCOffset,              "/HWACCM/CPU%d/TSC/Offset");
         HWACCM_REG_COUNTER(&pVCpu->hwaccm.s.StatTSCIntercept,           "/HWACCM/CPU%d/TSC/Intercept");
@@ -370,10 +527,12 @@ VMMR3DECL(int) HWACCMR3InitCPU(PVM pVM)
             const char * const *papszDesc = ASMIsIntelCpu() ? &g_apszVTxExitReasons[0] : &g_apszAmdVExitReasons[0];
             for (int j=0;j<MAX_EXITREASON_STAT;j++)
             {
-                rc = STAMR3RegisterF(pVM, &pVCpu->hwaccm.s.paStatExitReason[j], STAMTYPE_COUNTER, STAMVISIBILITY_USED, STAMUNIT_OCCURENCES,
-                                     papszDesc[j] ? papszDesc[j] : "Exit reason",
-                                     "/HWACCM/CPU%d/Exit/Reason/%02x", i, j);
-                AssertRC(rc);
+                if (papszDesc[j])
+                {
+                    rc = STAMR3RegisterF(pVM, &pVCpu->hwaccm.s.paStatExitReason[j], STAMTYPE_COUNTER, STAMVISIBILITY_USED, STAMUNIT_OCCURENCES,
+                                        papszDesc[j], "/HWACCM/CPU%d/Exit/Reason/%02x", i, j);
+                    AssertRC(rc);
+                }
             }
             rc = STAMR3RegisterF(pVM, &pVCpu->hwaccm.s.StatExitReasonNPF, STAMTYPE_COUNTER, STAMVISIBILITY_USED, STAMUNIT_OCCURENCES, "Nested page fault", "/HWACCM/CPU%d/Exit/Reason/#NPF", i);
             AssertRC(rc);
@@ -384,6 +543,19 @@ VMMR3DECL(int) HWACCMR3InitCPU(PVM pVM)
 # else
         Assert(pVCpu->hwaccm.s.paStatExitReasonR0 != NIL_RTR0PTR);
 # endif
+
+        rc = MMHyperAlloc(pVM, sizeof(STAMCOUNTER) * 256, 8, MM_TAG_HWACCM, (void **)&pVCpu->hwaccm.s.paStatInjectedIrqs);
+        AssertRCReturn(rc, rc);
+        pVCpu->hwaccm.s.paStatInjectedIrqsR0 = MMHyperR3ToR0(pVM, pVCpu->hwaccm.s.paStatInjectedIrqs);
+# ifdef VBOX_WITH_2X_4GB_ADDR_SPACE
+        Assert(pVCpu->hwaccm.s.paStatInjectedIrqsR0 != NIL_RTR0PTR || !VMMIsHwVirtExtForced(pVM));
+# else
+        Assert(pVCpu->hwaccm.s.paStatInjectedIrqsR0 != NIL_RTR0PTR);
+# endif
+        for (unsigned j = 0; j < 255; j++)
+            STAMR3RegisterF(pVM, &pVCpu->hwaccm.s.paStatInjectedIrqs[j], STAMTYPE_COUNTER, STAMVISIBILITY_USED, STAMUNIT_OCCURENCES, "Forwarded interrupts.",
+                            (j < 0x20) ? "/HWACCM/CPU%d/Interrupt/Trap/%02X" : "/HWACCM/CPU%d/Interrupt/IRQ/%02X", i, j);
+
     }
 #endif /* VBOX_WITH_STATISTICS */
 
@@ -416,9 +588,6 @@ static void hwaccmR3DisableRawMode(PVM pVM)
     SELMR3DisableMonitoring(pVM);
     TRPMR3DisableMonitoring(pVM);
 
-    /* The hidden selector registers are now valid. */
-    CPUMSetHiddenSelRegsValid(pVM, true);
-
     /* Disable the switcher code (safety precaution). */
     VMMR3DisableSwitcher(pVM);
 
@@ -429,7 +598,12 @@ static void hwaccmR3DisableRawMode(PVM pVM)
     VMMR3DisableSwitcher(pVM);
 
     /* Reinit the paging mode to force the new shadow mode. */
-    PGMR3ChangeMode(pVM, PGMMODE_REAL);
+    for (unsigned i=0;i<pVM->cCPUs;i++)
+    {
+        PVMCPU pVCpu = &pVM->aCpus[i];
+
+        PGMR3ChangeMode(pVM, pVCpu, PGMMODE_REAL);
+    }
 }
 
 /**
@@ -456,13 +630,15 @@ VMMR3DECL(int) HWACCMR3InitFinalizeR0(PVM pVM)
         return VINF_SUCCESS;    /* nothing to do */
 
     /* Enable VT-x or AMD-V on all host CPUs. */
-    rc = SUPCallVMMR0Ex(pVM->pVMR0, VMMR0_DO_HWACC_ENABLE, 0, NULL);
+    rc = SUPR3CallVMMR0Ex(pVM->pVMR0, 0 /*idCpu*/, VMMR0_DO_HWACC_ENABLE, 0, NULL);
     if (RT_FAILURE(rc))
     {
-        LogRel(("HWACCMR3InitFinalize: SUPCallVMMR0Ex VMMR0_DO_HWACC_ENABLE failed with %Rrc\n", rc));
+        LogRel(("HWACCMR3InitFinalize: SUPR3CallVMMR0Ex VMMR0_DO_HWACC_ENABLE failed with %Rrc\n", rc));
         return rc;
     }
     Assert(!pVM->fHWACCMEnabled || VMMIsHwVirtExtForced(pVM));
+
+    pVM->hwaccm.s.fHasIoApic = PDMHasIoApic(pVM);
 
     if (pVM->hwaccm.s.vmx.fSupported)
     {
@@ -825,7 +1001,7 @@ VMMR3DECL(int) HWACCMR3InitFinalizeR0(PVM pVM)
                 pVM->hwaccm.s.vmx.pNonPagingModeEPTPageTable = NULL;
             }
 
-            rc = SUPCallVMMR0Ex(pVM->pVMR0, VMMR0_DO_HWACC_SETUP_VM, 0, NULL);
+            rc = SUPR3CallVMMR0Ex(pVM->pVMR0, 0 /*idCpu*/, VMMR0_DO_HWACC_SETUP_VM, 0, NULL);
             AssertRC(rc);
             if (rc == VINF_SUCCESS)
             {
@@ -853,7 +1029,7 @@ VMMR3DECL(int) HWACCMR3InitFinalizeR0(PVM pVM)
                 if (pVM->hwaccm.s.fNestedPaging)
                 {
                     LogRel(("HWACCM: Enabled nested paging\n"));
-                    LogRel(("HWACCM: EPT root page                 = %RHp\n", PGMGetHyperCR3(pVM)));
+                    LogRel(("HWACCM: EPT root page                 = %RHp\n", PGMGetHyperCR3(VMMGetCpu(pVM))));
                 }
                 if (pVM->hwaccm.s.vmx.fVPID)
                     LogRel(("HWACCM: Enabled VPID\n"));
@@ -933,7 +1109,7 @@ VMMR3DECL(int) HWACCMR3InitFinalizeR0(PVM pVM)
             if (pVM->hwaccm.s.svm.u32Features & AMD_CPUID_SVM_FEATURE_EDX_NESTED_PAGING)
                 pVM->hwaccm.s.fNestedPaging = pVM->hwaccm.s.fAllowNestedPaging;
 
-            rc = SUPCallVMMR0Ex(pVM->pVMR0, VMMR0_DO_HWACC_SETUP_VM, 0, NULL);
+            rc = SUPR3CallVMMR0Ex(pVM->pVMR0, 0 /*idCpu*/, VMMR0_DO_HWACC_SETUP_VM, 0, NULL);
             AssertRC(rc);
             if (rc == VINF_SUCCESS)
             {
@@ -986,9 +1162,10 @@ VMMR3DECL(void) HWACCMR3Relocate(PVM pVM)
         for (unsigned i=0;i<pVM->cCPUs;i++)
         {
             PVMCPU pVCpu = &pVM->aCpus[i];
-            /* @todo SMP */
-            pVCpu->hwaccm.s.enmShadowMode            = PGMGetShadowMode(pVM);
-            pVCpu->hwaccm.s.vmx.enmLastSeenGuestMode = PGMGetGuestMode(pVM);
+
+            pVCpu->hwaccm.s.enmShadowMode            = PGMGetShadowMode(pVCpu);
+            Assert(pVCpu->hwaccm.s.vmx.enmCurrGuestMode == PGMGetGuestMode(pVCpu));
+            pVCpu->hwaccm.s.vmx.enmCurrGuestMode     = PGMGetGuestMode(pVCpu);
         }
     }
 #if HC_ARCH_BITS == 32 && defined(VBOX_ENABLE_64_BITS_GUESTS) && !defined(VBOX_WITH_HYBRID_32BIT_KERNEL)
@@ -1050,16 +1227,16 @@ VMMR3DECL(bool) HWACCMR3IsAllowed(PVM pVM)
  * This is called by PGM.
  *
  * @param   pVM            The VM to operate on.
+ * @param   pVCpu          The VMCPU to operate on.
  * @param   enmShadowMode  New shadow paging mode.
  * @param   enmGuestMode   New guest paging mode.
  */
-VMMR3DECL(void) HWACCMR3PagingModeChanged(PVM pVM, PGMMODE enmShadowMode, PGMMODE enmGuestMode)
+VMMR3DECL(void) HWACCMR3PagingModeChanged(PVM pVM, PVMCPU pVCpu, PGMMODE enmShadowMode, PGMMODE enmGuestMode)
 {
     /* Ignore page mode changes during state loading. */
-    if (VMR3GetState(pVM) == VMSTATE_LOADING)
+    if (VMR3GetState(pVCpu->pVMR3) == VMSTATE_LOADING)
         return;
 
-    PVMCPU pVCpu = VMMGetCpu(pVM);
     pVCpu->hwaccm.s.enmShadowMode = enmShadowMode;
 
     if (   pVM->hwaccm.s.vmx.fEnabled
@@ -1070,7 +1247,7 @@ VMMR3DECL(void) HWACCMR3PagingModeChanged(PVM pVM, PGMMODE enmShadowMode, PGMMOD
         {
             PCPUMCTX pCtx;
 
-            pCtx = CPUMQueryGuestCtxPtr(pVM);
+            pCtx = CPUMQueryGuestCtxPtr(pVCpu);
 
             /* After a real mode switch to protected mode we must force
              * CPL to 0. Our real mode emulation had to set it to 3.
@@ -1134,12 +1311,21 @@ VMMR3DECL(int) HWACCMR3TermCPU(PVM pVM)
     {
         PVMCPU pVCpu = &pVM->aCpus[i];
 
+#ifdef VBOX_WITH_STATISTICS
         if (pVCpu->hwaccm.s.paStatExitReason)
         {
             MMHyperFree(pVM, pVCpu->hwaccm.s.paStatExitReason);
             pVCpu->hwaccm.s.paStatExitReason   = NULL;
             pVCpu->hwaccm.s.paStatExitReasonR0 = NIL_RTR0PTR;
         }
+        if (pVCpu->hwaccm.s.paStatInjectedIrqs)
+        {
+            MMHyperFree(pVM, pVCpu->hwaccm.s.paStatInjectedIrqs);
+            pVCpu->hwaccm.s.paStatInjectedIrqs   = NULL;
+            pVCpu->hwaccm.s.paStatInjectedIrqsR0 = NIL_RTR0PTR;
+        }
+#endif
+
 #ifdef VBOX_WITH_CRASHDUMP_MAGIC
         memset(pVCpu->hwaccm.s.vmx.VMCSCache.aMagic, 0, sizeof(pVCpu->hwaccm.s.vmx.VMCSCache.aMagic));
         pVCpu->hwaccm.s.vmx.VMCSCache.uMagic = 0;
@@ -1174,6 +1360,7 @@ VMMR3DECL(void) HWACCMR3Reset(PVM pVM)
         pVCpu->hwaccm.s.vmx.cr0_mask = 0;
         pVCpu->hwaccm.s.vmx.cr4_mask = 0;
 
+        pVCpu->hwaccm.s.fActive        = false;
         pVCpu->hwaccm.s.Event.fPending = false;
 
         /* Reset state information for real-mode emulation in VT-x. */
@@ -1245,11 +1432,11 @@ VMMR3DECL(bool) HWACCMR3CanExecuteGuest(PVM pVM, PCPUMCTX pCtx)
     /* AMD-V supports real & protected mode with or without paging. */
     if (pVM->hwaccm.s.svm.fEnabled)
     {
-        pVM->hwaccm.s.fActive = true;
+        pVCpu->hwaccm.s.fActive = true;
         return true;
     }
 
-    pVM->hwaccm.s.fActive = false;
+    pVCpu->hwaccm.s.fActive = false;
 
     /* Note! The context supplied by REM is partial. If we add more checks here, be sure to verify that REM provides this info! */
 #ifdef HWACCM_VMX_EMULATE_REALMODE
@@ -1273,12 +1460,10 @@ VMMR3DECL(bool) HWACCMR3CanExecuteGuest(PVM pVM, PCPUMCTX pCtx)
         }
         else
         {
-            PGMMODE enmGuestMode = PGMGetGuestMode(pVM);
+            PGMMODE enmGuestMode = PGMGetGuestMode(pVCpu);
             /* Verify the requirements for executing code in protected mode. VT-x can't handle the CPU state right after a switch
              * from real to protected mode. (all sorts of RPL & DPL assumptions)
              */
-            PVMCPU pVCpu = VMMGetCpu(pVM);
-
             if (    pVCpu->hwaccm.s.vmx.enmLastSeenGuestMode == PGMMODE_REAL
                 &&  enmGuestMode >= PGMMODE_PROTECTED)
             {
@@ -1376,7 +1561,7 @@ VMMR3DECL(bool) HWACCMR3CanExecuteGuest(PVM pVM, PCPUMCTX pCtx)
         if ((pCtx->cr4 & mask) != 0)
             return false;
 
-        pVM->hwaccm.s.fActive = true;
+        pVCpu->hwaccm.s.fActive = true;
         return true;
     }
 
@@ -1408,11 +1593,11 @@ VMMR3DECL(void) HWACCMR3NotifyEmulated(PVMCPU pVCpu)
  * Checks if we are currently using hardware accelerated raw mode.
  *
  * @returns boolean
- * @param   pVM         The VM to operate on.
+ * @param   pVCpu        The VMCPU to operate on.
  */
-VMMR3DECL(bool) HWACCMR3IsActive(PVM pVM)
+VMMR3DECL(bool) HWACCMR3IsActive(PVMCPU pVCpu)
 {
-    return pVM->hwaccm.s.fActive;
+    return pVCpu->hwaccm.s.fActive;
 }
 
 /**
@@ -1444,22 +1629,74 @@ VMMR3DECL(bool) HWACCMR3IsVPIDActive(PVM pVM)
  * @returns boolean
  * @param   pVM         The VM to operate on.
  */
-VMMR3DECL(bool) HWACCMR3IsEventPending(PVM pVM)
+VMMR3DECL(bool) HWACCMR3IsEventPending(PVMCPU pVCpu)
 {
-    /* @todo SMP */
-    return HWACCMIsEnabled(pVM) && pVM->aCpus[0].hwaccm.s.Event.fPending;
+    return HWACCMIsEnabled(pVCpu->pVMR3) && pVCpu->hwaccm.s.Event.fPending;
 }
 
+/**
+ * Restart an I/O instruction that was refused in ring-0
+ *
+ * @returns VBox status code
+ * @param   pVM         The VM to operate on.
+ * @param   pVCpu       The VMCPU to operate on.
+ * @param   pCtx        VCPU register context
+ */
+VMMR3DECL(int)  HWACCMR3RestartPendingIOInstr(PVM pVM, PVMCPU pVCpu, PCPUMCTX pCtx)
+{
+    HWACCMPENDINGIO enmType = pVCpu->hwaccm.s.PendingIO.enmType;
+    int rc;
+
+    pVCpu->hwaccm.s.PendingIO.enmType = HWACCMPENDINGIO_INVALID;
+
+    if (    pVCpu->hwaccm.s.PendingIO.GCPtrRip != pCtx->rip
+        ||  enmType  == HWACCMPENDINGIO_INVALID)
+        return VERR_NOT_FOUND;
+
+    switch (enmType)
+    {
+    case HWACCMPENDINGIO_PORT_READ:
+    {
+        uint32_t uAndVal = pVCpu->hwaccm.s.PendingIO.s.Port.uAndVal;
+        uint32_t u32Val  = 0;
+
+        rc = IOMIOPortRead(pVM, pVCpu->hwaccm.s.PendingIO.s.Port.uPort, 
+                           &u32Val, 
+                           pVCpu->hwaccm.s.PendingIO.s.Port.cbSize);
+        if (IOM_SUCCESS(rc))
+        {
+            /* Write back to the EAX register. */
+            pCtx->eax = (pCtx->eax & ~uAndVal) | (u32Val & uAndVal);
+            pCtx->rip = pVCpu->hwaccm.s.PendingIO.GCPtrRipNext;
+        }
+        break;
+    }
+
+    case HWACCMPENDINGIO_PORT_WRITE:
+        rc = IOMIOPortWrite(pVM, pVCpu->hwaccm.s.PendingIO.s.Port.uPort, 
+                            pCtx->eax & pVCpu->hwaccm.s.PendingIO.s.Port.uAndVal, 
+                            pVCpu->hwaccm.s.PendingIO.s.Port.cbSize);
+        if (IOM_SUCCESS(rc))
+            pCtx->rip = pVCpu->hwaccm.s.PendingIO.GCPtrRipNext;
+        break;
+
+    default:
+        AssertFailed();
+        return VERR_INTERNAL_ERROR;
+    }
+
+    return rc;
+}
 
 /**
- * Inject an NMI into a running VM
+ * Inject an NMI into a running VM (only VCPU 0!)
  *
  * @returns boolean
  * @param   pVM         The VM to operate on.
  */
 VMMR3DECL(int)  HWACCMR3InjectNMI(PVM pVM)
 {
-    pVM->hwaccm.s.fInjectNMI = true;
+    VMCPU_FF_SET(&pVM->aCpus[0], VMCPU_FF_INTERRUPT_NMI);
     return VINF_SUCCESS;
 }
 

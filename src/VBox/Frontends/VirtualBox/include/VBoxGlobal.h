@@ -24,6 +24,7 @@
 #define __VBoxGlobal_h__
 
 #include "COMDefs.h"
+#include "VBox/com/Guid.h"
 
 #include "VBoxGlobalSettings.h"
 #include "VBoxMedium.h"
@@ -50,47 +51,47 @@ class QToolButton;
 class VBoxMachineStateChangeEvent : public QEvent
 {
 public:
-    VBoxMachineStateChangeEvent (const QUuid &aId, KMachineState aState)
+    VBoxMachineStateChangeEvent (const QString &aId, KMachineState aState)
         : QEvent ((QEvent::Type) VBoxDefs::MachineStateChangeEventType)
         , id (aId), state (aState)
         {}
 
-    const QUuid id;
+    const QString id;
     const KMachineState state;
 };
 
 class VBoxMachineDataChangeEvent : public QEvent
 {
 public:
-    VBoxMachineDataChangeEvent (const QUuid &aId)
+    VBoxMachineDataChangeEvent (const QString &aId)
         : QEvent ((QEvent::Type) VBoxDefs::MachineDataChangeEventType)
         , id (aId)
         {}
 
-    const QUuid id;
+    const QString id;
 };
 
 class VBoxMachineRegisteredEvent : public QEvent
 {
 public:
-    VBoxMachineRegisteredEvent (const QUuid &aId, bool aRegistered)
+    VBoxMachineRegisteredEvent (const QString &aId, bool aRegistered)
         : QEvent ((QEvent::Type) VBoxDefs::MachineRegisteredEventType)
         , id (aId), registered (aRegistered)
         {}
 
-    const QUuid id;
+    const QString id;
     const bool registered;
 };
 
 class VBoxSessionStateChangeEvent : public QEvent
 {
 public:
-    VBoxSessionStateChangeEvent (const QUuid &aId, KSessionState aState)
+    VBoxSessionStateChangeEvent (const QString &aId, KSessionState aState)
         : QEvent ((QEvent::Type) VBoxDefs::SessionStateChangeEventType)
         , id (aId), state (aState)
         {}
 
-    const QUuid id;
+    const QString id;
     const KSessionState state;
 };
 
@@ -100,7 +101,7 @@ public:
 
     enum What { Taken, Discarded, Changed };
 
-    VBoxSnapshotEvent (const QUuid &aMachineId, const QUuid &aSnapshotId,
+    VBoxSnapshotEvent (const QString &aMachineId, const QString &aSnapshotId,
                        What aWhat)
         : QEvent ((QEvent::Type) VBoxDefs::SnapshotEventType)
         , what (aWhat)
@@ -109,8 +110,8 @@ public:
 
     const What what;
 
-    const QUuid machineId;
-    const QUuid snapshotId;
+    const QString machineId;
+    const QString snapshotId;
 };
 
 class VBoxCanShowRegDlgEvent : public QEvent
@@ -232,7 +233,8 @@ public:
         process.setProcessState (QProcess::NotRunning);
 #ifdef Q_WS_X11
         int status;
-        waitpid(process.pid(), &status, 0);
+        if (process.pid() > 0)
+            waitpid(process.pid(), &status, 0);
 #endif
         return result;
     }
@@ -263,6 +265,11 @@ public:
 
     bool isValid() { return mValid; }
 
+    static QString qtRTVersionString();
+    static uint qtRTVersion();
+    static QString qtCTVersionString();
+    static uint qtCTVersion();
+
     QString versionString() { return mVerString; }
 
     CVirtualBox virtualBox() const { return mVBox; }
@@ -284,7 +291,7 @@ public:
     void trayIconShowSelector();
     bool trayIconInstall();
 #endif
-    QUuid managedVMUuid() const { return vmUuid; }
+    QString managedVMUuid() const { return vmUuid; }
 
     VBoxDefs::RenderMode vmRenderMode() const { return vm_render_mode; }
     const char *vmRenderModeStr() const { return vm_render_mode_str; }
@@ -292,9 +299,17 @@ public:
 #ifdef VBOX_WITH_DEBUGGER_GUI
     bool isDebuggerEnabled() const { return mDbgEnabled; }
     bool isDebuggerAutoShowEnabled() const { return mDbgAutoShow; }
+    bool isDebuggerAutoShowCommandLineEnabled() const { return mDbgAutoShowCommandLine; }
+    bool isDebuggerAutoShowStatisticsEnabled() const { return mDbgAutoShowStatistics; }
     RTLDRMOD getDebuggerModule() const { return mhVBoxDbg; }
+
+    bool isStartPausedEnabled() const { return mStartPaused; }
 #else
     bool isDebuggerAutoShowEnabled() const { return false; }
+    bool isDebuggerAutoShowCommandLineEnabled() const { return false; }
+    bool isDebuggerAutoShowStatisticsEnabled() const { return false; }
+
+    bool isStartPausedEnabled() const { return false; }
 #endif
 
     /* VBox enum to/from string/icon/color convertors */
@@ -583,8 +598,7 @@ public:
     QString toolTip (const CUSBDevice &aDevice) const;
     QString toolTip (const CUSBDeviceFilter &aFilter) const;
 
-    QString detailsReport (const CMachine &aMachine, bool aIsNewVM,
-                           bool aWithLinks);
+    QString detailsReport (const CMachine &aMachine, bool aWithLinks);
 
     QString platformInfo();
 
@@ -600,12 +614,12 @@ public:
     void checkForAutoConvertedSettingsAfterRefresh()
     { checkForAutoConvertedSettings (true); }
 
-    CSession openSession (const QUuid &aId, bool aExisting = false);
+    CSession openSession (const QString &aId, bool aExisting = false);
 
     /** Shortcut to openSession (aId, true). */
-    CSession openExistingSession (const QUuid &aId) { return openSession (aId, true); }
+    CSession openExistingSession (const QString &aId) { return openSession (aId, true); }
 
-    bool startMachine (const QUuid &id);
+    bool startMachine (const QString &id);
 
     void startEnumeratingMedia();
 
@@ -625,7 +639,7 @@ public:
 
     void addMedium (const VBoxMedium &);
     void updateMedium (const VBoxMedium &);
-    void removeMedium (VBoxDefs::MediaType, const QUuid &);
+    void removeMedium (VBoxDefs::MediaType, const QString &);
 
     bool findMedium (const CMedium &, VBoxMedium &) const;
 
@@ -709,26 +723,6 @@ public:
 
     static QString systemLanguageId();
 
-    static QString getExistingDirectory (const QString &aDir, QWidget *aParent,
-                                         const QString &aCaption = QString::null,
-                                         bool aDirOnly = TRUE,
-                                         bool resolveSymlinks = TRUE);
-
-    static QString getSaveFileName (const QString &aStartWith, const QString &aFilters, QWidget *aParent,
-                                    const QString &aCaption, QString *aSelectedFilter = NULL,
-                                    bool aResolveSymLinks = true);
-
-    static QString getOpenFileName (const QString &aStartWith, const QString &aFilters, QWidget *aParent,
-                                    const QString &aCaption, QString *aSelectedFilter = NULL,
-                                    bool aResolveSymLinks = true);
-
-    static QStringList getOpenFileNames (const QString &aStartWith, const QString &aFilters, QWidget *aParent,
-                                         const QString &aCaption, QString *aSelectedFilter = NULL,
-                                         bool aResolveSymLinks = true,
-                                         bool aSingleFile = false);
-
-    static QString getFirstExistingDir (const QString &);
-
     static bool activateWindow (WId aWId, bool aSwitchDesktop = true);
 
     static QString removeAccelMark (const QString &aText);
@@ -786,7 +780,7 @@ signals:
     void mediumUpdated (const VBoxMedium &);
 
     /** Emitted when the media is removed using #removeMedia(). */
-    void mediumRemoved (VBoxDefs::MediaType, const QUuid &);
+    void mediumRemoved (VBoxDefs::MediaType, const QString &);
 
     /* signals emitted when the VirtualBox callback is called by the server
      * (note that currently these signals are emitted only when the application
@@ -843,7 +837,7 @@ private:
 #endif
     VBoxUpdateDlg *mUpdDlg;
 
-    QUuid vmUuid;
+    QString vmUuid;
 
 #ifdef VBOX_GUI_WITH_SYSTRAY
     bool mIsTrayMenu : 1; /*< Tray icon active/desired? */
@@ -864,8 +858,15 @@ private:
     /** Whether to show the debugger automatically with the console.
      * Use --debug or the env.var. VBOX_GUI_DBG_AUTO_SHOW to enable. */
     bool mDbgAutoShow;
+    /** Whether to show the command line window when mDbgAutoShow is set. */
+    bool mDbgAutoShowCommandLine;
+    /** Whether to show the statistics window when mDbgAutoShow is set. */
+    bool mDbgAutoShowStatistics;
     /** VBoxDbg module handle. */
     RTLDRMOD mhVBoxDbg;
+
+    /** Whether to start the VM in paused state or not. */
+    bool mStartPaused;
 #endif
 
 #if defined (Q_WS_WIN32)
@@ -910,8 +911,6 @@ private:
     QString mUserDefinedPortName;
 
     QPixmap mWarningIcon, mErrorIcon;
-
-    mutable bool mDetailReportTemplatesReady;
 
     friend VBoxGlobal &vboxGlobal();
     friend class VBoxCallback;

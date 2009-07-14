@@ -41,8 +41,9 @@
 #include <iprt/assert.h>
 #include <iprt/err.h>
 #include <iprt/test.h>
+#include <iprt/ministring_cpp.h>
 
-#include <stdlib.h>
+#include <stdlib.h> /** @todo use our random. */
 
 
 
@@ -925,26 +926,111 @@ static void testStrStr(RTTEST hTest)
 }
 
 
+void testMinistring(RTTEST hTest)
+{
+    RTTestSub(hTest, "class ministring");
+
+#define CHECK(expr) \
+    do { \
+        if (!(expr)) \
+            RTTestFailed(hTest, "%d: FAILED %s", __LINE__, #expr); \
+    } while (0)
+
+#define CHECK_DUMP(expr, value) \
+    do { \
+        if (!(expr)) \
+            RTTestFailed(hTest, "%d: FAILED %s, got \"%s\"", __LINE__, #expr, value); \
+    } while (0)
+
+#define CHECK_DUMP_I(expr) \
+    do { \
+        if (!(expr)) \
+            RTTestFailed(hTest, "%d: FAILED %s, got \"%d\"", __LINE__, #expr, expr); \
+    } while (0)
+
+    iprt::MiniString empty;
+    CHECK( (empty.length() == 0) );
+    CHECK( (empty.capacity() == 0) );
+
+    iprt::MiniString sixbytes("12345");
+    CHECK( (sixbytes.length() == 5) );
+    CHECK( (sixbytes.capacity() == 6) );
+
+    sixbytes.append("678");
+    CHECK( (sixbytes.length() == 8) );
+    CHECK( (sixbytes.capacity() == 9) );
+
+    char *psz = sixbytes.mutableRaw();
+        // 12345678
+        //       ^
+        // 0123456
+    psz[6] = '\0';
+    sixbytes.jolt();
+    CHECK( (sixbytes.length() == 6) );
+    CHECK( (sixbytes.capacity() == 7) );
+
+    iprt::MiniString morebytes("tobereplaced");
+    morebytes = "newstring ";
+    morebytes.append(sixbytes);
+
+    CHECK_DUMP( (morebytes == "newstring 123456"), morebytes.c_str() );
+
+    iprt::MiniString third(morebytes);
+    third.reserve(100 * 1024);      // 100 KB
+    CHECK_DUMP( (third == "newstring 123456"), morebytes.c_str() );
+    CHECK( (third.capacity() == 100 * 1024) );
+    CHECK( (third.length() == morebytes.length()) );        // must not have changed
+
+    iprt::MiniString copy1(morebytes);
+    iprt::MiniString copy2 = morebytes;
+    CHECK( (copy1 == copy2) );
+
+    copy1 = NULL;
+    CHECK( (copy1.length() == 0) );
+
+    copy1 = "";
+    CHECK( (copy1.length() == 0) );
+
+    CHECK( (iprt::MiniString("abc") < iprt::MiniString("def")) );
+    CHECK( (iprt::MiniString("abc") != iprt::MiniString("def")) );
+    CHECK_DUMP_I( (iprt::MiniString("def") > iprt::MiniString("abc")) );
+
+    copy2.setNull();
+    for (int i = 0;
+         i < 100;
+         ++i)
+    {
+        copy2.reserve(50);      // should be ignored after 50 loops
+        copy2.append("1");
+    }
+    CHECK( (copy2.length() == 100) );
+
+#undef CHECK
+}
+
 int main()
 {
     /*
-     * Init the runtime and stuff.
+     * Init the runtime, test and say hello.
      */
     RTTEST hTest;
-    if (    RT_FAILURE(RTR3Init())
-        ||  RT_FAILURE(RTTestCreate("tstUtf8", &hTest)))
-    {
-        RTPrintf("tstBitstUtf8: fatal initialization error\n");
-        return 1;
-    }
+    int rc = RTTestInitAndCreate("tstUtf8", &hTest);
+    if (rc)
+        return rc;
     RTTestBanner(hTest);
 
+    /*
+     * Run the test.
+     */
     InitStrings();
     test1(hTest);
     test2(hTest);
     test3(hTest);
     TstRTStrXCmp(hTest);
     testStrStr(hTest);
+
+    testMinistring(hTest);
+
     Benchmarks(hTest);
 
     /*
@@ -952,3 +1038,4 @@ int main()
      */
     return RTTestSummaryAndDestroy(hTest);
 }
+

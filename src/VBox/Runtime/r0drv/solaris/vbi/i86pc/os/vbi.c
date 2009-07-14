@@ -19,7 +19,7 @@
  * CDDL HEADER END
  */
 /*
- * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
+ * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
 
@@ -55,8 +55,11 @@
 #include <sys/sunddi.h>
 #include <sys/modctl.h>
 #include <sys/machparam.h>
+#include <sys/utsname.h>
 
 #include "vbi.h"
+
+#define VBIPROC() ((proc_t *)vbi_proc())
 
 /*
  * We have to use dl_lookup to find contig_free().
@@ -108,7 +111,7 @@ typedef struct vbi_cpuset {
  * module linkage stuff
  */
 static struct modlmisc vbi_modlmisc = {
-	&mod_miscops, "VirtualBox Interfaces V3"
+	&mod_miscops, "VirtualBox Interfaces V6"
 };
 
 static struct modlinkage vbi_modlinkage = {
@@ -121,6 +124,68 @@ extern uintptr_t kernelbase;
 static int vbi_verbose = 0;
 
 #define VBI_VERBOSE(msg) {if (vbi_verbose) cmn_err(CE_WARN, msg);}
+
+/* Introduced in v6 */
+static int vbi_is_nevada = 0;
+
+#ifdef _LP64
+/* 64-bit Solaris 10 offsets */
+/* CPU */
+static int off_s10_cpu_runrun   = 232;
+static int off_s10_cpu_kprunrun = 233;
+/* kthread_t */
+static int off_s10_t_preempt    = 42;
+
+/* 64-bit Solaris 11 (Nevada/OpenSolaris) offsets */
+/* CPU */
+static int off_s11_cpu_runrun   = 216;
+static int off_s11_cpu_kprunrun = 217;
+/* kthread_t */
+static int off_s11_t_preempt    = 42;
+#else
+/* 32-bit Solaris 10 offsets */
+/* CPU */
+static int off_s10_cpu_runrun   = 124;
+static int off_s10_cpu_kprunrun = 125;
+/* kthread_t */
+static int off_s10_t_preempt    = 26;
+
+/* 32-bit Solaris 11 (Nevada/OpenSolaris) offsets */
+/* CPU */
+static int off_s11_cpu_runrun   = 112;
+static int off_s11_cpu_kprunrun = 113;
+/* kthread_t */
+static int off_s11_t_preempt    = 26;
+#endif
+
+
+/* Which offsets will be used */
+static int off_cpu_runrun       = -1;
+static int off_cpu_kprunrun     = -1;
+static int off_t_preempt        = -1;
+
+#define VBI_T_PREEMPT            (*((char *)curthread + off_t_preempt))
+#define VBI_CPU_KPRUNRUN         (*((char *)CPU + off_cpu_kprunrun))
+#define VBI_CPU_RUNRUN           (*((char *)CPU + off_cpu_runrun))
+
+#undef kpreempt_disable
+#undef kpreempt_enable
+
+#define	VBI_PREEMPT_DISABLE()			\
+	{									\
+		VBI_T_PREEMPT++;				\
+		ASSERT(VBI_T_PREEMPT >= 1);		\
+	}
+#define	VBI_PREEMPT_ENABLE()			\
+	{									\
+		ASSERT(VBI_T_PREEMPT >= 1);		\
+		if (--VBI_T_PREEMPT == 0 &&	\
+		    VBI_CPU_RUNRUN)				\
+			kpreempt(KPREEMPT_SYNC);	\
+	}
+
+/* End of v6 intro */
+
 
 int
 _init(void)
@@ -156,6 +221,49 @@ _init(void)
 			cmn_err(CE_NOTE, " contig_free() not found in kernel");
 			return (EINVAL);
 		}
+	}
+
+	/*
+	 * Check if this is S10 or Nevada
+	 */
+	if (!strncmp(utsname.release, "5.11", sizeof("5.11") - 1))
+	{
+		/* Nevada detected... */
+		vbi_is_nevada = 1;
+
+		off_cpu_runrun = off_s11_cpu_runrun;
+		off_cpu_kprunrun = off_s11_cpu_kprunrun;
+		off_t_preempt = off_s11_t_preempt;
+	}
+	else
+	{
+		/* Solaris 10 detected... */
+		vbi_is_nevada = 0;
+
+		off_cpu_runrun = off_s10_cpu_runrun;
+		off_cpu_kprunrun = off_s10_cpu_kprunrun;
+		off_t_preempt = off_s10_t_preempt;
+	}
+
+	/*
+	 * Sanity checking...
+	 */
+	/* CPU */
+	char crr = VBI_CPU_RUNRUN;
+	char krr = VBI_CPU_KPRUNRUN;
+	if (   (crr < 0 || crr > 1)
+		|| (krr < 0 || krr > 1))
+	{
+		cmn_err(CE_NOTE, ":CPU structure sanity check failed! OS version mismatch.\n");
+		return EINVAL;
+	}
+
+	/* Thread */
+	char t_preempt = VBI_T_PREEMPT;
+	if (t_preempt < 0 || t_preempt > 32)
+	{
+		cmn_err(CE_NOTE, ":Thread structure sanity check failed! OS version mismatch.\n");
+		return EINVAL;
 	}
 
 	err = mod_install(&vbi_modlinkage);
@@ -196,22 +304,28 @@ static ddi_dma_attr_t base_attr = {
 	0			/* bus-specific flags */
 };
 
-void *
-vbi_contig_alloc(uint64_t *phys, size_t size)
+static void *
+vbi_internal_alloc(uint64_t *phys, size_t size, int contig)
 {
 	ddi_dma_attr_t attr;
 	pfn_t pfn;
 	void *ptr;
+	uint_t npages;
 
 	if ((size & PAGEOFFSET) != 0)
+		return (NULL);
+	npages = size >> PAGESHIFT;
+	if (npages == 0)
 		return (NULL);
 
 	attr = base_attr;
 	attr.dma_attr_addr_hi = *phys;
+	if (!contig)
+		attr.dma_attr_sgllen = npages;
 	ptr = contig_alloc(size, &attr, PAGESIZE, 1);
 
 	if (ptr == NULL) {
-		VBI_VERBOSE("vbi_contig_alloc() failure");
+		VBI_VERBOSE("vbi_internal_alloc() failure");
 		return (NULL);
 	}
 
@@ -220,6 +334,12 @@ vbi_contig_alloc(uint64_t *phys, size_t size)
 		panic("vbi_contig_alloc(): hat_getpfnum() failed\n");
 	*phys = (uint64_t)pfn << PAGESHIFT;
 	return (ptr);
+}
+
+void *
+vbi_contig_alloc(uint64_t *phys, size_t size)
+{
+	return (vbi_internal_alloc(phys, size, 1));
 }
 
 void
@@ -253,7 +373,7 @@ vbi_unmap(void *va, size_t size)
 		hat_unload(kas.a_hat, va, size, HAT_UNLOAD | HAT_UNLOAD_UNLOCK);
 		vmem_free(heap_arena, va, size);
 	} else {
-		struct as *as = curproc->p_as;
+		struct as *as = VBIPROC()->p_as;
 
 		as_rangelock(as);
 		(void) as_unmap(as, va, size);
@@ -272,10 +392,14 @@ vbi_yield(void)
 {
 	int rv = 0;
 
-	kpreempt_disable();
-	if (curthread->t_preempt == 1 && CPU->cpu_kprunrun)
+	vbi_preempt_disable();
+
+	char tpr = VBI_T_PREEMPT;
+	char kpr = VBI_CPU_KPRUNRUN;
+	if (tpr == 1 && kpr)
 		rv = 1;
-	kpreempt_enable();
+
+	vbi_preempt_enable();
 	return (rv);
 }
 
@@ -378,7 +502,9 @@ vbi_tod(void)
 void *
 vbi_proc(void)
 {
-	return (curproc);
+	proc_t *p;
+	drv_getparm(UPROCP, &p);
+	return (p);
 }
 
 void
@@ -397,7 +523,7 @@ vbi_thread_create(void *func, void *arg, size_t len, int priority)
 	kthread_t *t;
 
 	t = thread_create(NULL, NULL, (void (*)())func, arg, len,
-	    curproc, TS_RUN, priority);
+	    VBIPROC(), TS_RUN, priority);
 	return (t);
 }
 
@@ -457,13 +583,13 @@ vbi_cpu_online(int c)
 void
 vbi_preempt_disable(void)
 {
-	kpreempt_disable();
+	VBI_PREEMPT_DISABLE();
 }
 
 void
 vbi_preempt_enable(void)
 {
-	kpreempt_enable();
+	VBI_PREEMPT_ENABLE();
 }
 
 void
@@ -517,7 +643,7 @@ vbi_execute_on_one(void *func, void *arg, int c)
 
 	for (i = 0; i < VBI_SET_WORDS; ++i)
 		set.words[i] = 0;
-	BT_SET(set.words, vbi_cpu_id());
+	BT_SET(set.words, c);
 	if (use_old) {
 		if (use_old_with_ulong) {
 			p_xc_call((xc_arg_t)arg, 0, 0, X_CALL_HIPRI,
@@ -541,7 +667,7 @@ vbi_lock_va(void *addr, size_t len, void **handle)
 	 */
 	*handle = NULL;
 	if (!IS_KERNEL(addr)) {
-		err = as_fault(curproc->p_as->a_hat, curproc->p_as,
+		err = as_fault(VBIPROC()->p_as->a_hat, VBIPROC()->p_as,
 		    (caddr_t)addr, len, F_SOFTLOCK, S_WRITE);
 		if (err != 0) {
 			VBI_VERBOSE("vbi_lock_va() failed to lock");
@@ -556,8 +682,8 @@ void
 vbi_unlock_va(void *addr, size_t len, void *handle)
 {
 	if (!IS_KERNEL(addr))
-		as_fault(curproc->p_as->a_hat, curproc->p_as, (caddr_t)addr,
-		    len, F_SOFTUNLOCK, S_WRITE);
+		as_fault(VBIPROC()->p_as->a_hat, VBIPROC()->p_as,
+		    (caddr_t)addr, len, F_SOFTUNLOCK, S_WRITE);
 }
 
 uint64_t
@@ -570,7 +696,7 @@ vbi_va_to_pa(void *addr)
 	if (IS_KERNEL(v))
 		hat = kas.a_hat;
 	else
-		hat = curproc->p_as->a_hat;
+		hat = VBIPROC()->p_as->a_hat;
 	pfn = hat_getpfnum(hat, (caddr_t)(v & PAGEMASK));
 	if (pfn == PFN_INVALID)
 		return (-(uint64_t)1);
@@ -824,7 +950,7 @@ static struct seg_ops segvbi_ops = {
 int
 vbi_user_map(caddr_t *va, uint_t prot, uint64_t *palist, size_t len)
 {
-	struct as *as = curproc->p_as;
+	struct as *as = VBIPROC()->p_as;
 	struct segvbi_crargs args;
 	int error = 0;
 
@@ -1049,15 +1175,48 @@ vbi_gtimer_end(vbi_gtimer_t *t)
 	kmem_free(t, sizeof (*t));
 }
 
-/*
- * This is revision 3 of the interface. As more functions are added,
- * they should go after this point in the file and the revision level
- * increased. Also change vbi_modlmisc at the top of the file.
- */
-uint_t vbi_revision_level = 3;
-
 int
 vbi_is_preempt_enabled(void)
 {
-	return (curthread->t_preempt == 0);
+	char tpr = VBI_T_PREEMPT;
+	return (tpr == 0);
 }
+
+void
+vbi_poke_cpu(int c)
+{
+	if (c < ncpus)
+		poke_cpu(c);
+}
+
+/*
+ * This is revision 5 of the interface. As more functions are added,
+ * they should go after this point in the file and the revision level
+ * increased. Also change vbi_modlmisc at the top of the file.
+ */
+uint_t vbi_revision_level = 6;
+
+void *
+vbi_lowmem_alloc(uint64_t phys, size_t size)
+{
+	return (vbi_internal_alloc(&phys, size, 0));
+}
+
+void
+vbi_lowmem_free(void *va, size_t size)
+{
+	p_contig_free(va, size);
+}
+
+/*
+ * This is revision 6 of the interface.
+ */
+
+int
+vbi_is_preempt_pending(void)
+{
+	char crr = VBI_CPU_RUNRUN;
+	char krr = VBI_CPU_KPRUNRUN;
+	return crr != 0 || krr != 0;
+}
+

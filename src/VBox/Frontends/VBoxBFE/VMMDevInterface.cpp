@@ -28,8 +28,7 @@
 # include <VBox/com/defs.h>
 #endif
 #include <VBox/pdm.h>
-#include <VBox/VBoxDev.h>
-#include <VBox/VBoxGuest.h>
+#include <VBox/VMMDev.h>
 #include <VBox/cfgm.h>
 #include <VBox/err.h>
 #include <iprt/assert.h>
@@ -172,8 +171,8 @@ DECLCALLBACK(void) VMMDev::UpdateMouseCapabilities(PPDMIVMMDEVCONNECTOR pInterfa
 
     if (gMouse)
     {
-        gMouse->setAbsoluteCoordinates(!!(newCapabilities & VMMDEV_MOUSEGUESTWANTSABS));
-        gMouse->setNeedsHostCursor(!!(newCapabilities & VMMDEV_MOUSEGUESTNEEDSHOSTCUR));
+        gMouse->setAbsoluteCoordinates(!!(newCapabilities & VMMDEV_MOUSE_GUEST_CAN_ABSOLUTE));
+        gMouse->setNeedsHostCursor(!!(newCapabilities & VMMDEV_MOUSE_GUEST_NEEDS_HOST_CURSOR));
     }
     if (gConsole)
     {

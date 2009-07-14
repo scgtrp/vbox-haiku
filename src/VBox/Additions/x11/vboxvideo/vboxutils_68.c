@@ -1,5 +1,4 @@
 /** @file
- *
  * Linux Additions X11 graphics driver helper module
  */
 
@@ -20,6 +19,7 @@
  */
 
 #include <VBox/VBoxGuest.h>
+#include <VBox/VBoxGuestLib.h>
 
 #include <xf86Pci.h>
 #include <Pci.h>
@@ -156,8 +156,8 @@ vbox_host_uses_hwcursor(ScrnInfoPtr pScrn)
             strerror(errno));
     }
     if (   RT_SUCCESS(rc)
-        && !(req.mouseFeatures & VBOXGUEST_MOUSE_HOST_CANNOT_HWPOINTER)
-        && (req.mouseFeatures & VBOXGUEST_MOUSE_GUEST_CAN_ABSOLUTE))
+        && !(req.mouseFeatures & VMMDEV_MOUSE_HOST_CANNOT_HWPOINTER)
+        && (req.mouseFeatures & VMMDEV_MOUSE_GUEST_CAN_ABSOLUTE))
             rc = TRUE;
     return rc;
 }

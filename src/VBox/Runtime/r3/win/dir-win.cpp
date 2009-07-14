@@ -34,6 +34,7 @@
 *******************************************************************************/
 #define LOG_GROUP RTLOGGROUP_DIR
 #include <Windows.h>
+#include <io.h>
 
 #include <iprt/dir.h>
 #include <iprt/path.h>

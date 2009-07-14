@@ -65,12 +65,9 @@ class ATL_NO_VTABLE VirtualBox :
     public VirtualBoxBaseWithChildrenNEXT,
     public VirtualBoxSupportErrorInfoImpl <VirtualBox, IVirtualBox>,
     public VirtualBoxSupportTranslation <VirtualBox>,
+    VBOX_SCRIPTABLE_IMPL(IVirtualBox)
 #ifdef RT_OS_WINDOWS
-    public IDispatchImpl<IVirtualBox, &IID_IVirtualBox, &LIBID_VirtualBox,
-                         kTypeLibraryMajorVersion, kTypeLibraryMinorVersion>,
-    public CComCoClass<VirtualBox, &CLSID_VirtualBox>
-#else
-    public IVirtualBox
+    , public CComCoClass<VirtualBox, &CLSID_VirtualBox>
 #endif
 {
 
@@ -138,30 +135,33 @@ public:
     /* IVirtualBox methods */
 
     STDMETHOD(CreateMachine) (IN_BSTR aName, IN_BSTR aOsTypeId, IN_BSTR aBaseFolder,
-                              IN_GUID aId, IMachine **aMachine);
+                              IN_BSTR aId, IMachine **aMachine);
     STDMETHOD(CreateLegacyMachine) (IN_BSTR aName, IN_BSTR aOsTypeId, IN_BSTR aSettingsFile,
-                                    IN_GUID aId, IMachine **aMachine);
+                                    IN_BSTR aId, IMachine **aMachine);
     STDMETHOD(OpenMachine) (IN_BSTR aSettingsFile, IMachine **aMachine);
     STDMETHOD(RegisterMachine) (IMachine *aMachine);
-    STDMETHOD(GetMachine) (IN_GUID aId, IMachine **aMachine);
+    STDMETHOD(GetMachine) (IN_BSTR aId, IMachine **aMachine);
     STDMETHOD(FindMachine) (IN_BSTR aName, IMachine **aMachine);
-    STDMETHOD(UnregisterMachine) (IN_GUID aId, IMachine **aMachine);
+    STDMETHOD(UnregisterMachine) (IN_BSTR aId, IMachine **aMachine);
     STDMETHOD(CreateAppliance) (IAppliance **anAppliance);
 
     STDMETHOD(CreateHardDisk)(IN_BSTR aFormat, IN_BSTR aLocation,
                                IHardDisk **aHardDisk);
-    STDMETHOD(OpenHardDisk) (IN_BSTR aLocation, AccessMode_T accessMode, IHardDisk **aHardDisk);
-    STDMETHOD(GetHardDisk) (IN_GUID aId, IHardDisk **aHardDisk);
+    STDMETHOD(OpenHardDisk) (IN_BSTR aLocation, AccessMode_T accessMode,
+                             BOOL aSetImageId, IN_BSTR aImageId,
+                             BOOL aSetParentId, IN_BSTR aParentId,
+                             IHardDisk **aHardDisk);
+    STDMETHOD(GetHardDisk) (IN_BSTR aId, IHardDisk **aHardDisk);
     STDMETHOD(FindHardDisk) (IN_BSTR aLocation, IHardDisk **aHardDisk);
 
-    STDMETHOD(OpenDVDImage) (IN_BSTR aLocation, IN_GUID aId,
+    STDMETHOD(OpenDVDImage) (IN_BSTR aLocation, IN_BSTR aId,
                              IDVDImage **aDVDImage);
-    STDMETHOD(GetDVDImage) (IN_GUID aId, IDVDImage **aDVDImage);
+    STDMETHOD(GetDVDImage) (IN_BSTR aId, IDVDImage **aDVDImage);
     STDMETHOD(FindDVDImage) (IN_BSTR aLocation, IDVDImage **aDVDImage);
 
-    STDMETHOD(OpenFloppyImage) (IN_BSTR aLocation, IN_GUID aId,
+    STDMETHOD(OpenFloppyImage) (IN_BSTR aLocation, IN_BSTR aId,
                                 IFloppyImage **aFloppyImage);
-    STDMETHOD(GetFloppyImage) (IN_GUID aId, IFloppyImage **aFloppyImage);
+    STDMETHOD(GetFloppyImage) (IN_BSTR aId, IFloppyImage **aFloppyImage);
     STDMETHOD(FindFloppyImage) (IN_BSTR aLocation, IFloppyImage **aFloppyImage);
 
     STDMETHOD(GetGuestOSType) (IN_BSTR aId, IGuestOSType **aType);
@@ -170,11 +170,11 @@ public:
     STDMETHOD(GetNextExtraDataKey) (IN_BSTR aKey, BSTR *aNextKey, BSTR *aNextValue);
     STDMETHOD(GetExtraData) (IN_BSTR aKey, BSTR *aValue);
     STDMETHOD(SetExtraData) (IN_BSTR aKey, IN_BSTR aValue);
-    STDMETHOD(OpenSession) (ISession *aSession, IN_GUID aMachineId);
-    STDMETHOD(OpenRemoteSession) (ISession *aSession, IN_GUID aMachineId,
+    STDMETHOD(OpenSession) (ISession *aSession, IN_BSTR aMachineId);
+    STDMETHOD(OpenRemoteSession) (ISession *aSession, IN_BSTR aMachineId,
                                   IN_BSTR aType, IN_BSTR aEnvironment,
                                   IProgress **aProgress);
-    STDMETHOD(OpenExistingSession) (ISession *aSession, IN_GUID aMachineId);
+    STDMETHOD(OpenExistingSession) (ISession *aSession, IN_BSTR aMachineId);
 
     STDMETHOD(RegisterCallback) (IVirtualBoxCallback *aCallback);
     STDMETHOD(UnregisterCallback) (IVirtualBoxCallback *aCallback);
@@ -421,6 +421,8 @@ private:
 
             const Bstr mName;
             RTFILE mHandle;
+            /** Flag indicating that the config file is read-only. */
+            BOOL mReadonly;
         };
 
         // const data members not requiring locking

@@ -28,10 +28,13 @@
  * additional information or have any questions.
  */
 
+
 /*******************************************************************************
 *   Header Files                                                               *
 *******************************************************************************/
 #include <iprt/critsect.h>
+#include "internal/iprt.h"
+
 #include <iprt/semaphore.h>
 #include <iprt/thread.h>
 #include <iprt/assert.h>
@@ -54,6 +57,7 @@ RTDECL(int) RTCritSectInit(PRTCRITSECT pCritSect)
 {
     return RTCritSectInitEx(pCritSect, 0);
 }
+RT_EXPORT_SYMBOL(RTCritSectInit);
 
 
 /**
@@ -86,6 +90,7 @@ RTDECL(int) RTCritSectInitEx(PRTCRITSECT pCritSect, uint32_t fFlags)
     pCritSect->u32Magic = (uint32_t)rc;
     return rc;
 }
+RT_EXPORT_SYMBOL(RTCritSectInitEx);
 
 
 /**
@@ -197,6 +202,7 @@ RTDECL(int) RTCritSectEnterMultipleDebug(unsigned cCritSects, PRTCRITSECT *papCr
         i = j;
     }
 }
+RT_EXPORT_SYMBOL(RTCritSectEnterMultiple);
 
 
 /**
@@ -250,16 +256,17 @@ RTDECL(int) RTCritSectTryEnterDebug(PRTCRITSECT pCritSect, const char *pszFile, 
      * First time
      */
     pCritSect->cNestings = 1;
-    ASMAtomicXchgSize(&pCritSect->NativeThreadOwner, NativeThreadSelf);
+    ASMAtomicWriteHandle(&pCritSect->NativeThreadOwner, NativeThreadSelf);
 #ifdef RTCRITSECT_STRICT
     pCritSect->Strict.pszEnterFile = pszFile;
     pCritSect->Strict.u32EnterLine = uLine;
     pCritSect->Strict.uEnterId     = uId;
-    ASMAtomicXchgSize(&pCritSect->Strict.ThreadOwner, (RTUINTPTR)ThreadSelf); /* screw gcc and its pedantic warnings. */
+    ASMAtomicWriteHandle(&pCritSect->Strict.ThreadOwner, ThreadSelf);
 #endif
 
     return VINF_SUCCESS;
 }
+RT_EXPORT_SYMBOL(RTCritSectTryEnter);
 
 
 /**
@@ -318,11 +325,11 @@ RTDECL(int) RTCritSectEnterDebug(PRTCRITSECT pCritSect, const char *pszFile, uns
         for (;;)
         {
 #ifdef RTCRITSECT_STRICT
-            rtThreadBlocking(ThreadSelf, RTTHREADSTATE_CRITSECT, (uintptr_t)pCritSect, pszFile, uLine, uId);
+            RTThreadBlocking(ThreadSelf, RTTHREADSTATE_CRITSECT, (uintptr_t)pCritSect, pszFile, uLine, uId);
 #endif
             int rc = RTSemEventWait(pCritSect->EventSem, RT_INDEFINITE_WAIT);
 #ifdef RTCRITSECT_STRICT
-            rtThreadUnblocked(ThreadSelf, RTTHREADSTATE_CRITSECT);
+            RTThreadUnblocked(ThreadSelf, RTTHREADSTATE_CRITSECT);
 #endif
             if (pCritSect->u32Magic != RTCRITSECT_MAGIC)
                 return VERR_SEM_DESTROYED;
@@ -337,17 +344,18 @@ RTDECL(int) RTCritSectEnterDebug(PRTCRITSECT pCritSect, const char *pszFile, uns
      * First time
      */
     pCritSect->cNestings = 1;
-    ASMAtomicXchgSize(&pCritSect->NativeThreadOwner, NativeThreadSelf);
+    ASMAtomicWriteHandle(&pCritSect->NativeThreadOwner, NativeThreadSelf);
 #ifdef RTCRITSECT_STRICT
     pCritSect->Strict.pszEnterFile = pszFile;
     pCritSect->Strict.u32EnterLine = uLine;
     pCritSect->Strict.uEnterId     = uId;
-    ASMAtomicXchgSize(&pCritSect->Strict.ThreadOwner, (RTUINTPTR)ThreadSelf); /* screw gcc and its pedantic warnings. */
+    ASMAtomicWriteHandle(&pCritSect->Strict.ThreadOwner, ThreadSelf);
     RTThreadWriteLockInc(ThreadSelf);
 #endif
 
     return VINF_SUCCESS;
 }
+RT_EXPORT_SYMBOL(RTCritSectEnter);
 
 
 /**
@@ -382,9 +390,9 @@ RTDECL(int) RTCritSectLeave(PRTCRITSECT pCritSect)
 #ifdef RTCRITSECT_STRICT
         if (pCritSect->Strict.ThreadOwner != NIL_RTTHREAD) /* May happen for PDMCritSects when entering GC/R0. */
             RTThreadWriteLockDec(pCritSect->Strict.ThreadOwner);
-        ASMAtomicXchgSize(&pCritSect->Strict.ThreadOwner, NIL_RTTHREAD);
+        ASMAtomicWriteHandle(&pCritSect->Strict.ThreadOwner, NIL_RTTHREAD);
 #endif
-        ASMAtomicXchgSize(&pCritSect->NativeThreadOwner, NIL_RTNATIVETHREAD);
+        ASMAtomicWriteHandle(&pCritSect->NativeThreadOwner, NIL_RTNATIVETHREAD);
         if (ASMAtomicDecS32(&pCritSect->cLockers) >= 0)
         {
             int rc = RTSemEventSignal(pCritSect->EventSem);
@@ -393,6 +401,7 @@ RTDECL(int) RTCritSectLeave(PRTCRITSECT pCritSect)
     }
     return VINF_SUCCESS;
 }
+RT_EXPORT_SYMBOL(RTCritSectLeave);
 
 
 /**
@@ -413,6 +422,7 @@ RTDECL(int) RTCritSectLeaveMultiple(unsigned cCritSects, PRTCRITSECT *papCritSec
     }
     return rc;
 }
+RT_EXPORT_SYMBOL(RTCritSectLeaveMultiple);
 
 
 #ifndef RTCRITSECT_STRICT
@@ -431,6 +441,9 @@ RTDECL(int) RTCritSectEnterMultipleDebug(unsigned cCritSects, PRTCRITSECT *papCr
     return RTCritSectEnterMultiple(cCritSects, papCritSects);
 }
 #endif /* RT_STRICT */
+RT_EXPORT_SYMBOL(RTCritSectEnterDebug);
+RT_EXPORT_SYMBOL(RTCritSectTryEnterDebug);
+RT_EXPORT_SYMBOL(RTCritSectEnterMultipleDebug);
 
 
 /**
@@ -454,18 +467,19 @@ RTDECL(int) RTCritSectDelete(PRTCRITSECT pCritSect)
      * Invalidate the structure and free the mutex.
      * In case someone is waiting we'll signal the semaphore cLockers + 1 times.
      */
-    ASMAtomicXchgU32(&pCritSect->u32Magic, 0);
+    ASMAtomicWriteU32(&pCritSect->u32Magic, ~RTCRITSECT_MAGIC);
     pCritSect->fFlags           = 0;
     pCritSect->cNestings        = 0;
     pCritSect->NativeThreadOwner= NIL_RTNATIVETHREAD;
     RTSEMEVENT EventSem = pCritSect->EventSem;
-    pCritSect->EventSem         = NULL;
+    pCritSect->EventSem         = NIL_RTSEMEVENT;
     while (pCritSect->cLockers-- >= 0)
         RTSemEventSignal(EventSem);
-    ASMAtomicXchgS32(&pCritSect->cLockers, -1);
+    ASMAtomicWriteS32(&pCritSect->cLockers, -1);
     int rc = RTSemEventDestroy(EventSem);
     AssertRC(rc);
 
     return rc;
 }
+RT_EXPORT_SYMBOL(RTCritSectDelete);
 

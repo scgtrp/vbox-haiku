@@ -73,13 +73,19 @@ int mmR3HyperInit(PVM pVM)
 
     /** @todo @bugref{1865}, @bugref{3202}: Change the cbHyperHeap default
      *        depending on whether VT-x/AMD-V is enabled or not! Don't waste
-     *        precious kernel space on heap for the PATM. */
+     *        precious kernel space on heap for the PATM.
+     */
     uint32_t cbHyperHeap;
     int rc = CFGMR3QueryU32(CFGMR3GetChild(CFGMR3GetRoot(pVM), "MM"), "cbHyperHeap", &cbHyperHeap);
     if (rc == VERR_CFGM_NO_PARENT || rc == VERR_CFGM_VALUE_NOT_FOUND)
-        cbHyperHeap = VMMIsHwVirtExtForced(pVM)
-                    ? 640*_1K
-                    : 1280*_1K;
+    {
+        if (pVM->cCPUs > 1)
+            cbHyperHeap = _2M + pVM->cCPUs * _64K;
+        else
+            cbHyperHeap = VMMIsHwVirtExtForced(pVM)
+                        ? 640*_1K
+                        : 1280*_1K;
+    }
     else
         AssertLogRelRCReturn(rc, rc);
     cbHyperHeap = RT_ALIGN_32(cbHyperHeap, PAGE_SIZE);
@@ -141,6 +147,20 @@ int mmR3HyperInit(PVM pVM)
 
 
 /**
+ * Cleans up the hypervisor heap.
+ *
+ * @returns VBox status.
+ */
+int mmR3HyperTerm(PVM pVM)
+{
+    if (pVM->mm.s.pHyperHeapR3)
+        PDMR3CritSectDelete(&pVM->mm.s.pHyperHeapR3->Lock);
+
+    return VINF_SUCCESS;
+}
+
+
+/**
  * Finalizes the HMA mapping.
  *
  * This is called later during init, most (all) HMA allocations should be done
@@ -153,12 +173,18 @@ VMMR3DECL(int) MMR3HyperInitFinalize(PVM pVM)
     LogFlow(("MMR3HyperInitFinalize:\n"));
 
     /*
+     * Initialize the hyper heap critical section.
+     */
+    int rc = PDMR3CritSectInit(pVM, &pVM->mm.s.pHyperHeapR3->Lock, "MM-HYPER");
+    AssertRC(rc);
+
+    /*
      * Adjust and create the HMA mapping.
      */
     while ((RTINT)pVM->mm.s.offHyperNextStatic + 64*_1K < (RTINT)pVM->mm.s.cbHyperArea - _4M)
         pVM->mm.s.cbHyperArea -= _4M;
-    int rc = PGMR3MapPT(pVM, pVM->mm.s.pvHyperAreaGC, pVM->mm.s.cbHyperArea, 0 /*fFlags*/,
-                        mmR3HyperRelocateCallback, NULL, "Hypervisor Memory Area");
+    rc = PGMR3MapPT(pVM, pVM->mm.s.pvHyperAreaGC, pVM->mm.s.cbHyperArea, 0 /*fFlags*/,
+                    mmR3HyperRelocateCallback, NULL, "Hypervisor Memory Area");
     if (RT_FAILURE(rc))
         return rc;
     pVM->mm.s.fPGMInitialized = true;
@@ -316,6 +342,20 @@ static DECLCALLBACK(bool) mmR3HyperRelocateCallback(PVM pVM, RTGCPTR GCPtrOld, R
     return false;
 }
 
+/**
+ * Service a VMMCALLRING3_MMHYPER_LOCK call.
+ *
+ * @returns VBox status code.
+ * @param   pVM     The VM handle.
+ */
+VMMR3DECL(int) MMR3LockCall(PVM pVM)
+{
+    PMMHYPERHEAP pHeap = pVM->mm.s.CTX_SUFF(pHyperHeap);
+
+    int rc = PDMR3CritSectEnterEx(&pHeap->Lock, true /* fHostCall */);
+    AssertRC(rc);
+    return rc;
+}
 
 /**
  * Maps contiguous HC physical memory into the hypervisor region in the GC.
@@ -565,7 +605,9 @@ VMMR3DECL(int) MMR3HyperMapPages(PVM pVM, void *pvR3, RTR0PTR pvR0, size_t cPage
         {
             for (size_t i = 0; i < cPages; i++)
             {
-                AssertReleaseReturn(paPages[i].Phys != 0 && paPages[i].Phys != NIL_RTHCPHYS && !(paPages[i].Phys & PAGE_OFFSET_MASK), VERR_INTERNAL_ERROR);
+                AssertReleaseMsgReturn(paPages[i].Phys != 0 && paPages[i].Phys != NIL_RTHCPHYS && !(paPages[i].Phys & PAGE_OFFSET_MASK),
+                                       ("i=%#zx Phys=%RHp %s\n", i, paPages[i].Phys, pszDesc),
+                                       VERR_INTERNAL_ERROR);
                 paHCPhysPages[i] = paPages[i].Phys;
             }
 
@@ -781,7 +823,6 @@ static int mmR3HyperHeapCreate(PVM pVM, const size_t cb, PMMHYPERHEAP *ppHeap, P
     return rc;
 }
 
-
 /**
  * Allocates a new heap.
  */
@@ -810,17 +851,6 @@ static int mmR3HyperHeapMap(PVM pVM, PMMHYPERHEAP pHeap, PRTGCPTR ppHeapGC)
 }
 
 
-#if 0
-/**
- * Destroys a heap.
- */
-static int mmR3HyperHeapDestroy(PVM pVM, PMMHYPERHEAP pHeap)
-{
-    /* all this is dealt with when unlocking and freeing locked memory. */
-}
-#endif
-
-
 /**
  * Allocates memory in the Hypervisor (GC VMM) area which never will
  * be freed and doesn't have any offset based relation to other heap blocks.
@@ -842,9 +872,37 @@ static int mmR3HyperHeapDestroy(PVM pVM, PMMHYPERHEAP pHeap)
  *                      memory.
  * @remark  This is assumed not to be used at times when serialization is required.
  */
-VMMDECL(int) MMR3HyperAllocOnceNoRel(PVM pVM, size_t cb, unsigned uAlignment, MMTAG enmTag, void **ppv)
+VMMR3DECL(int) MMR3HyperAllocOnceNoRel(PVM pVM, size_t cb, unsigned uAlignment, MMTAG enmTag, void **ppv)
+{
+    return MMR3HyperAllocOnceNoRelEx(pVM, cb, uAlignment, enmTag, 0/*fFlags*/, ppv);
+}
+
+
+/**
+ * Allocates memory in the Hypervisor (GC VMM) area which never will
+ * be freed and doesn't have any offset based relation to other heap blocks.
+ *
+ * The latter means that two blocks allocated by this API will not have the
+ * same relative position to each other in GC and HC. In short, never use
+ * this API for allocating nodes for an offset based AVL tree!
+ *
+ * The returned memory is of course zeroed.
+ *
+ * @returns VBox status code.
+ * @param   pVM         The VM to operate on.
+ * @param   cb          Number of bytes to allocate.
+ * @param   uAlignment  Required memory alignment in bytes.
+ *                      Values are 0,8,16,32 and PAGE_SIZE.
+ *                      0 -> default alignment, i.e. 8 bytes.
+ * @param   enmTag      The statistics tag.
+ * @param   fFlags      Flags, see MMHYPER_AONR_FLAGS_KERNEL_MAPPING.
+ * @param   ppv         Where to store the address to the allocated memory.
+ * @remark  This is assumed not to be used at times when serialization is required.
+ */
+VMMR3DECL(int) MMR3HyperAllocOnceNoRelEx(PVM pVM, size_t cb, unsigned uAlignment, MMTAG enmTag, uint32_t fFlags, void **ppv)
 {
     AssertMsg(cb >= 8, ("Hey! Do you really mean to allocate less than 8 bytes?! cb=%d\n", cb));
+    Assert(!(fFlags & ~(MMHYPER_AONR_FLAGS_KERNEL_MAPPING)));
 
     /*
      * Choose between allocating a new chunk of HMA memory
@@ -853,9 +911,13 @@ VMMDECL(int) MMR3HyperAllocOnceNoRel(PVM pVM, size_t cb, unsigned uAlignment, MM
      */
     if (   (   cb < _64K
             && (   uAlignment != PAGE_SIZE
-               || cb < 48*_1K))
-        ||  VMR3GetState(pVM) != VMSTATE_CREATING)
+                || cb < 48*_1K)
+            && !(fFlags & MMHYPER_AONR_FLAGS_KERNEL_MAPPING)
+           )
+        ||  VMR3GetState(pVM) != VMSTATE_CREATING
+       )
     {
+        Assert(!(fFlags & MMHYPER_AONR_FLAGS_KERNEL_MAPPING));
         int rc = MMHyperAlloc(pVM, cb, uAlignment, enmTag, ppv);
         if (    rc != VERR_MM_HYPER_NO_MEMORY
             ||  cb <= 8*_1K)
@@ -865,6 +927,14 @@ VMMDECL(int) MMR3HyperAllocOnceNoRel(PVM pVM, size_t cb, unsigned uAlignment, MM
             return rc;
         }
     }
+
+#ifdef VBOX_WITH_2X_4GB_ADDR_SPACE
+    /*
+     * Set MMHYPER_AONR_FLAGS_KERNEL_MAPPING if we're in going to execute in ring-0.
+     */
+    if (VMMIsHwVirtExtForced(pVM))
+        fFlags |= MMHYPER_AONR_FLAGS_KERNEL_MAPPING;
+#endif
 
     /*
      * Validate alignment.
@@ -896,20 +966,17 @@ VMMDECL(int) MMR3HyperAllocOnceNoRel(PVM pVM, size_t cb, unsigned uAlignment, MM
     int rc = SUPR3PageAllocEx(cPages,
                               0 /*fFlags*/,
                               &pvPages,
-#ifdef VBOX_WITH_2X_4GB_ADDR_SPACE
-                              VMMIsHwVirtExtForced(pVM) ? &pvR0 : NULL,
-#else
-                              NULL,
-#endif
+                              fFlags & MMHYPER_AONR_FLAGS_KERNEL_MAPPING ? &pvR0 : NULL,
                               paPages);
     if (RT_SUCCESS(rc))
     {
+        if (!(fFlags & MMHYPER_AONR_FLAGS_KERNEL_MAPPING))
 #ifdef VBOX_WITH_2X_4GB_ADDR_SPACE
-        if (!VMMIsHwVirtExtForced(pVM))
             pvR0 = NIL_RTR0PTR;
 #else
-        pvR0 = (uintptr_t)pvPages;
+            pvR0 = (RTR0PTR)pvPages;
 #endif
+
         memset(pvPages, 0, cbAligned);
 
         RTGCPTR GCPtr;
@@ -918,7 +985,7 @@ VMMDECL(int) MMR3HyperAllocOnceNoRel(PVM pVM, size_t cb, unsigned uAlignment, MM
                                pvR0,
                                cPages,
                                paPages,
-                               MMR3HeapAPrintf(pVM, MM_TAG_MM, "alloc once (%s)", mmR3GetTagName(enmTag)),
+                               MMR3HeapAPrintf(pVM, MM_TAG_MM, "alloc once (%s)", mmGetTagName(enmTag)),
                                &GCPtr);
         if (RT_SUCCESS(rc))
         {
@@ -952,6 +1019,103 @@ VMMDECL(int) MMR3HyperAllocOnceNoRel(PVM pVM, size_t cb, unsigned uAlignment, MM
     if (rc == VERR_NO_MEMORY)
         rc = VERR_MM_HYPER_NO_MEMORY;
     LogRel(("MMR3HyperAllocOnceNoRel: cb=%#zx uAlignment=%#x returns %Rrc\n", cb, uAlignment, rc));
+    return rc;
+}
+
+
+/**
+ * Lookus up a ring-3 pointer to HMA.
+ *
+ * @returns The lookup record on success, NULL on failure.
+ * @param   pVM                 The VM handle.
+ * @param   pvR3                The ring-3 address to look up.
+ */
+DECLINLINE(PMMLOOKUPHYPER) mmR3HyperLookupR3(PVM pVM, void *pvR3)
+{
+    PMMLOOKUPHYPER  pLookup = (PMMLOOKUPHYPER)((uint8_t *)pVM->mm.s.pHyperHeapR3 + pVM->mm.s.offLookupHyper);
+    for (;;)
+    {
+        switch (pLookup->enmType)
+        {
+            case MMLOOKUPHYPERTYPE_LOCKED:
+            {
+                unsigned off = (uint8_t *)pvR3 - (uint8_t *)pLookup->u.Locked.pvR3;
+                if (off < pLookup->cb)
+                    return pLookup;
+                break;
+            }
+
+            case MMLOOKUPHYPERTYPE_HCPHYS:
+            {
+                unsigned off = (uint8_t *)pvR3 - (uint8_t *)pLookup->u.HCPhys.pvR3;
+                if (off < pLookup->cb)
+                    return pLookup;
+                break;
+            }
+
+            case MMLOOKUPHYPERTYPE_GCPHYS:
+            case MMLOOKUPHYPERTYPE_MMIO2:
+            case MMLOOKUPHYPERTYPE_DYNAMIC:
+                /** @todo ?    */
+                break;
+
+            default:
+                AssertMsgFailed(("enmType=%d\n", pLookup->enmType));
+                return NULL;
+        }
+
+        /* next */
+        if ((unsigned)pLookup->offNext == NIL_OFFSET)
+            return NULL;
+        pLookup = (PMMLOOKUPHYPER)((uint8_t *)pLookup + pLookup->offNext);
+    }
+}
+
+
+/**
+ * Set / unset guard status on one or more hyper heap pages.
+ *
+ * @returns VBox status code (first failure).
+ * @param   pVM                 The VM handle.
+ * @param   pvStart             The hyper heap page address. Must be page
+ *                              aligned.
+ * @param   cb                  The number of bytes. Must be page aligned.
+ * @param   fSet                Wheter to set or unset guard page status.
+ */
+VMMR3DECL(int) MMR3HyperSetGuard(PVM pVM, void *pvStart, size_t cb, bool fSet)
+{
+    /*
+     * Validate input.
+     */
+    AssertReturn(!((uintptr_t)pvStart & PAGE_OFFSET_MASK), VERR_INVALID_POINTER);
+    AssertReturn(!(cb & PAGE_OFFSET_MASK), VERR_INVALID_PARAMETER);
+    PMMLOOKUPHYPER pLookup = mmR3HyperLookupR3(pVM, pvStart);
+    AssertReturn(pLookup, VERR_INVALID_PARAMETER);
+    AssertReturn(pLookup->enmType == MMLOOKUPHYPERTYPE_LOCKED, VERR_INVALID_PARAMETER);
+
+    /*
+     * Get down to business.
+     * Note! We quietly ignore errors from the support library since the
+     *       protection stuff isn't possible to implement on all platforms.
+     */
+    uint8_t    *pbR3  = (uint8_t *)pLookup->u.Locked.pvR3;
+#ifdef VBOX_WITH_2X_4GB_ADDR_SPACE
+    RTR0PTR     R0Ptr = VMMIsHwVirtExtForced(pVM) ? pLookup->u.Locked.pvR0 : NIL_RTR0PTR;
+#else
+    RTR0PTR     R0Ptr = NIL_RTR0PTR; /* ring-0 and ring-3 uses the same mapping. */
+#endif
+    uint32_t    off   = (uint32_t)((uint8_t *)pvStart - pbR3);
+    int         rc;
+    if (fSet)
+    {
+        rc = PGMMapSetPage(pVM, MMHyperR3ToRC(pVM, pvStart), cb, 0);
+        SUPR3PageProtect(pbR3, R0Ptr, off, cb, RTMEM_PROT_NONE);
+    }
+    else
+    {
+        rc = PGMMapSetPage(pVM, MMHyperR3ToRC(pVM, pvStart), cb, X86_PTE_P | X86_PTE_A | X86_PTE_D | X86_PTE_RW);
+        SUPR3PageProtect(pbR3, R0Ptr, off, cb, RTMEM_PROT_READ | RTMEM_PROT_WRITE);
+    }
     return rc;
 }
 
@@ -1060,8 +1224,21 @@ VMMR3DECL(int)   MMR3HyperHCPhys2HCVirtEx(PVM pVM, RTHCPHYS HCPhys, void **ppv)
 VMMR3DECL(int) MMR3HyperReadGCVirt(PVM pVM, void *pvDst, RTGCPTR GCPtr, size_t cb)
 {
     if (GCPtr - pVM->mm.s.pvHyperAreaGC >= pVM->mm.s.cbHyperArea)
-        return VERR_INVALID_PARAMETER;
+        return VERR_INVALID_POINTER;
     return PGMR3MapRead(pVM, pvDst, GCPtr, cb);
+}
+
+/**
+ * Release the MM hypervisor heap lock if owned by the current VCPU
+ *
+ * @param   pVM         The VM to operate on.
+ */
+VMMR3DECL(void) MMR3ReleaseOwnedLocks(PVM pVM)
+{
+    PMMHYPERHEAP pHeap = pVM->mm.s.CTX_SUFF(pHyperHeap);
+
+    while (pHeap && PDMCritSectIsOwner(&pHeap->Lock))
+        PDMCritSectLeave(&pHeap->Lock);
 }
 
 

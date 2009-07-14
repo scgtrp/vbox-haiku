@@ -33,6 +33,7 @@
 *   Header Files                                                               *
 *******************************************************************************/
 #include "the-linux-kernel.h"
+#include "internal/iprt.h"
 
 #include <iprt/spinlock.h>
 #include <iprt/err.h>
@@ -40,6 +41,7 @@
 #include <iprt/assert.h>
 #include <iprt/asm.h>
 #include "internal/magics.h"
+
 
 /*******************************************************************************
 *   Structures and Typedefs                                                    *
@@ -80,6 +82,7 @@ RTDECL(int)  RTSpinlockCreate(PRTSPINLOCK pSpinlock)
     *pSpinlock = pSpinlockInt;
     return VINF_SUCCESS;
 }
+RT_EXPORT_SYMBOL(RTSpinlockCreate);
 
 
 RTDECL(int)  RTSpinlockDestroy(RTSPINLOCK Spinlock)
@@ -100,6 +103,7 @@ RTDECL(int)  RTSpinlockDestroy(RTSPINLOCK Spinlock)
     RTMemFree(pSpinlockInt);
     return VINF_SUCCESS;
 }
+RT_EXPORT_SYMBOL(RTSpinlockDestroy);
 
 
 RTDECL(void) RTSpinlockAcquireNoInts(RTSPINLOCK Spinlock, PRTSPINLOCKTMP pTmp)
@@ -111,6 +115,7 @@ RTDECL(void) RTSpinlockAcquireNoInts(RTSPINLOCK Spinlock, PRTSPINLOCKTMP pTmp)
 
     spin_lock_irqsave(&pSpinlockInt->Spinlock, pTmp->flFlags);
 }
+RT_EXPORT_SYMBOL(RTSpinlockAcquireNoInts);
 
 
 RTDECL(void) RTSpinlockReleaseNoInts(RTSPINLOCK Spinlock, PRTSPINLOCKTMP pTmp)
@@ -122,6 +127,7 @@ RTDECL(void) RTSpinlockReleaseNoInts(RTSPINLOCK Spinlock, PRTSPINLOCKTMP pTmp)
 
     spin_unlock_irqrestore(&pSpinlockInt->Spinlock, pTmp->flFlags);
 }
+RT_EXPORT_SYMBOL(RTSpinlockReleaseNoInts);
 
 
 RTDECL(void) RTSpinlockAcquire(RTSPINLOCK Spinlock, PRTSPINLOCKTMP pTmp)
@@ -133,6 +139,7 @@ RTDECL(void) RTSpinlockAcquire(RTSPINLOCK Spinlock, PRTSPINLOCKTMP pTmp)
 
     spin_lock(&pSpinlockInt->Spinlock);
 }
+RT_EXPORT_SYMBOL(RTSpinlockAcquire);
 
 
 RTDECL(void) RTSpinlockRelease(RTSPINLOCK Spinlock, PRTSPINLOCKTMP pTmp)
@@ -144,10 +151,5 @@ RTDECL(void) RTSpinlockRelease(RTSPINLOCK Spinlock, PRTSPINLOCKTMP pTmp)
 
     spin_unlock(&pSpinlockInt->Spinlock);
 }
+RT_EXPORT_SYMBOL(RTSpinlockRelease);
 
-#if defined(IN_GUEST_R0) && defined(IN_MODULE)
-EXPORT_SYMBOL(RTSpinlockCreate);
-EXPORT_SYMBOL(RTSpinlockDestroy);
-EXPORT_SYMBOL(RTSpinlockAcquireNoInts);
-EXPORT_SYMBOL(RTSpinlockReleaseNoInts);
-#endif

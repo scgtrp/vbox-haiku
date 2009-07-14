@@ -22,25 +22,21 @@
 #ifndef ___VMMDev_VMMDevHGCM_h
 #define ___VMMDev_VMMDevHGCM_h
 
-#include <VBox/cdefs.h>
-#include <VBox/types.h>
-
-#include <VBox/VBoxGuest.h>
-
 #include "VMMDevState.h"
 
-__BEGIN_DECLS
+RT_C_DECLS_BEGIN
 DECLCALLBACK(int) vmmdevHGCMConnect (VMMDevState *pVMMDevState, VMMDevHGCMConnect *pHGCMConnect, RTGCPHYS GCPtr);
 DECLCALLBACK(int) vmmdevHGCMDisconnect (VMMDevState *pVMMDevState, VMMDevHGCMDisconnect *pHGCMDisconnect, RTGCPHYS GCPtr);
-DECLCALLBACK(int) vmmdevHGCMCall (VMMDevState *pVMMDevState, VMMDevHGCMCall *pHGCMCall, RTGCPHYS GCPtr, bool f64Bits);
+DECLCALLBACK(int) vmmdevHGCMCall (VMMDevState *pVMMDevState, VMMDevHGCMCall *pHGCMCall, uint32_t cbHGCMCall, RTGCPHYS GCPtr, bool f64Bits);
 DECLCALLBACK(int) vmmdevHGCMCancel (VMMDevState *pVMMDevState, VMMDevHGCMCancel *pHGCMCancel, RTGCPHYS GCPtr);
+DECLCALLBACK(int) vmmdevHGCMCancel2 (VMMDevState *pVMMDevState, RTGCPHYS GCPtr);
 
 DECLCALLBACK(void) hgcmCompleted (PPDMIHGCMPORT pInterface, int32_t result, PVBOXHGCMCMD pCmdPtr);
 
 int vmmdevHGCMSaveState(VMMDevState *pVMMDevState, PSSMHANDLE pSSM);
-int vmmdevHGCMLoadState(VMMDevState *pVMMDevState, PSSMHANDLE pSSM);
+int vmmdevHGCMLoadState(VMMDevState *pVMMDevState, PSSMHANDLE pSSM, uint32_t u32Version);
 int vmmdevHGCMLoadStateDone(VMMDevState *pVMMDevState, PSSMHANDLE pSSM);
-__END_DECLS
+RT_C_DECLS_END
 
 #endif /* !___VMMDev_VMMDevHGCM_h */
 

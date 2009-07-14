@@ -33,7 +33,7 @@
 
 #include <iprt/cpuset.h>
 
-__BEGIN_DECLS
+RT_C_DECLS_BEGIN
 
 /*******************************************************************************
 *   Structures and Typedefs                                                    *
@@ -45,12 +45,15 @@ typedef VOID (__stdcall *PFNMYKEFLUSHQUEUEDDPCS)(VOID);
 /*******************************************************************************
 *   Global Variables                                                           *
 *******************************************************************************/
-extern RTCPUSET g_rtMpNtCpuSet;
-extern PFNMYEXSETTIMERRESOLUTION g_pfnrtNtExSetTimerResolution;
-extern PFNMYKEFLUSHQUEUEDDPCS g_pfnrtNtKeFlushQueuedDpcs;
+extern RTCPUSET                     g_rtMpNtCpuSet;
+extern PFNMYEXSETTIMERRESOLUTION    g_pfnrtNtExSetTimerResolution;
+extern PFNMYKEFLUSHQUEUEDDPCS       g_pfnrtNtKeFlushQueuedDpcs;
+extern uint32_t                     g_offrtNtPbQuantumEnd;
+extern uint32_t                     g_cbrtNtPbQuantumEnd;
+extern uint32_t                     g_offrtNtPbDpcQueueDepth;
 
 
-__END_DECLS
+RT_C_DECLS_END
 
 #endif
 

@@ -27,6 +27,7 @@
 
 #include <iprt/cdefs.h>
 
+/** @todo Use the-nt-kernel.h and keep the messy stuff all in one place? */
 #ifdef IN_RING0
 # if (_MSC_VER >= 1400) && !defined(VBOX_WITH_PATCHED_DDK)
 #  include <iprt/asm.h>
@@ -35,29 +36,30 @@
 #  define _InterlockedCompareExchange    _InterlockedCompareExchange_StupidDDKVsCompilerCrap
 #  define _InterlockedAddLargeStatistic  _InterlockedAddLargeStatistic_StupidDDKVsCompilerCrap
 #  pragma warning(disable : 4163)
-__BEGIN_DECLS
+RT_C_DECLS_BEGIN
 #  include <ntddk.h>
-__END_DECLS
+RT_C_DECLS_END
 #  pragma warning(default : 4163)
 #  undef  _InterlockedExchange
 #  undef  _InterlockedExchangeAdd
 #  undef  _InterlockedCompareExchange
 #  undef  _InterlockedAddLargeStatistic
 # else
-__BEGIN_DECLS
+RT_C_DECLS_BEGIN
 #  include <ntddk.h>
-__END_DECLS
+RT_C_DECLS_END
 # endif
 #endif
 
 #include <iprt/spinlock.h>
 
+#include <VBox/VMMDev.h>
 #include <VBox/VBoxGuest.h>
+
 
 /*******************************************************************************
 *   Defined Constants And Macros                                               *
 *******************************************************************************/
-
 
 /* debug printf */
 # define OSDBGPRINT(a) DbgPrint a

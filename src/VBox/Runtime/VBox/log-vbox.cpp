@@ -1,6 +1,6 @@
 /* $Id$ */
 /** @file
- * Virtual Box Runtime - Logging configuration.
+ * VirtualBox Runtime - Logging configuration.
  */
 
 /*
@@ -259,6 +259,8 @@ RTDECL(PRTLOGGER) RTLogDefaultInit(void)
     ASSERT_LOG_GROUP(MM_HYPER_HEAP);
     ASSERT_LOG_GROUP(MM_PHYS);
     ASSERT_LOG_GROUP(MM_POOL);
+    ASSERT_LOG_GROUP(NAT_SERVICE);
+    ASSERT_LOG_GROUP(NET_SERVICE);
     ASSERT_LOG_GROUP(PATM);
     ASSERT_LOG_GROUP(PDM);
     ASSERT_LOG_GROUP(PDM_DEVICE);
@@ -291,7 +293,7 @@ RTDECL(PRTLOGGER) RTLogDefaultInit(void)
      * Create the default logging instance.
      */
 #ifdef IN_RING3
-# ifndef IN_GUEST_R3
+# ifndef IN_GUEST
     char szExecName[RTPATH_MAX];
     if (!RTProcGetExecutableName(szExecName, sizeof(szExecName)))
         strcpy(szExecName, "VBox");
@@ -376,21 +378,19 @@ RTDECL(PRTLOGGER) RTLogDefaultInit(void)
 #  endif
     }
 
-# else  /* IN_GUEST_R3  */
+# else  /* IN_GUEST */
     /* The user destination is backdoor logging. */
     rc = RTLogCreate(&pLogger, 0, NULL, "VBOX_LOG",
                      RT_ELEMENTS(g_apszGroups), &g_apszGroups[0],
                      RTLOGDEST_USER, "VBox.log");
-# endif /* IN_GUEST_R3 */
+# endif /* IN_GUEST */
 
 #else /* IN_RING0 */
-    rc = RTLogCreate(&pLogger, 0, NULL, "VBOX_LOG", RT_ELEMENTS(g_apszGroups), &g_apszGroups[0],
-# ifdef LOG_TO_BACKDOOR  /** @todo look at guest ring 0 logging */
-                         RTLOGDEST_USER,
-# else
-                         RTLOGDEST_FILE,
-# endif
-                         "VBox-ring0.log");
+# ifndef IN_GUEST
+    rc = RTLogCreate(&pLogger, 0, NULL, "VBOX_LOG", RT_ELEMENTS(g_apszGroups), &g_apszGroups[0], RTLOGDEST_FILE, "VBox-ring0.log");
+# else  /* IN_GUEST */
+    rc = RTLogCreate(&pLogger, 0, NULL, "VBOX_LOG", RT_ELEMENTS(g_apszGroups), &g_apszGroups[0], RTLOGDEST_USER, "VBox-ring0.log");
+# endif /* IN_GUEST */
     if (RT_SUCCESS(rc))
     {
         /*
@@ -401,11 +401,12 @@ RTDECL(PRTLOGGER) RTLogDefaultInit(void)
          * destination is the one doing all the work. On platforms
          * that do differ (like Darwin), STDOUT is the kernel log.
          */
-# if 0 /*defined(DEBUG_bird) && !defined(IN_GUEST)*/
-        //RTLogGroupSettings(pLogger, "all=~0 -default.l6.l5.l4.l3");
-        RTLogGroupSettings(pLogger, "all=0 pgm*=~0 gmm=~0");
+# if defined(DEBUG_bird) && !defined(IN_GUEST)
+        RTLogGroupSettings(pLogger, "all=~0 -default.l6.l5.l4.l3");
         RTLogFlags(pLogger, "enabled unbuffered pid tid");
+#  ifndef IN_GUEST
         pLogger->fDestFlags |= RTLOGDEST_DEBUGGER | RTLOGDEST_STDOUT;
+#  endif
 # endif
 # if defined(DEBUG_sandervl) && !defined(IN_GUEST)
         RTLogGroupSettings(pLogger, "+all");
@@ -418,7 +419,7 @@ RTDECL(PRTLOGGER) RTLogDefaultInit(void)
         pLogger->fDestFlags |= RTLOGDEST_DEBUGGER;
 # endif
 # if defined(DEBUG_aleksey)  /* Guest ring-0 as well */
-        RTLogGroupSettings(pLogger, "+net_adp_drv.e.l.f+net_flt_drv.e.l.f+srv_intnet.e.l.f");
+        RTLogGroupSettings(pLogger, "+net_adp_drv.e.l.f+net_flt_drv.e.l.l2.l3.l4.f");
         RTLogFlags(pLogger, "enabled unbuffered");
         pLogger->fDestFlags |= RTLOGDEST_DEBUGGER | RTLOGDEST_STDOUT;
 # endif

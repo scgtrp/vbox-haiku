@@ -1,9 +1,10 @@
 /** @file
- *
- * VBoxGuest -- VirtualBox Win 2000/XP guest video driver
+ * VBoxGraphics - VirtualBox Win 2000/XP guest video driver.
  *
  * Display driver entry points.
- *
+ */
+
+/*
  * Copyright (C) 2006-2007 Sun Microsystems, Inc.
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
@@ -22,10 +23,12 @@
 #ifndef __VBOXIOCTL__H
 #define __VBOXIOCTL__H
 
+#include <VBox/VMMDev.h>
 #include <VBox/VBoxGuest.h>
 
 #ifdef VBOX_WITH_HGSMI
 #include <VBox/HGSMI/HGSMI.h>
+#include "VBoxHGSMI.h"
 #endif /* VBOX_WITH_HGSMI */
 
 #define IOCTL_VIDEO_INTERPRET_DISPLAY_MEMORY \
@@ -47,6 +50,16 @@
 #ifdef VBOX_WITH_HGSMI
 #define IOCTL_VIDEO_QUERY_HGSMI_INFO \
     CTL_CODE(FILE_DEVICE_VIDEO, 0x430, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+#define IOCTL_VIDEO_HGSMI_QUERY_CALLBACKS \
+    CTL_CODE(FILE_DEVICE_VIDEO, 0x431, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+#define IOCTL_VIDEO_HGSMI_HANDLER_ENABLE \
+    CTL_CODE(FILE_DEVICE_VIDEO, 0x432, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+#define IOCTL_VIDEO_HGSMI_HANDLER_DISABLE \
+    CTL_CODE(FILE_DEVICE_VIDEO, 0x433, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
 #endif /* VBOX_WITH_HGSMI */
 
 #pragma pack(1)
@@ -108,6 +121,36 @@ typedef struct _QUERYHGSMIRESULT
     /* Minimum size of the VBAV buffer. */
     uint32_t u32MinVBVABufferSize;
 } QUERYHGSMIRESULT;
+
+/**
+ * Data returned by IOCTL_VIDEO_HGSMI_QUERY_CALLBACKS.
+ *
+ */
+typedef struct _HGSMIQUERYCALLBACKS
+{
+    HVBOXVIDEOHGSMI hContext;
+    PFNVBOXVIDEOHGSMICOMPLETION pfnCompletionHandler;
+    PFNVBOXVIDEOHGSMICOMMANDS   pfnRequestCommandsHandler;
+} HGSMIQUERYCALLBACKS;
+
+/**
+ * Data returned by IOCTL_VIDEO_HGSMI_HANDLER_ENABLE.
+ *
+ */
+typedef struct _HGSMIHANDLERENABLE
+{
+    uint8_t u8Channel;
+} HGSMIHANDLERENABLE;
+
+/**
+ * Data passed by IOCTL_VIDEO_HGSMI_HANDLER_DISABLE.
+ *
+ */
+typedef struct _HGSMIHANDLERDISABLE
+{
+    uint8_t u8Channel;
+} HGSMIHANDLERDISABLE;
+
 #endif /* VBOX_WITH_HGSMI */
 #pragma pack()
 

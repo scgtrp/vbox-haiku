@@ -47,6 +47,14 @@ if test "$currentzone" = "global"; then
 /name=vboxdrv/d' /etc/devlink.tab > /etc/devlink.vbox
     mv -f /etc/devlink.vbox /etc/devlink.tab
 
+    # remove nwam entry for vboxnet
+    nwamfile=/etc/nwam/llp
+    nwambackupfile=$nwamfile.vbox
+    if test -f "$nwamfile"; then
+        sed -e '/vboxnet/d' $nwamfile > $nwambackupfile
+        mv -f $nwambackupfile $nwamfile
+    fi
+
     # remove devlink.tab entry for vboxusbmon
     sed -e '
 /name=vboxusbmon/d' /etc/devlink.tab > /etc/devlink.vbox

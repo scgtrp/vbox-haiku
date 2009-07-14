@@ -1,5 +1,5 @@
 /** @file
- * HWACCM - SVM Structures and Definitions.
+ * HWACCM - SVM Structures and Definitions. (VMM)
  */
 
 /*
@@ -668,7 +668,6 @@ typedef struct _SVM_VMCB
 
 #ifdef IN_RING0
 VMMR0DECL(int) SVMR0InvalidatePage(PVM pVM, PVMCPU pVCpu, RTGCPTR GCVirt);
-VMMR0DECL(int) SVMR0InvalidatePhysPage(PVM pVM, PVMCPU pVCpu, RTGCPHYS GCPhys);
 #endif /* IN_RING0 */
 
 /** @} */

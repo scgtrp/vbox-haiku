@@ -34,6 +34,15 @@
 #include <VBox/sup.h>
 #include <iprt/system.h>
 #include <iprt/assert.h>
+#include <iprt/asm.h>
+
+# include <libxml/xmlmodule.h>
+# include <libxml/globals.h>
+# include <openssl/md5.h>
+# include <openssl/rc4.h>
+# include <openssl/pem.h>
+# include <openssl/x509.h>
+# include <openssl/rsa.h>
 
 
 /*******************************************************************************
@@ -42,7 +51,20 @@
 PFNRT g_VBoxRTDeps[] =
 {
     (PFNRT)SUPR3Init,
-    (PFNRT)SUPPageLock,
-    (PFNRT)RTAssertShouldPanic
+    (PFNRT)SUPR3PageAllocEx,
+    (PFNRT)SUPSemEventCreate,
+    (PFNRT)xmlModuleOpen,
+    (PFNRT)MD5_Init,
+    (PFNRT)RC4,
+    (PFNRT)RC4_set_key,
+    (PFNRT)PEM_read_bio_X509,
+    (PFNRT)PEM_read_bio_PrivateKey,
+    (PFNRT)X509_free,
+    (PFNRT)i2d_X509,
+    (PFNRT)RSA_generate_key,
+    (PFNRT)RTAssertShouldPanic,
+    (PFNRT)ASMAtomicReadU64,
+    (PFNRT)ASMAtomicCmpXchgU64,
+    NULL
 };
 

@@ -118,10 +118,23 @@ struct VBOXHDD
 };
 
 
+/**
+ * VBox parent read descriptor, used internally for compaction.
+ */
+typedef struct VDPARENTSTATEDESC
+{
+    /** Pointer to disk descriptor. */
+    PVBOXHDD pDisk;
+    /** Pointer to image descriptor. */
+    PVDIMAGE pImage;
+} VDPARENTSTATEDESC, *PVDPARENTSTATEDESC;
+
+
 extern VBOXHDDBACKEND g_RawBackend;
 extern VBOXHDDBACKEND g_VmdkBackend;
 extern VBOXHDDBACKEND g_VDIBackend;
 extern VBOXHDDBACKEND g_VhdBackend;
+extern VBOXHDDBACKEND g_ParallelsBackend;
 #ifdef VBOX_WITH_ISCSI
 extern VBOXHDDBACKEND g_ISCSIBackend;
 #endif
@@ -133,7 +146,8 @@ static PVBOXHDDBACKEND aStaticBackends[] =
     &g_RawBackend,
     &g_VmdkBackend,
     &g_VDIBackend,
-    &g_VhdBackend
+    &g_VhdBackend,
+    &g_ParallelsBackend
 #ifdef VBOX_WITH_ISCSI
     ,&g_ISCSIBackend
 #endif
@@ -306,6 +320,17 @@ static int vdReadHelper(PVBOXHDD pDisk, PVDIMAGE pImage, uint64_t uOffset,
 }
 
 /**
+ * internal: parent image read wrapper for compacting.
+ */
+static int vdParentRead(void *pvUser, uint64_t uOffset, void *pvBuf,
+                        size_t cbRead)
+{
+    PVDPARENTSTATEDESC pParentState = (PVDPARENTSTATEDESC)pvUser;
+    return vdReadHelper(pParentState->pDisk, pParentState->pImage, uOffset,
+                        pvBuf, cbRead);
+}
+
+/**
  * internal: mark the disk as not modified.
  */
 static void vdResetModifiedFlag(PVBOXHDD pDisk)
@@ -361,7 +386,7 @@ static int vdWriteHelperStandard(PVBOXHDD pDisk, PVDIMAGE pImage,
     /* Read the data that goes before the write to fill the block. */
     if (cbPreRead)
     {
-        rc = vdReadHelper(pDisk, pImage->pPrev, uOffset - cbPreRead, pvTmp,
+        rc = vdReadHelper(pDisk, pImage, uOffset - cbPreRead, pvTmp,
                           cbPreRead);
         if (RT_FAILURE(rc))
             return rc;
@@ -396,7 +421,7 @@ static int vdWriteHelperStandard(PVBOXHDD pDisk, PVDIMAGE pImage,
             memcpy((char *)pvTmp + cbPreRead + cbThisWrite,
                    (char *)pvBuf + cbThisWrite, cbWriteCopy);
         if (cbReadImage)
-            rc = vdReadHelper(pDisk, pImage->pPrev,
+            rc = vdReadHelper(pDisk, pImage,
                               uOffset + cbThisWrite + cbWriteCopy,
                               (char *)pvTmp + cbPreRead + cbThisWrite + cbWriteCopy,
                               cbReadImage);
@@ -457,7 +482,7 @@ static int vdWriteHelperOptimized(PVBOXHDD pDisk, PVDIMAGE pImage,
 
     /* Read the entire data of the block so that we can compare whether it will
      * be modified by the write or not. */
-    rc = vdReadHelper(pDisk, pImage->pPrev, uOffset - cbPreRead, pvTmp,
+    rc = vdReadHelper(pDisk, pImage, uOffset - cbPreRead, pvTmp,
                       cbPreRead + cbThisWrite + cbPostRead - cbFill);
     if (RT_FAILURE(rc))
         return rc;
@@ -1235,7 +1260,6 @@ VBOXDDU_DECL(int) VDCreateBase(PVBOXHDD pDisk, const char *pszBackend,
                            rc = VERR_INVALID_PARAMETER);
         /* The PCHS geometry fields may be 0 to leave it for later. */
         AssertMsgBreakStmt(   VALID_PTR(pPCHSGeometry)
-                           && pPCHSGeometry->cCylinders <= 16383
                            && pPCHSGeometry->cHeads <= 16
                            && pPCHSGeometry->cSectors <= 63,
                            ("pPCHSGeometry=%#p PCHS=%u/%u/%u\n", pPCHSGeometry,
@@ -1936,8 +1960,8 @@ VBOXDDU_DECL(int) VDCopy(PVBOXHDD pDiskFrom, unsigned nImage, PVBOXHDD pDiskTo,
             AssertReleaseMsgFailed(("VDCopy: moving by copy/delete not implemented\n"));
         }
 
-        /* When moving an image pszFilename is allowed to be NULL, so do the parameter check here. */
-        AssertMsgBreakStmt(VALID_PTR(pszFilename) && *pszFilename,
+        /* pszFilename is allowed to be NULL, as this indicates copy to the existing image. */
+        AssertMsgBreakStmt(pszFilename == NULL || (VALID_PTR(pszFilename) && *pszFilename),
                            ("pszFilename=%#p \"%s\"\n", pszFilename, pszFilename),
                            rc = VERR_INVALID_PARAMETER);
 
@@ -1948,9 +1972,6 @@ VBOXDDU_DECL(int) VDCopy(PVBOXHDD pDiskFrom, unsigned nImage, PVBOXHDD pDiskTo,
             rc = VERR_VD_VALUE_NOT_FOUND;
             break;
         }
-
-        if (cbSize == 0)
-            cbSize = cbSizeFrom;
 
         PDMMEDIAGEOMETRY PCHSGeometryFrom = {0, 0, 0};
         PDMMEDIAGEOMETRY LCHSGeometryFrom = {0, 0, 0};
@@ -1992,33 +2013,57 @@ VBOXDDU_DECL(int) VDCopy(PVBOXHDD pDiskFrom, unsigned nImage, PVBOXHDD pDiskTo,
         unsigned uOpenFlagsFrom;
         uOpenFlagsFrom = pImageFrom->Backend->pfnGetOpenFlags(pImageFrom->pvBackendData);
 
-        /* Create destination image with the properties of the source image. */
-        /** @todo replace the VDCreateDiff/VDCreateBase calls by direct
-         * calls to the backend. Unifies the code and reduces the API
-         * dependencies. */
-        if (uImageFlags & VD_IMAGE_FLAGS_DIFF)
+        if (pszFilename)
         {
-            rc = VDCreateDiff(pDiskTo, pszBackend, pszFilename, uImageFlags,
-                              szComment, &ImageUuid, &ParentUuid, uOpenFlagsFrom & ~VD_OPEN_FLAGS_READONLY, NULL, NULL);
-        } else {
-            /** @todo Please, review this! It's an ugly hack I think... */
-            if (!RTStrICmp(pszBackend, "RAW"))
-                uImageFlags |= VD_IMAGE_FLAGS_FIXED;
+            if (cbSize == 0)
+                cbSize = cbSizeFrom;
 
-            rc = VDCreateBase(pDiskTo, pszBackend, pszFilename, cbSize,
-                              uImageFlags, szComment,
-                              &PCHSGeometryFrom, &LCHSGeometryFrom,
-                              NULL, uOpenFlagsFrom & ~VD_OPEN_FLAGS_READONLY, NULL, NULL);
-            if (RT_SUCCESS(rc) && !RTUuidIsNull(&ImageUuid))
-                 pDiskTo->pLast->Backend->pfnSetUuid(pDiskTo->pLast->pvBackendData, &ImageUuid);
-            if (RT_SUCCESS(rc) && !RTUuidIsNull(&ParentUuid))
-                 pDiskTo->pLast->Backend->pfnSetParentUuid(pDiskTo->pLast->pvBackendData, &ParentUuid);
+            /* Create destination image with the properties of the source image. */
+            /** @todo replace the VDCreateDiff/VDCreateBase calls by direct
+             * calls to the backend. Unifies the code and reduces the API
+             * dependencies. */
+            if (uImageFlags & VD_IMAGE_FLAGS_DIFF)
+            {
+                rc = VDCreateDiff(pDiskTo, pszBackend, pszFilename, uImageFlags,
+                                  szComment, &ImageUuid, &ParentUuid, uOpenFlagsFrom & ~VD_OPEN_FLAGS_READONLY, NULL, NULL);
+            } else {
+                /** @todo Please, review this! It's an ugly hack I think... */
+                if (!RTStrICmp(pszBackend, "RAW"))
+                    uImageFlags |= VD_IMAGE_FLAGS_FIXED;
+
+                rc = VDCreateBase(pDiskTo, pszBackend, pszFilename, cbSize,
+                                  uImageFlags, szComment,
+                                  &PCHSGeometryFrom, &LCHSGeometryFrom,
+                                  NULL, uOpenFlagsFrom & ~VD_OPEN_FLAGS_READONLY, NULL, NULL);
+                if (RT_SUCCESS(rc) && !RTUuidIsNull(&ImageUuid))
+                     pDiskTo->pLast->Backend->pfnSetUuid(pDiskTo->pLast->pvBackendData, &ImageUuid);
+                if (RT_SUCCESS(rc) && !RTUuidIsNull(&ParentUuid))
+                     pDiskTo->pLast->Backend->pfnSetParentUuid(pDiskTo->pLast->pvBackendData, &ParentUuid);
+            }
+            if (RT_FAILURE(rc))
+                break;
+
+            pImageTo = pDiskTo->pLast;
+            AssertPtrBreakStmt(pImageTo, rc = VERR_VD_IMAGE_NOT_FOUND);
+
+            cbSize = RT_MIN(cbSize, cbSizeFrom);
         }
-        if (RT_FAILURE(rc))
-            break;
+        else
+        {
+            pImageTo = pDiskTo->pLast;
+            AssertPtrBreakStmt(pImageTo, rc = VERR_VD_IMAGE_NOT_FOUND);
 
-        pImageTo = pDiskTo->pLast;
-        AssertPtrBreakStmt(pImageTo, rc = VERR_VD_IMAGE_NOT_FOUND);
+            uint64_t cbSizeTo;
+            cbSizeTo = pImageTo->Backend->pfnGetSize(pImageTo->pvBackendData);
+            if (cbSizeTo == 0)
+            {
+                rc = VERR_VD_VALUE_NOT_FOUND;
+                break;
+            }
+
+            if (cbSize == 0)
+                cbSize = RT_MIN(cbSizeFrom, cbSizeTo);
+        }
 
         /* Allocate tmp buffer. */
         pvBuf = RTMemTmpAlloc(VD_MERGE_BUFFER_SIZE);
@@ -2070,11 +2115,15 @@ VBOXDDU_DECL(int) VDCopy(PVBOXHDD pDiskFrom, unsigned nImage, PVBOXHDD pDiskTo,
         if (RT_SUCCESS(rc))
         {
             pImageTo->Backend->pfnSetModificationUuid(pImageTo->pvBackendData, &ImageModificationUuid);
-            pImageTo->Backend->pfnGetParentModificationUuid(pImageTo->pvBackendData, &ParentModificationUuid);
+            /** @todo double-check this - it makes little sense to copy over the parent modification uuid,
+             * as the destination image can have a totally different parent. */
+#if 0
+            pImageTo->Backend->pfnSetParentModificationUuid(pImageTo->pvBackendData, &ParentModificationUuid);
+#endif
         }
     } while (0);
 
-    if (RT_FAILURE(rc) && pImageTo)
+    if (RT_FAILURE(rc) && pImageTo && pszFilename)
     {
         /* Error detected, but new image created. Remove image from list. */
         vdRemoveImageFromList(pDiskTo, pImageTo);
@@ -2102,6 +2151,98 @@ VBOXDDU_DECL(int) VDCopy(PVBOXHDD pDiskFrom, unsigned nImage, PVBOXHDD pDiskTo,
         if (pDstCbProgress && pDstCbProgress->pfnProgress)
             pDstCbProgress->pfnProgress(NULL /* WARNING! pVM=NULL */, 100,
                                         pDstIfProgress->pvUser);
+    }
+
+    LogFlowFunc(("returns %Rrc\n", rc));
+    return rc;
+}
+
+/**
+ * Optimizes the storage consumption of an image. Typically the unused blocks
+ * have to be wiped with zeroes to achieve a substantial reduced storage use.
+ * Another optimization done is reordering the image blocks, which can provide
+ * a significant performance boost, as reads and writes tend to use less random
+ * file offsets.
+ *
+ * @return  VBox status code.
+ * @return  VERR_VD_IMAGE_NOT_FOUND if image with specified number was not opened.
+ * @return  VERR_VD_IMAGE_READ_ONLY if image is not writable.
+ * @return  VERR_NOT_SUPPORTED if this kind of image can be compacted, but
+ *                             the code for this isn't implemented yet.
+ * @param   pDisk           Pointer to HDD container.
+ * @param   nImage          Image number, counts from 0. 0 is always base image of container.
+ * @param   pVDIfsOperation Pointer to the per-operation VD interface list.
+ */
+VBOXDDU_DECL(int) VDCompact(PVBOXHDD pDisk, unsigned nImage,
+                            PVDINTERFACE pVDIfsOperation)
+{
+    int rc;
+    void *pvBuf = NULL;
+    void *pvTmp = NULL;
+
+    LogFlowFunc(("pDisk=%#p nImage=%u pVDIfsOperation=%#p\n",
+                 pDisk, nImage, pVDIfsOperation));
+
+    PVDINTERFACE pIfProgress = VDInterfaceGet(pVDIfsOperation,
+                                              VDINTERFACETYPE_PROGRESS);
+    PVDINTERFACEPROGRESS pCbProgress = NULL;
+    if (pIfProgress)
+        pCbProgress = VDGetInterfaceProgress(pIfProgress);
+
+    do {
+        /* Check arguments. */
+        AssertMsgBreakStmt(VALID_PTR(pDisk), ("pDisk=%#p\n", pDisk),
+                           rc = VERR_INVALID_PARAMETER);
+        AssertMsg(pDisk->u32Signature == VBOXHDDDISK_SIGNATURE,
+                  ("u32Signature=%08x\n", pDisk->u32Signature));
+
+        PVDIMAGE pImage = vdGetImageByNumber(pDisk, nImage);
+        AssertPtrBreakStmt(pImage, rc = VERR_VD_IMAGE_NOT_FOUND);
+
+        /* If there is no compact callback for not file based backends then
+         * the backend doesn't need compaction. No need to make much fuss about
+         * this. For file based ones signal this as not yet supported. */
+        if (!pImage->Backend->pfnCompact)
+        {
+            if (pImage->Backend->uBackendCaps & VD_CAP_FILE)
+                rc = VERR_NOT_SUPPORTED;
+            else
+                rc = VINF_SUCCESS;
+            break;
+        }
+
+        /* Insert interface for reading parent state into per-operation list,
+         * if there is a parent image. */
+        VDINTERFACE IfOpParent;
+        VDINTERFACEPARENTSTATE ParentCb;
+        VDPARENTSTATEDESC ParentUser;
+        if (pImage->pPrev)
+        {
+            ParentCb.cbSize = sizeof(ParentCb);
+            ParentCb.enmInterface = VDINTERFACETYPE_PARENTSTATE;
+            ParentCb.pfnParentRead = vdParentRead;
+            ParentUser.pDisk = pDisk;
+            ParentUser.pImage = pImage->pPrev;
+            rc = VDInterfaceAdd(&IfOpParent, "VDCompact_ParentState", VDINTERFACETYPE_PARENTSTATE,
+                                &ParentCb, &ParentUser, &pVDIfsOperation);
+            AssertRC(rc);
+        }
+
+        rc = pImage->Backend->pfnCompact(pImage->pvBackendData,
+                                         0, 99,
+                                         pVDIfsOperation);
+    } while (0);
+
+    if (pvBuf)
+        RTMemTmpFree(pvBuf);
+    if (pvTmp)
+        RTMemTmpFree(pvTmp);
+
+    if (RT_SUCCESS(rc))
+    {
+        if (pCbProgress && pCbProgress->pfnProgress)
+            pCbProgress->pfnProgress(NULL /* WARNING! pVM=NULL */, 100,
+                                     pIfProgress->pvUser);
     }
 
     LogFlowFunc(("returns %Rrc\n", rc));
@@ -2550,7 +2691,6 @@ VBOXDDU_DECL(int) VDSetPCHSGeometry(PVBOXHDD pDisk, unsigned nImage,
 
         /* Check arguments. */
         AssertMsgBreakStmt(   VALID_PTR(pPCHSGeometry)
-                           && pPCHSGeometry->cCylinders <= 16383
                            && pPCHSGeometry->cHeads <= 16
                            && pPCHSGeometry->cSectors <= 63,
                            ("pPCHSGeometry=%#p PCHS=%u/%u/%u\n", pPCHSGeometry,

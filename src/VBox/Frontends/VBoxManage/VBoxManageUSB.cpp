@@ -24,7 +24,7 @@
 #include <VBox/com/Guid.h>
 #include <VBox/com/array.h>
 #include <VBox/com/ErrorInfo.h>
-#include <VBox/com/errorprint2.h>
+#include <VBox/com/errorprint.h>
 #include <VBox/com/EventQueue.h>
 
 #include <VBox/com/VirtualBox.h>
@@ -78,6 +78,10 @@ public:
         Guid guid(iid);
         if (guid == Guid(NS_GET_IID(IUnknown)))
             *ppvObject = (IUnknown *)this;
+#ifdef RT_OS_WINDOWS
+        else if (guid == Guid(NS_GET_IID(IDispatch)))
+            *ppvObject = (IDispatch *)this;
+#endif
         else if (guid == Guid(NS_GET_IID(IUSBDevice)))
             *ppvObject = (IUSBDevice *)this;
         else
@@ -233,7 +237,7 @@ int handleUSBFilter (HandlerArg *a)
                     else
                     {
                         /* assume it's a UUID of a machine */
-                        rc = a->virtualBox->GetMachine(Guid(a->argv[i]), cmd.mMachine.asOutParam());
+                        rc = a->virtualBox->GetMachine(Bstr(a->argv[i]), cmd.mMachine.asOutParam());
                         if (FAILED(rc) || !cmd.mMachine)
                         {
                             /* must be a name */
@@ -387,7 +391,7 @@ int handleUSBFilter (HandlerArg *a)
                     else
                     {
                         /* assume it's a UUID of a machine */
-                        rc = a->virtualBox->GetMachine(Guid(a->argv[i]), cmd.mMachine.asOutParam());
+                        rc = a->virtualBox->GetMachine(Bstr(a->argv[i]), cmd.mMachine.asOutParam());
                         if (FAILED(rc) || !cmd.mMachine)
                         {
                             /* must be a name */
@@ -415,7 +419,7 @@ int handleUSBFilter (HandlerArg *a)
         CHECK_ERROR_RET (a->virtualBox, COMGETTER(Host) (host.asOutParam()), 1);
     else
     {
-        Guid uuid;
+        Bstr uuid;
         cmd.mMachine->COMGETTER(Id)(uuid.asOutParam());
         /* open a session for the VM */
         CHECK_ERROR_RET (a->virtualBox, OpenSession(a->session, uuid), 1);
@@ -557,8 +561,12 @@ int handleUSBFilter (HandlerArg *a)
 
     if (cmd.mMachine)
     {
-        /* commit and close the session */
-        CHECK_ERROR(cmd.mMachine, SaveSettings());
+        if (SUCCEEDED (rc))
+        {
+            /* commit the session */
+            CHECK_ERROR(cmd.mMachine, SaveSettings());
+        }
+        /* close the session */
         a->session->Close();
     }
 

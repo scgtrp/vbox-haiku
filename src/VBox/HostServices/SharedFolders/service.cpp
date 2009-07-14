@@ -135,34 +135,37 @@ static DECLCALLBACK(int) svcSaveState(void *, uint32_t u32ClientID, void *pvClie
     /* Save all the active mappings. */
     for (int i=0;i<SHFL_MAX_MAPPINGS;i++)
     {
-        rc = SSMR3PutU32(pSSM, FolderMapping[i].cMappings);
+        /* Mapping are saved in the order of increasing root handle values. */
+        MAPPING *pFolderMapping = vbsfMappingGetByRoot(i);
+
+        rc = SSMR3PutU32(pSSM, pFolderMapping? pFolderMapping->cMappings: 0);
         AssertRCReturn(rc, rc);
 
-        rc = SSMR3PutBool(pSSM, FolderMapping[i].fValid);
+        rc = SSMR3PutBool(pSSM, pFolderMapping? pFolderMapping->fValid: false);
         AssertRCReturn(rc, rc);
 
-        if (FolderMapping[i].fValid)
+        if (pFolderMapping && pFolderMapping->fValid)
         {
             uint32_t len;
 
-            len = ShflStringSizeOfBuffer(FolderMapping[i].pFolderName);
+            len = ShflStringSizeOfBuffer(pFolderMapping->pFolderName);
             rc = SSMR3PutU32(pSSM, len);
             AssertRCReturn(rc, rc);
 
-            rc = SSMR3PutMem(pSSM, FolderMapping[i].pFolderName, len);
+            rc = SSMR3PutMem(pSSM, pFolderMapping->pFolderName, len);
             AssertRCReturn(rc, rc);
 
-            len = ShflStringSizeOfBuffer(FolderMapping[i].pMapName);
+            len = ShflStringSizeOfBuffer(pFolderMapping->pMapName);
             rc = SSMR3PutU32(pSSM, len);
             AssertRCReturn(rc, rc);
 
-            rc = SSMR3PutMem(pSSM, FolderMapping[i].pMapName, len);
+            rc = SSMR3PutMem(pSSM, pFolderMapping->pMapName, len);
             AssertRCReturn(rc, rc);
 
-            rc = SSMR3PutBool(pSSM, FolderMapping[i].fHostCaseSensitive);
+            rc = SSMR3PutBool(pSSM, pFolderMapping->fHostCaseSensitive);
             AssertRCReturn(rc, rc);
 
-            rc = SSMR3PutBool(pSSM, FolderMapping[i].fGuestCaseSensitive);
+            rc = SSMR3PutBool(pSSM, pFolderMapping->fGuestCaseSensitive);
             AssertRCReturn(rc, rc);
         }
     }
@@ -202,74 +205,60 @@ static DECLCALLBACK(int) svcLoadState(void *, uint32_t u32ClientID, void *pvClie
     /* We don't actually (fully) restore the state; we simply check if the current state is as we it expect it to be. */
     for (int i=0;i<SHFL_MAX_MAPPINGS;i++)
     {
-        bool fValid;
+        /* Load the saved mapping description and try to find it in the mappings. */
+        MAPPING mapping;
+        memset (&mapping, 0, sizeof (mapping));
 
         /* restore the folder mapping counter. */
-        rc = SSMR3GetU32(pSSM, &FolderMapping[i].cMappings);
+        rc = SSMR3GetU32(pSSM, &mapping.cMappings);
         AssertRCReturn(rc, rc);
 
-        rc = SSMR3GetBool(pSSM, &fValid);
+        rc = SSMR3GetBool(pSSM, &mapping.fValid);
         AssertRCReturn(rc, rc);
 
-        if (fValid != FolderMapping[i].fValid)
-            return VERR_SSM_UNEXPECTED_DATA;
-
-        if (FolderMapping[i].fValid)
+        if (mapping.fValid)
         {
-            PSHFLSTRING pName;
+            uint32_t cbFolderName;
+            PSHFLSTRING pFolderName;
 
-            /* Check the host path name. */
-            rc = SSMR3GetU32(pSSM, &len);
+            uint32_t cbMapName;
+            PSHFLSTRING pMapName;
+
+            /* Load the host path name. */
+            rc = SSMR3GetU32(pSSM, &cbFolderName);
             AssertRCReturn(rc, rc);
 
-            if (len != ShflStringSizeOfBuffer(FolderMapping[i].pFolderName))
-                return VERR_SSM_UNEXPECTED_DATA;
+            pFolderName = (PSHFLSTRING)RTMemAlloc(cbFolderName);
+            AssertReturn(pFolderName != NULL, VERR_NO_MEMORY);
 
-            pName = (PSHFLSTRING)RTMemAlloc(len);
-            Assert(pName);
-            if (pName == NULL)
-                return VERR_NO_MEMORY;
-
-            rc = SSMR3GetMem(pSSM, pName, len);
+            rc = SSMR3GetMem(pSSM, pFolderName, cbFolderName);
             AssertRCReturn(rc, rc);
 
-            if (memcmp(FolderMapping[i].pFolderName, pName, len))
-            {
-                RTMemFree(pName);
-                return VERR_SSM_UNEXPECTED_DATA;
-            }
-            RTMemFree(pName);
-
-            /* Check the map name. */
-            rc = SSMR3GetU32(pSSM, &len);
+            /* Load the map name. */
+            rc = SSMR3GetU32(pSSM, &cbMapName);
             AssertRCReturn(rc, rc);
 
-            if (len != ShflStringSizeOfBuffer(FolderMapping[i].pMapName))
-                return VERR_SSM_UNEXPECTED_DATA;
+            pMapName = (PSHFLSTRING)RTMemAlloc(cbMapName);
+            AssertReturn(pMapName != NULL, VERR_NO_MEMORY);
 
-            pName = (PSHFLSTRING)RTMemAlloc(len);
-            Assert(pName);
-            if (pName == NULL)
-                return VERR_NO_MEMORY;
-
-            rc = SSMR3GetMem(pSSM, pName, len);
+            rc = SSMR3GetMem(pSSM, pMapName, cbMapName);
             AssertRCReturn(rc, rc);
 
-            if (memcmp(FolderMapping[i].pMapName, pName, len))
-            {
-                RTMemFree(pName);
-                return VERR_SSM_UNEXPECTED_DATA;
-            }
-            RTMemFree(pName);
-
-            bool fCaseSensitive;
-
-            rc = SSMR3GetBool(pSSM, &fCaseSensitive);
+            rc = SSMR3GetBool(pSSM, &mapping.fHostCaseSensitive);
             AssertRCReturn(rc, rc);
-            if (FolderMapping[i].fHostCaseSensitive != fCaseSensitive)
-                return VERR_SSM_UNEXPECTED_DATA;
 
-            rc = SSMR3GetBool(pSSM, &FolderMapping[i].fGuestCaseSensitive);
+            rc = SSMR3GetBool(pSSM, &mapping.fGuestCaseSensitive);
+            AssertRCReturn(rc, rc);
+
+            mapping.pFolderName = pFolderName;
+            mapping.pMapName = pMapName;
+
+            /* 'i' is the root handle of the saved mapping. */
+            rc = vbsfMappingLoaded (&mapping, i);
+
+            RTMemFree(pMapName);
+            RTMemFree(pFolderName);
+
             AssertRCReturn(rc, rc);
         }
     }
@@ -325,7 +314,7 @@ static DECLCALLBACK(void) svcCall (void *, VBOXHGCMCALLHANDLE callHandle, uint32
 
                 /* Verify parameters values. */
                 if (   (fu32Flags & ~SHFL_MF_UTF8) != 0
-                    || (cbMappings < sizeof (SHFLMAPPING) * cMappings)
+                    || cbMappings / sizeof (SHFLMAPPING) < cMappings
                    )
                 {
                     rc = VERR_INVALID_PARAMETER;
@@ -371,12 +360,9 @@ static DECLCALLBACK(void) svcCall (void *, VBOXHGCMCALLHANDLE callHandle, uint32
                 /* Fetch parameters. */
                 SHFLROOT  root         = (SHFLROOT)paParms[0].u.uint32;
                 SHFLSTRING *pString    = (SHFLSTRING *)paParms[1].u.pointer.addr;
-                uint32_t cbString      = paParms[1].u.pointer.size;
 
                 /* Verify parameters values. */
-                if (   (cbString < sizeof (SHFLSTRING))
-                    || (cbString < pString->u16Size)
-                   )
+                if (!ShflStringIsValid(pString, paParms[1].u.pointer.size))
                 {
                     rc = VERR_INVALID_PARAMETER;
                 }
@@ -422,7 +408,7 @@ static DECLCALLBACK(void) svcCall (void *, VBOXHGCMCALLHANDLE callHandle, uint32
                 uint32_t cbParms        = paParms[2].u.pointer.size;
 
                 /* Verify parameters values. */
-                if (   (cbPath < sizeof (SHFLSTRING))
+                if (   !ShflStringIsValid(pPath, cbPath)
                     || (cbParms != sizeof (SHFLCREATEPARMS))
                    )
                 {
@@ -524,7 +510,9 @@ static DECLCALLBACK(void) svcCall (void *, VBOXHGCMCALLHANDLE callHandle, uint32
                 uint8_t   *pBuffer = (uint8_t *)paParms[4].u.pointer.addr;
 
                 /* Verify parameters values. */
-                if (Handle == SHFL_HANDLE_ROOT)
+                if (   Handle == SHFL_HANDLE_ROOT
+                    || count > paParms[4].u.pointer.size
+                   )
                 {
                     rc = VERR_INVALID_PARAMETER;
                 }
@@ -589,7 +577,9 @@ static DECLCALLBACK(void) svcCall (void *, VBOXHGCMCALLHANDLE callHandle, uint32
                 uint8_t   *pBuffer = (uint8_t *)paParms[4].u.pointer.addr;
 
                 /* Verify parameters values. */
-                if (Handle == SHFL_HANDLE_ROOT)
+                if (   Handle == SHFL_HANDLE_ROOT
+                    || count > paParms[4].u.pointer.size
+                   )
                 {
                     rc = VERR_INVALID_PARAMETER;
                 }
@@ -748,6 +738,8 @@ static DECLCALLBACK(void) svcCall (void *, VBOXHGCMCALLHANDLE callHandle, uint32
 
                 /* Verify parameters values. */
                 if (   (length < sizeof (SHFLDIRINFO))
+                    ||  length > paParms[5].u.pointer.size
+                    ||  !ShflStringIsValidOrNull(pPath, paParms[4].u.pointer.size)
                    )
                 {
                     rc = VERR_INVALID_PARAMETER;
@@ -811,13 +803,21 @@ static DECLCALLBACK(void) svcCall (void *, VBOXHGCMCALLHANDLE callHandle, uint32
                 SHFLROOT    root       = (SHFLROOT)paParms[1].u.uint32;
                 RTUTF16     delimiter  = (RTUTF16)paParms[2].u.uint32;
 
-                /* Execute the function. */
-                rc = vbsfMapFolder (pClient, pszMapName, delimiter, false,  &root);
-
-                if (RT_SUCCESS(rc))
+                /* Verify parameters values. */
+                if (!ShflStringIsValid(pszMapName, paParms[0].u.pointer.size))
                 {
-                    /* Update parameters.*/
-                    paParms[1].u.uint32 = root;
+                    rc = VERR_INVALID_PARAMETER;
+                }
+                else
+                {
+                    /* Execute the function. */
+                    rc = vbsfMapFolder (pClient, pszMapName, delimiter, false,  &root);
+
+                    if (RT_SUCCESS(rc))
+                    {
+                        /* Update parameters.*/
+                        paParms[1].u.uint32 = root;
+                    }
                 }
             }
             break;
@@ -854,13 +854,22 @@ static DECLCALLBACK(void) svcCall (void *, VBOXHGCMCALLHANDLE callHandle, uint32
                 RTUTF16     delimiter  = (RTUTF16)paParms[2].u.uint32;
                 bool        fCaseSensitive = !!paParms[3].u.uint32;
 
-                /* Execute the function. */
-                rc = vbsfMapFolder (pClient, pszMapName, delimiter, fCaseSensitive, &root);
-
-                if (RT_SUCCESS(rc))
+                /* Verify parameters values. */
+                if (!ShflStringIsValid(pszMapName, paParms[0].u.pointer.size))
                 {
-                    /* Update parameters.*/
-                    paParms[1].u.uint32 = root;
+                    rc = VERR_INVALID_PARAMETER;
+                }
+                else
+                {
+
+                    /* Execute the function. */
+                    rc = vbsfMapFolder (pClient, pszMapName, delimiter, fCaseSensitive, &root);
+
+                    if (RT_SUCCESS(rc))
+                    {
+                        /* Update parameters.*/
+                        paParms[1].u.uint32 = root;
+                    }
                 }
             }
             LogRel(("SharedFolders host service: map operation result %Rrc.\n", rc));
@@ -932,20 +941,28 @@ static DECLCALLBACK(void) svcCall (void *, VBOXHGCMCALLHANDLE callHandle, uint32
                 uint32_t   length  = paParms[3].u.uint32;
                 uint8_t   *pBuffer = (uint8_t *)paParms[4].u.pointer.addr;
 
-                /* Execute the function. */
-                if (flags & SHFL_INFO_SET)
-                    rc = vbsfSetFSInfo (pClient, root, Handle, flags, &length, pBuffer);
-                else /* SHFL_INFO_GET */
-                    rc = vbsfQueryFSInfo (pClient, root, Handle, flags, &length, pBuffer);
-
-                if (RT_SUCCESS(rc))
+                /* Verify parameters values. */
+                if (length > paParms[4].u.pointer.size)
                 {
-                    /* Update parameters.*/
-                    paParms[3].u.uint32 = length;
+                    rc = VERR_INVALID_PARAMETER;
                 }
                 else
                 {
-                    paParms[3].u.uint32 = 0;  /* nothing read */
+                    /* Execute the function. */
+                    if (flags & SHFL_INFO_SET)
+                        rc = vbsfSetFSInfo (pClient, root, Handle, flags, &length, pBuffer);
+                    else /* SHFL_INFO_GET */
+                        rc = vbsfQueryFSInfo (pClient, root, Handle, flags, &length, pBuffer);
+
+                    if (RT_SUCCESS(rc))
+                    {
+                        /* Update parameters.*/
+                        paParms[3].u.uint32 = length;
+                    }
+                    else
+                    {
+                        paParms[3].u.uint32 = 0;  /* nothing read */
+                    }
                 }
             }
             break;
@@ -977,8 +994,7 @@ static DECLCALLBACK(void) svcCall (void *, VBOXHGCMCALLHANDLE callHandle, uint32
                 uint32_t flags          = paParms[2].u.uint32;
 
                 /* Verify parameters values. */
-                if (   (cbPath < sizeof (SHFLSTRING))
-                   )
+                if (!ShflStringIsValid(pPath, cbPath))
                 {
                     rc = VERR_INVALID_PARAMETER;
                 }
@@ -1019,14 +1035,12 @@ static DECLCALLBACK(void) svcCall (void *, VBOXHGCMCALLHANDLE callHandle, uint32
                 /* Fetch parameters. */
                 SHFLROOT    root        = (SHFLROOT)paParms[0].u.uint32;
                 SHFLSTRING *pSrc        = (SHFLSTRING *)paParms[1].u.pointer.addr;
-                uint32_t    cbSrc       = paParms[1].u.pointer.size;
                 SHFLSTRING *pDest       = (SHFLSTRING *)paParms[2].u.pointer.addr;
-                uint32_t    cbDest      = paParms[2].u.pointer.size;
                 uint32_t    flags       = paParms[3].u.uint32;
 
                 /* Verify parameters values. */
-                if (   (cbSrc < sizeof (SHFLSTRING))
-                    || (cbDest < sizeof (SHFLSTRING))
+                if (    !ShflStringIsValid(pSrc, paParms[1].u.pointer.size)
+                    ||  !ShflStringIsValid(pDest, paParms[2].u.pointer.size)
                    )
                 {
                     rc = VERR_INVALID_PARAMETER;
@@ -1166,16 +1180,12 @@ static DECLCALLBACK(int) svcHostCall (void *, uint32_t u32Function, uint32_t cPa
         {
             /* Fetch parameters. */
             SHFLSTRING *pFolderName = (SHFLSTRING *)paParms[0].u.pointer.addr;
-            uint32_t cbStringFolder = paParms[0].u.pointer.size;
             SHFLSTRING *pMapName    = (SHFLSTRING *)paParms[1].u.pointer.addr;
-            uint32_t cbStringMap    = paParms[1].u.pointer.size;
             uint32_t fWritable      = paParms[2].u.uint32;
 
             /* Verify parameters values. */
-            if (   (cbStringFolder < sizeof (SHFLSTRING))
-                || (cbStringFolder < pFolderName->u16Size)
-                || (cbStringMap < sizeof (SHFLSTRING))
-                || (cbStringMap < pMapName->u16Size)
+            if (    !ShflStringIsValid(pFolderName, paParms[0].u.pointer.size)
+                ||  !ShflStringIsValid(pMapName, paParms[1].u.pointer.size)
                )
             {
                 rc = VERR_INVALID_PARAMETER;
@@ -1215,13 +1225,10 @@ static DECLCALLBACK(int) svcHostCall (void *, uint32_t u32Function, uint32_t cPa
         else
         {
             /* Fetch parameters. */
-            SHFLSTRING *pString    = (SHFLSTRING *)paParms[0].u.pointer.addr;
-            uint32_t cbString      = paParms[0].u.pointer.size;
+            SHFLSTRING *pString = (SHFLSTRING *)paParms[0].u.pointer.addr;
 
             /* Verify parameters values. */
-            if (   (cbString < sizeof (SHFLSTRING))
-                || (cbString < pString->u16Size)
-               )
+            if (!ShflStringIsValid(pString, paParms[0].u.pointer.size))
             {
                 rc = VERR_INVALID_PARAMETER;
             }
@@ -1326,6 +1333,8 @@ extern "C" DECLCALLBACK(DECLEXPORT(int)) VBoxHGCMSvcLoad (VBOXHGCMSVCFNTABLE *pt
         /* Init handle table */
         rc = vbsfInitHandleTable();
         AssertRC(rc);
+
+        vbsfMappingInit();
     }
 
     return rc;

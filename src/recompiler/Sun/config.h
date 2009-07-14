@@ -30,3 +30,18 @@
 #  define TARGET_X86_64
 # endif
 #endif
+
+/* Uncomment to see all phys memory accesses */
+/* #define VBOX_DEBUG_PHYS */
+/* Uncomment to see emulated CPU state changes */
+/* #define VBOX_DUMP_STATE */
+/* Uncomment to see QEMU logging, goes to /tmp/vbox-qemu.log */
+/* #define DEBUG_ALL_LOGGING */
+/* Uncomment to see generated code */
+/* #define DEBUG_DISAS */
+
+#if 0 /*defined(RT_ARCH_AMD64) && defined(VBOX_STRICT)*/
+# define VBOX_CHECK_ADDR(ptr) do { if ((uintptr_t)(ptr) >= _4G) __asm__("int3"); } while (0)
+#else
+# define VBOX_CHECK_ADDR(ptr) do { } while (0)
+#endif

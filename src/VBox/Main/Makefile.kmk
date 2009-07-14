@@ -4,7 +4,7 @@
 #
 
 #
-# Copyright (C) 2006-2007 Sun Microsystems, Inc.
+# Copyright (C) 2006-2009 Sun Microsystems, Inc.
 #
 # This file is part of VirtualBox Open Source Edition (OSE), as
 # available from http://www.virtualbox.org. This file is free software;
@@ -64,14 +64,6 @@ VBOX_MAIN_DEFS += \
 	$(if $(VBOX_WITH_GUEST_PROPS),VBOX_WITH_GUEST_PROPS,) \
 	$(if $(VBOX_WITH_HOSTNETIF_API),VBOX_WITH_HOSTNETIF_API,)
 
-if1of ($(KBUILD_TARGET), linux freebsd solaris)
- VBOX_MAIN_DEFS += VBOX_MAIN_USE_SEMRW
-#else
-# if1of ($(VBOX_VERSION_BUILD),1 3 5 7 9)
-#  VBOX_MAIN_DEFS += VBOX_MAIN_AUTOLOCK_TRAP
-# endif
-endif
-
 # Unconditionally enable the new semaphore key generation code
 VBOX_MAIN_DEFS += VBOX_WITH_NEW_SYS_V_KEYGEN
 
@@ -87,9 +79,7 @@ if defined(VBOX_ONLY_SDK) || "$(KBUILD_TARGET)" == "win"
  	$(VBOX_IDL_FILE.MSCOM) \
  	$(VBOX_PATH_SDK)/bindings/mscom/include/VirtualBox.h \
  	$(VBOX_PATH_SDK)/bindings/mscom/lib/VirtualBox.tlb \
- 	$(VBOX_PATH_SDK)/bindings/mscom/lib/VirtualBox_i.c \
- 	$(VBOX_PATH_SDK)/bindings/mscom/python/samples/vboxshell.py   \
- 	$(VBOX_PATH_SDK)/bindings/mscom/python/samples/shellcommon.py
+ 	$(VBOX_PATH_SDK)/bindings/mscom/lib/VirtualBox_i.c
  OTHER_CLEAN    += \
  	$(VBOX_IDL_FILE.MSCOM) \
  	$(VBOX_PATH_SDK)/bindings/mscom/include/VirtualBox.h \
@@ -97,9 +87,7 @@ if defined(VBOX_ONLY_SDK) || "$(KBUILD_TARGET)" == "win"
  	$(VBOX_PATH_SDK)/bindings/mscom/lib/VirtualBox_i.c \
  	$(PATH_VBoxCOM)/VirtualBox.h   \
  	$(PATH_VBoxCOM)/VirtualBox_i.c \
- 	$(PATH_VBoxCOM)/VirtualBox.tlb \
- 	$(VBOX_PATH_SDK)/bindings/mscom/python/samples/vboxshell.py \
- 	$(VBOX_PATH_SDK)/bindings/mscom/python/samples/shellcommon.py
+ 	$(PATH_VBoxCOM)/VirtualBox.tlb
 
  VBOX_MAIN_PREREQS += $(PATH_VBoxCOM)/VirtualBox_i.c
  BLDDIRS += $(VBOX_PATH_SDK)/bindings/mscom/idl
@@ -124,7 +112,7 @@ endif # xpcom
 # Strip documentation from source XIDL so that we don't get a full
 # recompile every time a comma in the documentation is changed.
 #
-$(VBOX_XIDL_FILE).ts |+ $(VBOX_XIDL_FILE): \
+$(VBOX_XIDL_FILE).ts +| $(VBOX_XIDL_FILE): \
 		$(VBOX_XIDL_FILE_SRC) \
 		$(VBOX_PATH_MAIN_SRC)/idl/docstrip.xsl \
 		| $$(dir $$@)
@@ -172,6 +160,18 @@ INSTALLS += VBox-main-xidl
 VBox-main-xidl_INST = $(INST_SDK)bindings/
 VBox-main-xidl_SOURCES = $(VBOX_XIDL_FILE_SRC)
 
+ifdef VBOX_WITH_PYTHON
+
+INSTALLS += VBox-python-glue
+VBox-python-glue_INST = $(INST_SDK)installer
+# This file also should go to Python site-wide modules directory
+# so for users it look 'just being here'
+VBox-python-glue_SOURCES = glue/vboxapi.py=>vboxapi/__init__.py
+
+VBOX_PYTHON_CONSTANTS = $(VBOX_PATH_SDK)/installer/vboxapi/VirtualBox_constants.py
+OTHERS += $(VBOX_PYTHON_CONSTANTS)
+
+endif # VBOX_WITH_PYTHON
 
 ifndef VBOX_ONLY_SDK # Note this goes on for *very* long
 
@@ -204,33 +204,38 @@ VBoxSVC_DEFS = \
 	$(if $(VBOX_WITH_ALSA),VBOX_WITH_ALSA,) \
 	$(if $(VBOX_WITH_PULSE),VBOX_WITH_PULSE,) \
 	$(if $(VBOX_WITH_WINMM),VBOX_WITH_WINMM,) \
+	$(if $(VBOX_WITH_SOLARIS_OSS),VBOX_WITH_SOLARIS_OSS,) \
 	$(if $(VBOX_WITH_E1000),VBOX_WITH_E1000,) \
 	$(if $(VBOX_WITH_AHCI),VBOX_WITH_AHCI,) \
+	$(if $(VBOX_WITH_LSILOGIC),VBOX_WITH_LSILOGIC,) \
 	$(if $(VBOX_WITH_LINUX_COMPILER_H),VBOX_WITH_LINUX_COMPILER_H,) \
 	$(if $(VBOX_WITH_RESOURCE_USAGE_API),VBOX_WITH_RESOURCE_USAGE_API,) \
 	$(if $(VBOX_WITH_PDM_ASYNC_COMPLETION),VBOX_WITH_PDM_ASYNC_COMPLETION,) \
 	$(if $(VBOX_WITH_DBUS),VBOX_WITH_DBUS,) \
 	$(if $(VBOX_USB_WITH_SYSFS),VBOX_USB_WITH_SYSFS,)
-
-VBoxSVC_CXXFLAGS = $(filter-out -Wno-unused,$(TEMPLATE_VBOXMAINEXE_CXXFLAGS))
-
 ifdef VBOX_WITH_USB
  VBoxSVC_DEFS += \
  	VBOX_WITH_USB \
  	$(if $(VBOX_WITH_EHCI),VBOX_WITH_EHCI,) \
- 	$(if $(VBOX_WITH_NEW_USB_CODE_ON_DARWIN),VBOX_WITH_NEW_USB_CODE_ON_DARWIN,)
+ 	$(if $(VBOX_WITH_NEW_USB_CODE_ON_DARWIN),VBOX_WITH_NEW_USB_CODE_ON_DARWIN,) \
+ 	$(if $(VBOX_WITH_NEW_USB_CODE_ON_SOLARIS),VBOX_WITH_NEW_USB_CODE_ON_SOLARIS,)
 endif
-
-
 VBoxSVC_DEFS.win += VBOX_COM_OUTOFPROC_MODULE
 VBoxSVC_DEFS.win.x86 += _WIN32_WINNT=0x0500
 VBoxSVC_DEFS.win.amd64 += _WIN32_WINNT=0x0510
 # Try to load and use libhal at runtime for probing removable media
 # VBoxSVC_DEFS.linux += VBOX_USE_LIBHAL
 VBoxSVC_DEFS.solaris += VBOX_USE_LIBHAL
+VBoxSVC_DEFS.freebsd += VBOX_USE_LIBHAL
 ifdef VBOX_SOLARIS_NSL_RESOLVED
  VBoxSVC_DEFS.solaris += VBOX_SOLARIS_NSL_RESOLVED
 endif
+
+VBoxSVC_CXXFLAGS = $(filter-out -Wno-unused,$(TEMPLATE_VBOXMAINEXE_CXXFLAGS))
+## @todo We're disabling optimizations on FreeBSD to work around strange linker
+#        errors in release builds. Figure out why and how to work around it in a
+#        more optimal fashion.
+VBoxSVC_CXXFLAGS.freebsd = -O0
 
 VBoxSVC_INCS = \
 	include \
@@ -278,6 +283,7 @@ VBoxSVC_SOURCES = \
 	VirtualBoxImpl.cpp \
 	VirtualBoxImplExtra.cpp \
 	ApplianceImpl.cpp \
+	VFSExplorerImpl.cpp \
 	MachineImpl.cpp \
 	SnapshotImpl.cpp \
 	MediumImpl.cpp \
@@ -313,6 +319,13 @@ VBoxSVC_SOURCES.darwin = \
 	darwin/iokit.cpp \
 	darwin/HostPowerDarwin.cpp
 
+ifdef VBOX_WITH_CROGL
+  ifneq ($(KBUILD_TARGET),darwin)
+    VBoxSVC_SOURCES += generic/OpenGLTest.cpp
+  endif
+ VBoxSVC_SOURCES.darwin += darwin/OpenGLTestDarwin.cpp
+endif
+
 VBoxSVC_SOURCES.win = \
 	win/svcmain.cpp \
 	win/svchlp.cpp \
@@ -329,6 +342,9 @@ endif
 VBoxSVC_SOURCES.solaris = \
 	linux/vbox-libhal.cpp \
 	solaris/DynLoadLibSolaris.cpp
+
+VBoxSVC_SOURCES.freebsd = \
+	linux/vbox-libhal.cpp
 
 ifdef VBOX_WITH_USB
  VBoxSVC_SOURCES  += \
@@ -358,6 +374,11 @@ ifdef VBOX_WITH_NETFLT
  endif
 endif
 VBoxSVC_LDFLAGS.darwin    = -framework IOKit -framework SystemConfiguration
+
+ifdef VBOX_WITH_CROGL
+ VBoxSVC_LDFLAGS.darwin += -framework OpenGL
+endif
+
 ifeq ($(KBUILD_TYPE),debug)
  VBoxSVC_LDFLAGS.linux   += -rdynamic # for backtrace_symbols()
 endif
@@ -383,12 +404,12 @@ ifdef VBOX_WITH_HOSTNETIF_API
  VBoxSVC_SOURCES.os2     +=     os2/NetIf-os2.cpp
  VBoxSVC_SOURCES.darwin  +=  darwin/NetIf-darwin.cpp
  VBoxSVC_SOURCES.solaris += solaris/NetIf-solaris.cpp
+ VBoxSVC_SOURCES.freebsd += freebsd/NetIf-freebsd.cpp
  VBoxSVC_DEFS            += VBOX_WITH_HOSTNETIF_API
- if1of ($(KBUILD_TARGET), linux darwin solaris)
+ if1of ($(KBUILD_TARGET), linux darwin solaris freebsd)
   VBoxSVC_SOURCES        += generic/NetIf-generic.cpp
  endif
 endif
-
 
 win/VBoxSVC.rc_INCS  = $(PATH_VBoxSVC)
 win/VBoxSVC.rc_DEPS  = $(PATH_VBoxSVC)/VBoxSVC.rgs $(PATH_VBoxSVC)/VBoxSVC-icon.rc
@@ -442,6 +463,22 @@ $(VBOX_XML_SCHEMADEFS_CPP): $(VBOX_XML_SCHEMADEFS_XSL) $(VBOX_XML_SCHEMA.$(KBUIL
 OTHER_CLEAN += $(VBOX_XML_SCHEMADEFS_H) $(VBOX_XML_SCHEMADEFS_CPP)
 
 
+ifdef VBOX_WITH_CROGL
+ ifneq ($(KBUILD_TARGET),darwin)
+  #
+  # VBoxTestOGL - OpenGL support test app.
+  #
+  PROGRAMS += VBoxTestOGL
+  VBoxTestOGL_TEMPLATE = VBOXMAINEXE
+  VBoxTestOGL_SOURCES = generic/OpenGLTestApp.cpp
+  VBoxTestOGL_LIBS = \
+  	$(PATH_LIB)/VBoxOGLhostspuload$(VBOX_SUFF_LIB) \
+  	$(VBOX_LIB_OGL_HOSTCRUTIL) \
+  	$(LIB_RUNTIME)
+ endif
+endif
+
+
 ifdef VBOX_WITH_XPCOM
 #
 # VBoxSVCM - VBoxSVC wrapper module
@@ -449,6 +486,9 @@ ifdef VBOX_WITH_XPCOM
 DLLS += VBoxSVCM
 VBoxSVCM_TEMPLATE       = VBOXMAINCOMP
 VBoxSVCM_DEFS           = IN_RING3 $(VBOX_MAIN_DEFS)
+ifdef VBOX_WITH_HARDENING
+ VBoxSVCM_DEFS         += VBOX_WITH_HARDENING
+endif
 VBoxSVCM_INCS           = \
 	include \
 	$(PATH_VBoxC) \
@@ -482,7 +522,6 @@ VBoxSettings_DEFS       = IN_VBOXXML_R3
 VBoxSettings_INCS       = \
 	include
 VBoxSettings_SOURCES    = \
-	xml/xml.cpp \
 	xml/Settings.cpp
 VBoxSettings_LDFLAGS.darwin = -install_name $(VBOX_DYLD_EXECUTABLE_PATH)/$(notdir $(LIB_SETTINGS)) -Wl,-x # no debug info please.
 
@@ -502,6 +541,7 @@ VBoxC_DEFS = \
 	$(if $(VBOX_WITH_ALSA),VBOX_WITH_ALSA,) \
 	$(if $(VBOX_WITH_PULSE),VBOX_WITH_PULSE,) \
 	$(if $(VBOX_WITH_WINMM),VBOX_WITH_WINMM,) \
+	$(if $(VBOX_WITH_SOLARIS_OSS),VBOX_WITH_SOLARIS_OSS,) \
 	$(if $(VBOX_WITH_CROSSBOW),VBOX_WITH_CROSSBOW,) \
 	$(if $(VBOX_WITH_E1000),VBOX_WITH_E1000,) \
 	$(if $(VBOX_WITH_EFI),VBOX_WITH_EFI,) \
@@ -514,6 +554,14 @@ VBoxC_DEFS += \
 	VBOX_WITH_USB \
 	$(if $(VBOX_WITH_EHCI),VBOX_WITH_EHCI,)
 endif
+ifdef VBOX_WITH_VIDEOHWACCEL
+VBoxC_DEFS += VBOX_WITH_VIDEOHWACCEL
+endif
+
+ifdef VBOX_DYNAMIC_NET_ATTACH
+VBoxC_DEFS += VBOX_DYNAMIC_NET_ATTACH
+endif
+
 VBoxC_DEFS.darwin.x86 = VBOX_WITH_2X_4GB_ADDR_SPACE
 VBoxC_DEFS.win.x86 += _WIN32_WINNT=0x0500
 VBoxC_DEFS.win.amd64 += _WIN32_WINNT=0x0510
@@ -538,7 +586,9 @@ VBoxC_LIBS += \
 	$(LIB_REM)
 
 ifdef VBOX_WITH_NETFLT
- VBoxC_LIBS.win += $(PATH_LIB)/WinNetConfig.lib
+ VBoxC_LIBS.win += $(PATH_LIB)/WinNetConfig.lib \
+ 	$(PATH_TOOL_$(VBOX_VCC_TOOL)_LIB)/comsupp.lib \
+	$(PATH_SDK_WINPSDK_LIB)/WbemUuid.Lib
 endif
 
 VBoxC_INTERMEDIATES = \
@@ -565,7 +615,6 @@ VBoxC_SOURCES = \
 	KeyboardImpl.cpp \
 	MouseImpl.cpp \
 	DisplayImpl.cpp \
-	FramebufferImpl.cpp \
 	MachineDebuggerImpl.cpp \
 	VBoxDriversRegister.cpp \
 	AudioSnifferInterface.cpp \
@@ -628,7 +677,7 @@ VBoxCOM_SOURCES         = \
 	glue/string.cpp \
 	glue/EventQueue.cpp \
 	glue/ErrorInfo.cpp \
-	glue/errorprint2.cpp \
+	glue/errorprint.cpp \
 	glue/SupportErrorInfo.cpp \
 	glue/VirtualBoxErrorInfo.cpp
 ifeq ($(KBUILD_TARGET),win)
@@ -656,6 +705,21 @@ VBoxMain-com-inst_SOURCES = \
 	win/comregister.cmd
 
 
+if defined(VBOX_WITH_HARDENING) && "$(KBUILD_TARGET)" == "linux"
+ #
+ # Installs linux/hardening related things to components.
+ #
+ INSTALLS.linux += VBoxMain-hardening-inst
+ VBoxMain-hardening-inst_INST = $(INST_BIN)components/
+ VBoxMain-hardening-inst_SYMLINKS = \
+ 	VBoxDDU.so=>../VBoxDDU.so \
+ 	VBoxREM.so=>../VBoxREM.so \
+ 	VBoxRT.so=>../VBoxRT.so \
+ 	VBoxVMM.so=>../VBoxVMM.so \
+ 	VBoxXPCOM.so=>../VBoxXPCOM.so
+endif
+
+
 # generate rules
 include $(KBUILD_PATH)/subfooter.kmk
 
@@ -675,7 +739,7 @@ $(VBOX_IDL_FILE.XPCOM): $(VBOX_PATH_MAIN_SRC)/idl/xpidl.xsl $(VBOX_XIDL_FILE) | 
 $(VBOX_IDL_TYPELIB.XPCOM): $(VBOX_IDL_FILE.XPCOM) |  $$(dir $$@) $(VBOX_XPIDL)
 	$(call MSG_TOOL,xpidl,VBoxSVC,$<,$@)
 	$(QUIET)$(VBOX_XPIDL_ENV)$(VBOX_XPIDL) -m typelib -I $(VBOX_PATH_XPCOM_IDL) -e $@ $<
-	chmod 0644 $@
+	$(CHMOD) 0644 $@
 ## @todo ^^^^^^^^^^^^ fix horrible hack
 
 $(VBOX_IDL_HEADER.XPCOM): $(VBOX_IDL_FILE.XPCOM) | $$(dir $$@) $(VBOX_XPIDL)
@@ -697,6 +761,9 @@ $(VBOX_IDL_FILE.MSCOM): $(VBOX_PATH_MAIN_SRC)/idl/midl.xsl $(VBOX_XIDL_FILE) | $
 	$(call MSG_TOOL,xsltproc,VBoxSVC,$<,$@)
 	$(QUIET)$(VBOX_XSLTPROC) -o $@ $< $(VBOX_XIDL_FILE)
 
+$(VBOX_PYTHON_CONSTANTS):  $(VBOX_PATH_MAIN_SRC)/glue/constants-python.xsl $(VBOX_XIDL_FILE) | $$(dir $$@)
+	$(call MSG_TOOL,xsltproc,Python constants,$<,$@)
+	$(QUIET)$(VBOX_XSLTPROC) -o $@ $< $(VBOX_XIDL_FILE)
 
 # Aliases for testing purposes.
 ifdef VBOX_WITH_XPCOM
@@ -729,17 +796,6 @@ $(PATH_VBoxCOM)/VirtualBox_i.c \
 	$(MKDIR) -p $(VBOX_PATH_SDK)/bindings/mscom/lib
 	$(CP) $(PATH_VBoxCOM)/VirtualBox.tlb $(VBOX_PATH_SDK)/bindings/mscom/lib
 	$(CP) $(PATH_VBoxCOM)/VirtualBox_i.c $(VBOX_PATH_SDK)/bindings/mscom/lib
-
-
-## @todo Use install targets, please.
-#        Actually, what on earth is this stuff doing? Why copy two files like this?
-$(VBOX_PATH_SDK)/bindings/mscom/python/samples/shellcommon.py \
-+ $(VBOX_PATH_SDK)/bindings/mscom/python/samples/vboxshell.py: \
-		$(PATH_ROOT)/src/VBox/Frontends/VBoxShell/shellcommon.py \
-		$(PATH_ROOT)/src/VBox/Frontends/VBoxShell/mscom/vboxshell.py
-	$(MKDIR) -p $(VBOX_PATH_SDK)/bindings/mscom/python/samples
-	$(CP) $(PATH_ROOT)/src/VBox/Frontends/VBoxShell/shellcommon.py     $(VBOX_PATH_SDK)/bindings/mscom/python/samples/shellcommon.py
-	$(CP) $(PATH_ROOT)/src/VBox/Frontends/VBoxShell/mscom/vboxshell.py $(VBOX_PATH_SDK)/bindings/mscom/python/samples/vboxshell.py
 
 #
 # Translation stuff

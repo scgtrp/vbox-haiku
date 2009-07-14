@@ -29,7 +29,7 @@
 
 #include <iprt/semaphore.h>
 #include <VBox/pdmdrv.h>
-#include <VBox/VBoxGuest.h>
+#include <VBox/VMMDev.h>
 #include <VBox/VBoxVideo.h>
 
 class Console;
@@ -83,10 +83,10 @@ typedef struct _DISPLAYFBINFO
 
 class ATL_NO_VTABLE Display :
     public VirtualBoxBaseNEXT,
-    public IConsoleCallback,
+    VBOX_SCRIPTABLE_IMPL(IConsoleCallback),
     public VirtualBoxSupportErrorInfoImpl <Display, IDisplay>,
     public VirtualBoxSupportTranslation <Display>,
-    public IDisplay
+    VBOX_SCRIPTABLE_IMPL(IDisplay)
 {
 
 public:
@@ -100,6 +100,7 @@ public:
     BEGIN_COM_MAP(Display)
         COM_INTERFACE_ENTRY(ISupportErrorInfo)
         COM_INTERFACE_ENTRY(IDisplay)
+        COM_INTERFACE_ENTRY2(IDispatch,IDisplay)
     END_COM_MAP()
 
     NS_DECL_ISUPPORTS
@@ -112,10 +113,14 @@ public:
     // public initializer/uninitializer for internal purposes only
     HRESULT init (Console *aParent);
     void uninit();
+    int  registerSSM(PVM pVM);
 
     // public methods only for internal purposes
     int handleDisplayResize (unsigned uScreenId, uint32_t bpp, void *pvVRAM, uint32_t cbLine, int w, int h);
     void handleDisplayUpdate (int x, int y, int cx, int cy);
+#ifdef VBOX_WITH_VIDEOHWACCEL
+    void handleVHWACommandProcess(PPDMIDISPLAYCONNECTOR pInterface, PVBOXVHWACMD pCommand);
+#endif
     IFramebuffer *getFramebuffer()
     {
         return maFramebuffers[VBOX_VIDEO_PRIMARY_SCREEN].pFramebuffer;
@@ -230,19 +235,18 @@ public:
     STDMETHOD(COMGETTER(BitsPerPixel)) (ULONG *bitsPerPixel);
 
     // IDisplay methods
-    STDMETHOD(SetupInternalFramebuffer)(ULONG depth);
-    STDMETHOD(LockFramebuffer)(BYTE **address);
-    STDMETHOD(UnlockFramebuffer)();
-    STDMETHOD(RegisterExternalFramebuffer)(IFramebuffer *frameBuf);
     STDMETHOD(SetFramebuffer)(ULONG aScreenId, IFramebuffer *aFramebuffer);
     STDMETHOD(GetFramebuffer)(ULONG aScreenId, IFramebuffer **aFramebuffer, LONG *aXOrigin, LONG *aYOrigin);
     STDMETHOD(SetVideoModeHint)(ULONG width, ULONG height, ULONG bitsPerPixel, ULONG display);
     STDMETHOD(TakeScreenShot)(BYTE *address, ULONG width, ULONG height);
+    STDMETHOD(TakeScreenShotSlow)(ULONG width, ULONG height, ComSafeArrayOut(BYTE, aScreenData));
     STDMETHOD(DrawToScreen)(BYTE *address, ULONG x, ULONG y, ULONG width, ULONG height);
     STDMETHOD(InvalidateAndUpdate)();
     STDMETHOD(ResizeCompleted)(ULONG aScreenId);
     STDMETHOD(UpdateCompleted)();
     STDMETHOD(SetSeamlessMode)(BOOL enabled);
+
+    STDMETHOD(CompleteVHWACommand)(BYTE *pCommand);
 
     // for VirtualBoxSupportErrorInfoImpl
     static const wchar_t *getComponentName() { return L"Display"; }
@@ -254,7 +258,7 @@ private:
     void updateDisplayData (bool aCheckParams = false);
 
     static DECLCALLBACK(int) changeFramebuffer (Display *that, IFramebuffer *aFB,
-                                                bool aInternal, unsigned uScreenId);
+                                                unsigned uScreenId);
 
     static DECLCALLBACK(void*) drvQueryInterface(PPDMIBASE pInterface, PDMINTERFACE enmInterface);
     static DECLCALLBACK(int)   drvConstruct(PPDMDRVINS pDrvIns, PCFGMNODE pCfgHandle);
@@ -268,6 +272,13 @@ private:
     static DECLCALLBACK(void)  displayProcessAdapterDataCallback(PPDMIDISPLAYCONNECTOR pInterface, void *pvVRAM, uint32_t u32VRAMSize);
     static DECLCALLBACK(void)  displayProcessDisplayDataCallback(PPDMIDISPLAYCONNECTOR pInterface, void *pvVRAM, unsigned uScreenId);
 
+#ifdef VBOX_WITH_VIDEOHWACCEL
+    static DECLCALLBACK(void) displayVHWACommandProcess(PPDMIDISPLAYCONNECTOR pInterface, PVBOXVHWACMD pCommand);
+#endif
+
+    static DECLCALLBACK(void)   displaySSMSave (PSSMHANDLE pSSM, void *pvUser);
+    static DECLCALLBACK(int)    displaySSMLoad (PSSMHANDLE pSSM, void *pvUser, uint32_t u32Version);
+
     const ComObjPtr <Console, ComWeakRef> mParent;
     /** Pointer to the associated display driver. */
     struct DRVMAINDISPLAY  *mpDrv;
@@ -275,15 +286,11 @@ private:
     PPDMDEVINS              mpVMMDev;
     /** Set after the first attempt to find the VMM Device. */
     bool                    mfVMMDevInited;
-    bool mInternalFramebuffer;
 
     unsigned mcMonitors;
     DISPLAYFBINFO maFramebuffers[SchemaDefs::MaxGuestMonitors];
 
     bool mFramebufferOpened;
-    /** bitmask of acceleration operations supported by current framebuffer */
-    ULONG mSupportedAccelOps;
-    RTSEMEVENTMULTI mUpdateSem;
 
     /* arguments of the last handleDisplayResize() call */
     void *mLastAddress;

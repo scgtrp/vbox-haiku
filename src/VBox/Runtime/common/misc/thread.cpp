@@ -29,12 +29,13 @@
  */
 
 
-
 /*******************************************************************************
 *   Header Files                                                               *
 *******************************************************************************/
 #define LOG_GROUP RTLOGGROUP_THREAD
 #include <iprt/thread.h>
+#include "internal/iprt.h"
+
 #include <iprt/log.h>
 #include <iprt/avl.h>
 #include <iprt/alloc.h>
@@ -304,6 +305,7 @@ RTDECL(int) RTThreadAdopt(RTTHREADTYPE enmType, unsigned fFlags, const char *psz
         *pThread = Thread;
     return rc;
 }
+RT_EXPORT_SYMBOL(RTThreadAdopt);
 
 
 /**
@@ -634,6 +636,16 @@ int rtThreadMain(PRTTHREADINT pThread, RTNATIVETHREAD NativeThread, const char *
     ASMAtomicWriteSize(&pThread->enmState, RTTHREADSTATE_RUNNING);
     rc = pThread->pfnThread(pThread, pThread->pvUser);
 
+    /*
+     * Paranoia checks for leftover resources.
+     */
+#ifdef RTSEMRW_STRICT
+    int32_t cWrite = ASMAtomicReadS32(&pThread->cWriteLocks);
+    Assert(!cWrite);
+    int32_t cRead = ASMAtomicReadS32(&pThread->cReadLocks);
+    Assert(!cRead);
+#endif
+
     Log(("rtThreadMain: Terminating: rc=%d pThread=%p NativeThread=%RTnthrd Name=%s pfnThread=%p pvUser=%p\n",
          rc, pThread, NativeThread, pThread->szName, pThread->pfnThread, pThread->pvUser));
     rtThreadTerminate(pThread, rc);
@@ -717,6 +729,7 @@ RTDECL(int) RTThreadCreate(PRTTHREAD pThread, PFNRTTHREAD pfnThread, void *pvUse
     AssertReleaseRC(rc);
     return rc;
 }
+RT_EXPORT_SYMBOL(RTThreadCreate);
 
 
 /**
@@ -741,6 +754,7 @@ RTDECL(int) RTThreadCreateV(PRTTHREAD pThread, PFNRTTHREAD pfnThread, void *pvUs
     RTStrPrintfV(szName, sizeof(szName), pszNameFmt, va);
     return RTThreadCreate(pThread, pfnThread, pvUser, cbStack, enmType, fFlags, szName);
 }
+RT_EXPORT_SYMBOL(RTThreadCreateV);
 
 
 /**
@@ -767,6 +781,7 @@ RTDECL(int) RTThreadCreateF(PRTTHREAD pThread, PFNRTTHREAD pfnThread, void *pvUs
     va_end(va);
     return rc;
 }
+RT_EXPORT_SYMBOL(RTThreadCreateF);
 
 
 /**
@@ -786,6 +801,7 @@ RTDECL(RTNATIVETHREAD) RTThreadGetNative(RTTHREAD Thread)
     }
     return NIL_RTNATIVETHREAD;
 }
+RT_EXPORT_SYMBOL(RTThreadGetNative);
 
 
 /**
@@ -802,6 +818,7 @@ RTDECL(RTTHREAD) RTThreadFromNative(RTNATIVETHREAD NativeThread)
         return pThread;
     return NIL_RTTHREAD;
 }
+RT_EXPORT_SYMBOL(RTThreadFromNative);
 
 
 /**
@@ -825,6 +842,7 @@ RTDECL(const char *) RTThreadSelfName(void)
     }
     return NULL;
 }
+RT_EXPORT_SYMBOL(RTThreadSelfName);
 
 
 /**
@@ -847,6 +865,7 @@ RTDECL(const char *) RTThreadGetName(RTTHREAD Thread)
     }
     return NULL;
 }
+RT_EXPORT_SYMBOL(RTThreadGetName);
 
 
 /**
@@ -879,6 +898,7 @@ RTDECL(int) RTThreadSetName(RTTHREAD Thread, const char *pszName)
     rtThreadRelease(pThread);
     return VINF_SUCCESS;
 }
+RT_EXPORT_SYMBOL(RTThreadSetName);
 
 
 /**
@@ -899,6 +919,7 @@ RTDECL(int) RTThreadUserSignal(RTTHREAD Thread)
         rc = VERR_INVALID_HANDLE;
     return rc;
 }
+RT_EXPORT_SYMBOL(RTThreadUserSignal);
 
 
 /**
@@ -922,6 +943,7 @@ RTDECL(int) RTThreadUserWait(RTTHREAD Thread, unsigned cMillies)
         rc = VERR_INVALID_HANDLE;
     return rc;
 }
+RT_EXPORT_SYMBOL(RTThreadUserWait);
 
 
 /**
@@ -945,6 +967,7 @@ RTDECL(int) RTThreadUserWaitNoResume(RTTHREAD Thread, unsigned cMillies)
         rc = VERR_INVALID_HANDLE;
     return rc;
 }
+RT_EXPORT_SYMBOL(RTThreadUserWaitNoResume);
 
 
 /**
@@ -966,6 +989,7 @@ RTDECL(int) RTThreadUserReset(RTTHREAD Thread)
         rc = VERR_INVALID_HANDLE;
     return rc;
 }
+RT_EXPORT_SYMBOL(RTThreadUserReset);
 
 
 /**
@@ -1034,6 +1058,7 @@ RTDECL(int) RTThreadWait(RTTHREAD Thread, unsigned cMillies, int *prc)
     Assert(rc != VERR_INTERRUPTED);
     return rc;
 }
+RT_EXPORT_SYMBOL(RTThreadWait);
 
 
 /**
@@ -1049,6 +1074,7 @@ RTDECL(int) RTThreadWaitNoResume(RTTHREAD Thread, unsigned cMillies, int *prc)
 {
     return rtThreadWait(Thread, cMillies, prc, false);
 }
+RT_EXPORT_SYMBOL(RTThreadWaitNoResume);
 
 
 /**
@@ -1098,6 +1124,7 @@ RTDECL(int) RTThreadSetType(RTTHREAD Thread, RTTHREADTYPE enmType)
     }
     return rc;
 }
+RT_EXPORT_SYMBOL(RTThreadSetType);
 
 
 /**
@@ -1118,6 +1145,7 @@ RTDECL(RTTHREADTYPE) RTThreadGetType(RTTHREAD Thread)
     }
     return enmType;
 }
+RT_EXPORT_SYMBOL(RTThreadGetType);
 
 
 #ifdef IN_RING3
@@ -1146,6 +1174,7 @@ RTDECL(int32_t) RTThreadGetWriteLockCount(RTTHREAD Thread)
     rtThreadRelease(pThread);
     return cWriteLocks;
 }
+RT_EXPORT_SYMBOL(RTThreadGetWriteLockCount);
 
 
 /**
@@ -1160,6 +1189,7 @@ RTDECL(void) RTThreadWriteLockInc(RTTHREAD Thread)
     ASMAtomicIncS32(&pThread->cWriteLocks);
     rtThreadRelease(pThread);
 }
+RT_EXPORT_SYMBOL(RTThreadWriteLockInc);
 
 
 /**
@@ -1174,6 +1204,7 @@ RTDECL(void) RTThreadWriteLockDec(RTTHREAD Thread)
     ASMAtomicDecS32(&pThread->cWriteLocks);
     rtThreadRelease(pThread);
 }
+RT_EXPORT_SYMBOL(RTThreadWriteLockDec);
 
 
 /**
@@ -1199,6 +1230,7 @@ RTDECL(int32_t) RTThreadGetReadLockCount(RTTHREAD Thread)
     rtThreadRelease(pThread);
     return cReadLocks;
 }
+RT_EXPORT_SYMBOL(RTThreadGetReadLockCount);
 
 
 /**
@@ -1213,6 +1245,7 @@ RTDECL(void) RTThreadReadLockInc(RTTHREAD Thread)
     ASMAtomicIncS32(&pThread->cReadLocks);
     rtThreadRelease(pThread);
 }
+RT_EXPORT_SYMBOL(RTThreadReadLockInc);
 
 
 /**
@@ -1227,6 +1260,7 @@ RTDECL(void) RTThreadReadLockDec(RTTHREAD Thread)
     ASMAtomicDecS32(&pThread->cReadLocks);
     rtThreadRelease(pThread);
 }
+RT_EXPORT_SYMBOL(RTThreadReadLockDec);
 
 
 
@@ -1405,16 +1439,17 @@ static void rtThreadDeadlock(PRTTHREADINT pThread, PRTTHREADINT pCur, RTTHREADST
  *
  * This is a RT_STRICT method for debugging locks and detecting deadlocks.
  *
- * @param   pThread     This thread.
+ * @param   hThread     The current thread.
  * @param   enmState    The sleep state.
  * @param   u64Block    The block data. A pointer or handle.
  * @param   pszFile     Where we are blocking.
  * @param   uLine       Where we are blocking.
  * @param   uId         Where we are blocking.
  */
-void rtThreadBlocking(PRTTHREADINT pThread, RTTHREADSTATE enmState, uint64_t u64Block,
-                     const char *pszFile, unsigned uLine, RTUINTPTR uId)
+RTDECL(void) RTThreadBlocking(RTTHREAD hThread, RTTHREADSTATE enmState, uint64_t u64Block,
+                              const char *pszFile, unsigned uLine, RTUINTPTR uId)
 {
+    PRTTHREADINT pThread = hThread;
     Assert(RTTHREAD_IS_SLEEPING(enmState));
     if (pThread && pThread->enmState == RTTHREADSTATE_RUNNING)
     {
@@ -1494,6 +1529,7 @@ void rtThreadBlocking(PRTTHREADINT pThread, RTTHREADSTATE enmState, uint64_t u64
         rtThreadDeadlock(pThread, pCur, enmState, u64Block, pszFile, uLine, uId);
     }
 }
+RT_EXPORT_SYMBOL(RTThreadBlocking);
 
 
 /**
@@ -1501,15 +1537,16 @@ void rtThreadBlocking(PRTTHREADINT pThread, RTTHREADSTATE enmState, uint64_t u64
  *
  * This function is paired with rtThreadBlocking.
  *
- * @param   pThread     The current thread.
+ * @param   hThread     The current thread.
  * @param   enmCurState The current state, used to check for nested blocking.
  *                      The new state will be running.
  */
-void rtThreadUnblocked(PRTTHREADINT pThread, RTTHREADSTATE enmCurState)
+RTDECL(void) RTThreadUnblocked(RTTHREAD hThread, RTTHREADSTATE enmCurState)
 {
-    if (pThread && pThread->enmState == enmCurState)
-        ASMAtomicWriteSize(&pThread->enmState, RTTHREADSTATE_RUNNING);
+    if (hThread && hThread->enmState == enmCurState)
+        ASMAtomicWriteSize(&hThread->enmState, RTTHREADSTATE_RUNNING);
 }
+RT_EXPORT_SYMBOL(RTThreadUnblocked);
 
 #endif /* IN_RING3 */
 

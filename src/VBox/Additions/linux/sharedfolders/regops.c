@@ -26,7 +26,38 @@
 
 #include "vfsmod.h"
 
-#define CHUNK_SIZE 4096
+
+static void *alloc_bounch_buffer (size_t *tmp_sizep, PRTCCPHYS physp, size_t xfer_size, const char *caller)
+{
+    size_t tmp_size;
+    void *tmp;
+
+    /* try for big first. */
+    tmp_size = RT_ALIGN_Z(xfer_size, PAGE_SIZE);
+    if (tmp_size > 16U*_1K)
+        tmp_size = 16U*_1K;
+    tmp = kmalloc (tmp_size, GFP_KERNEL);
+    if (!tmp) {
+
+        /* fall back on a page sized buffer. */
+        tmp = kmalloc (PAGE_SIZE, GFP_KERNEL);
+        if (!tmp) {
+            LogRel(("%s: could not allocate bounce buffer for xfer_size=%zu %s\n", caller, xfer_size));
+            return NULL;
+        }
+        tmp_size = PAGE_SIZE;
+    }
+
+    *tmp_sizep = tmp_size;
+    *physp = virt_to_phys(tmp);
+    return tmp;
+}
+
+static void free_bounch_buffer (void *tmp)
+{
+    kfree (tmp);
+}
+
 
 /* fops */
 static int
@@ -34,10 +65,31 @@ sf_reg_read_aux (const char *caller, struct sf_glob_info *sf_g,
                  struct sf_reg_info *sf_r, void *buf, uint32_t *nread,
                  uint64_t pos)
 {
+        /** @todo bird: yes, kmap() and kmalloc() input only. Since the buffer is
+         *        contiguous in physical memory (kmalloc or single page), we should
+         *        use a physical address here to speed things up. */
         int rc = vboxCallRead (&client_handle, &sf_g->map, sf_r->handle,
                                pos, nread, buf, false /* already locked? */);
         if (RT_FAILURE (rc)) {
-                LogFunc(("vboxCallRead failed.  caller=%s, rc=%Rrc\n",
+                LogFunc(("vboxCallRead failed. caller=%s, rc=%Rrc\n",
+                         caller, rc));
+                return -EPROTO;
+        }
+        return 0;
+}
+
+static int
+sf_reg_write_aux (const char *caller, struct sf_glob_info *sf_g,
+                  struct sf_reg_info *sf_r, void *buf, uint32_t *nwritten,
+                  uint64_t pos)
+{
+        /** @todo bird: yes, kmap() and kmalloc() input only. Since the buffer is
+         *        contiguous in physical memory (kmalloc or single page), we should
+         *        use a physical address here to speed things up. */
+        int rc = vboxCallWrite (&client_handle, &sf_g->map, sf_r->handle,
+                                pos, nwritten, buf, false /* already locked? */);
+        if (RT_FAILURE (rc)) {
+                LogFunc(("vboxCallWrite failed. caller=%s, rc=%Rrc\n",
                          caller, rc));
                 return -EPROTO;
         }
@@ -49,6 +101,8 @@ sf_reg_read (struct file *file, char *buf, size_t size, loff_t *off)
 {
         int err;
         void *tmp;
+        RTCCPHYS tmp_phys;
+        size_t tmp_size;
         size_t left = size;
         ssize_t total_bytes_read = 0;
         struct inode *inode = file->f_dentry->d_inode;
@@ -68,25 +122,22 @@ sf_reg_read (struct file *file, char *buf, size_t size, loff_t *off)
                 return 0;
         }
 
-        tmp = kmalloc (CHUNK_SIZE, GFP_KERNEL);
-        if (!tmp) {
-                LogRelFunc(("could not allocate bounce buffer memory %d bytes\n", CHUNK_SIZE));
-                return -ENOMEM;
-        }
+        tmp = alloc_bounch_buffer (&tmp_size, &tmp_phys, size, __PRETTY_FUNCTION__);
+        if (!tmp)
+            return -ENOMEM;
 
         while (left) {
                 uint32_t to_read, nread;
 
-                to_read = CHUNK_SIZE;
+                to_read = tmp_size;
                 if (to_read > left) {
                         to_read = (uint32_t) left;
                 }
                 nread = to_read;
 
                 err = sf_reg_read_aux (__func__, sf_g, sf_r, tmp, &nread, pos);
-                if (err) {
+                if (err)
                         goto fail;
-                }
 
                 if (copy_to_user (buf, tmp, nread)) {
                         err = -EFAULT;
@@ -103,11 +154,11 @@ sf_reg_read (struct file *file, char *buf, size_t size, loff_t *off)
         }
 
         *off += total_bytes_read;
-        kfree (tmp);
+        free_bounch_buffer (tmp);
         return total_bytes_read;
 
  fail:
-        kfree (tmp);
+        free_bounch_buffer (tmp);
         return err;
 }
 
@@ -116,6 +167,8 @@ sf_reg_write (struct file *file, const char *buf, size_t size, loff_t *off)
 {
         int err;
         void *tmp;
+        RTCCPHYS tmp_phys;
+        size_t tmp_size;
         size_t left = size;
         ssize_t total_bytes_written = 0;
         struct inode *inode = file->f_dentry->d_inode;
@@ -143,17 +196,14 @@ sf_reg_write (struct file *file, const char *buf, size_t size, loff_t *off)
         if (!size)
                 return 0;
 
-        tmp = kmalloc (CHUNK_SIZE, GFP_KERNEL);
-        if (!tmp) {
-                LogRelFunc(("could not allocate bounce buffer memory %d bytes\n", CHUNK_SIZE));
+        tmp = alloc_bounch_buffer (&tmp_size, &tmp_phys, size, __PRETTY_FUNCTION__);
+        if (!tmp)
                 return -ENOMEM;
-        }
 
         while (left) {
-                int rc;
                 uint32_t to_write, nwritten;
 
-                to_write = CHUNK_SIZE;
+                to_write = tmp_size;
                 if (to_write > left) {
                         to_write = (uint32_t) left;
                 }
@@ -164,22 +214,23 @@ sf_reg_write (struct file *file, const char *buf, size_t size, loff_t *off)
                         goto fail;
                 }
 
-                rc = vboxCallWrite (&client_handle, &sf_g->map, sf_r->handle,
-                                    pos, &nwritten, tmp, false /* already locked? */);
-                if (RT_FAILURE (rc)) {
-                        err = -EPROTO;
-                        LogFunc(("vboxCallWrite(%s) failed rc=%Rrc\n",
-                                 sf_i->path->String.utf8, rc));
+#if 1
+                if (VbglR0CanUsePhysPageList()) {
+                    err = VbglR0SfWritePhysCont (&client_handle, &sf_g->map, sf_r->handle,
+                                                 pos, &nwritten, tmp_phys);
+                    err = RT_FAILURE(err) ? -EPROTO : 0;
+                } else
+#endif
+                    err = sf_reg_write_aux (__func__, sf_g, sf_r, tmp, &nwritten, pos);
+                if (err)
                         goto fail;
-                }
 
                 pos += nwritten;
                 left -= nwritten;
                 buf += nwritten;
                 total_bytes_written += nwritten;
-                if (nwritten != to_write) {
+                if (nwritten != to_write)
                         break;
-                }
         }
 
 #if 1                           /* XXX: which way is correct? */
@@ -188,11 +239,11 @@ sf_reg_write (struct file *file, const char *buf, size_t size, loff_t *off)
         file->f_pos += total_bytes_written;
 #endif
         sf_i->force_restat = 1;
-        kfree (tmp);
+        free_bounch_buffer (tmp);
         return total_bytes_written;
 
  fail:
-        kfree (tmp);
+        free_bounch_buffer (tmp);
         return err;
 }
 
@@ -209,20 +260,22 @@ sf_reg_open (struct inode *inode, struct file *file)
         BUG_ON (!sf_g);
         BUG_ON (!sf_i);
 
+        LogFunc(("open %s\n", sf_i->path->String.utf8));
+
         sf_r = kmalloc (sizeof (*sf_r), GFP_KERNEL);
         if (!sf_r) {
                 LogRelFunc(("could not allocate reg info\n"));
                 return -ENOMEM;
         }
 
-        LogFunc(("open %s\n", sf_i->path->String.utf8));
-
-        params.CreateFlags = 0;
-        params.Info.cbObject = 0;
-        /* We check this afterwards to find out if the call succeeded
-           or failed, as the API does not seem to cleanly distinguish
-           error and informational messages. */
-        params.Handle = 0;
+        memset(&params, 0, sizeof(params));
+        params.Handle = SHFL_HANDLE_NIL;
+        /* We check the value of params.Handle afterwards to find out if
+         * the call succeeded or failed, as the API does not seem to cleanly
+         * distinguish error and informational messages.
+         *
+         * Furthermore, we must set params.Handle to SHFL_HANDLE_NIL to
+         * make the shared folders host service use our fMode parameter */
 
         if (file->f_flags & O_CREAT) {
                 LogFunc(("O_CREAT set\n"));
@@ -266,6 +319,7 @@ sf_reg_open (struct inode *inode, struct file *file)
                 }
         }
 
+        params.Info.Attr.fMode = inode->i_mode;
         LogFunc(("sf_reg_open: calling vboxCallCreate, file %s, flags=%d, %#x\n",
                  sf_i->path->String.utf8 , file->f_flags, params.CreateFlags));
         rc = vboxCallCreate (&client_handle, &sf_g->map, sf_i->path, &params);
@@ -293,6 +347,7 @@ sf_reg_open (struct inode *inode, struct file *file)
 
         sf_i->force_restat = 1;
         sf_r->handle = params.Handle;
+        sf_i->file = file;
         file->private_data = sf_r;
         return rc_linux;
 }
@@ -303,6 +358,7 @@ sf_reg_release (struct inode *inode, struct file *file)
         int rc;
         struct sf_reg_info *sf_r;
         struct sf_glob_info *sf_g;
+        struct sf_inode_info *sf_i = GET_INODE_INFO (inode);
 
         TRACE ();
         sf_g = GET_GLOB_INFO (inode->i_sb);
@@ -317,6 +373,7 @@ sf_reg_release (struct inode *inode, struct file *file)
         }
 
         kfree (sf_r);
+        sf_i->file = NULL;
         file->private_data = NULL;
         return 0;
 }
@@ -454,7 +511,8 @@ struct inode_operations sf_reg_iops = {
 #if LINUX_VERSION_CODE < KERNEL_VERSION (2, 6, 0)
         .revalidate = sf_inode_revalidate
 #else
-        .getattr    = sf_getattr
+        .getattr    = sf_getattr,
+        .setattr    = sf_setattr
 #endif
 };
 
@@ -463,34 +521,125 @@ struct inode_operations sf_reg_iops = {
 static int
 sf_readpage(struct file *file, struct page *page)
 {
-        char *buf = kmap(page);
         struct inode *inode = file->f_dentry->d_inode;
         struct sf_glob_info *sf_g = GET_GLOB_INFO (inode->i_sb);
         struct sf_reg_info *sf_r = file->private_data;
         uint32_t nread = PAGE_SIZE;
-        loff_t off = page->index << PAGE_SHIFT;
+        char *buf;
+        loff_t off = ((loff_t)page->index) << PAGE_SHIFT;
         int ret;
 
         TRACE ();
 
+        buf = kmap(page);
         ret = sf_reg_read_aux (__func__, sf_g, sf_r, buf, &nread, off);
         if (ret) {
             kunmap (page);
+            if (PageLocked(page))
+                unlock_page(page);
             return ret;
         }
+        BUG_ON (nread > PAGE_SIZE);
+        memset(&buf[nread], 0, PAGE_SIZE - nread);
         flush_dcache_page (page);
         kunmap (page);
         SetPageUptodate(page);
-        if (PageLocked(page))
             unlock_page(page);
         return 0;
 }
 
+static int
+sf_writepage(struct page *page, struct writeback_control *wbc)
+{
+        struct address_space *mapping = page->mapping;
+        struct inode *inode = mapping->host;
+        struct sf_glob_info *sf_g = GET_GLOB_INFO (inode->i_sb);
+        struct sf_inode_info *sf_i = GET_INODE_INFO (inode);
+        struct file *file = sf_i->file;
+        struct sf_reg_info *sf_r = file->private_data;
+        char *buf;
+        uint32_t nwritten = PAGE_SIZE;
+        int end_index = inode->i_size >> PAGE_SHIFT;
+        loff_t off = ((loff_t) page->index) << PAGE_SHIFT;
+        int err;
+
+        TRACE ();
+
+        if (page->index >= end_index)
+            nwritten = inode->i_size & (PAGE_SIZE-1);
+
+        buf = kmap(page);
+
+        err = sf_reg_write_aux (__func__, sf_g, sf_r, buf, &nwritten, off);
+        if (err < 0) {
+                ClearPageUptodate(page);
+                goto out;
+        }
+
+        if (off > inode->i_size)
+                inode->i_size = off;
+
+        if (PageError(page))
+                ClearPageError(page);
+        err = 0;
+out:
+        kunmap(page);
+
+        unlock_page(page);
+        return err;
+}
+
+# if LINUX_VERSION_CODE >= KERNEL_VERSION (2, 6, 24)
+int
+sf_write_begin(struct file *file, struct address_space *mapping, loff_t pos,
+               unsigned len, unsigned flags, struct page **pagep, void **fsdata)
+{
+        TRACE ();
+
+        return simple_write_begin(file, mapping, pos, len, flags, pagep, fsdata);
+}
+
+int
+sf_write_end(struct file *file, struct address_space *mapping, loff_t pos,
+             unsigned len, unsigned copied, struct page *page, void *fsdata)
+{
+        struct inode *inode = mapping->host;
+        struct sf_glob_info *sf_g = GET_GLOB_INFO (inode->i_sb);
+        struct sf_reg_info *sf_r = file->private_data;
+        void *buf;
+        unsigned from = pos & (PAGE_SIZE - 1);
+        uint32_t nwritten = len;
+        int err;
+
+        TRACE ();
+
+        buf = kmap(page);
+        err = sf_reg_write_aux (__func__, sf_g, sf_r, buf+from, &nwritten, pos);
+        kunmap(page);
+
+        if (!PageUptodate(page) && err == PAGE_SIZE)
+                SetPageUptodate(page);
+
+        if (err >= 0) {
+                pos += nwritten;
+                if (pos > inode->i_size)
+                    inode->i_size = pos;
+        }
+
+        unlock_page(page);
+        page_cache_release(page);
+
+        return nwritten;
+}
+
+# endif /* KERNEL_VERSION >= 2.6.24 */
+
 struct address_space_operations sf_reg_aops = {
         .readpage      = sf_readpage,
+        .writepage     = sf_writepage,
 # if LINUX_VERSION_CODE >= KERNEL_VERSION (2, 6, 24)
-        .write_begin   = simple_write_begin,
-        .write_end     = simple_write_end,
+        .write_begin   = sf_write_begin,
+        .write_end     = sf_write_end,
 # else
         .prepare_write = simple_prepare_write,
         .commit_write  = simple_commit_write,

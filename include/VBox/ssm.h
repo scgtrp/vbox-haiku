@@ -1,5 +1,5 @@
 /** @file
- * SSM - The Save State Manager.
+ * SSM - The Save State Manager. (VMM)
  */
 
 /*
@@ -35,7 +35,7 @@
 #include <VBox/tm.h>
 #include <VBox/vmapi.h>
 
-__BEGIN_DECLS
+RT_C_DECLS_BEGIN
 
 /** @defgroup grp_ssm       The Saved State Manager API
  * @{
@@ -417,7 +417,7 @@ typedef FNSSMEXTLOADDONE *PFNSSMEXTLOADDONE;
 /** @} */
 
 
-VMMR3DECL(int) SSMR3RegisterDevice(PVM pVM, PPDMDEVINS pDevIns, const char *pszName, uint32_t u32Instance, uint32_t u32Version, size_t cbGuess,
+VMMR3DECL(int) SSMR3RegisterDevice(PVM pVM, PPDMDEVINS pDevIns, const char *pszName, uint32_t u32Instance, uint32_t u32Version, size_t cbGuess, const char *pszBefore,
     PFNSSMDEVSAVEPREP pfnSavePrep, PFNSSMDEVSAVEEXEC pfnSaveExec, PFNSSMDEVSAVEDONE pfnSaveDone,
     PFNSSMDEVLOADPREP pfnLoadPrep, PFNSSMDEVLOADEXEC pfnLoadExec, PFNSSMDEVLOADDONE pfnLoadDone);
 VMMR3DECL(int) SSMR3RegisterDriver(PVM pVM, PPDMDRVINS pDrvIns, const char *pszName, uint32_t u32Instance, uint32_t u32Version, size_t cbGuess,
@@ -510,6 +510,7 @@ VMMR3DECL(int) SSMR3GetMem(PSSMHANDLE pSSM, void *pv, size_t cb);
 VMMR3DECL(int) SSMR3GetStrZ(PSSMHANDLE pSSM, char *psz, size_t cbMax);
 VMMR3DECL(int) SSMR3GetStrZEx(PSSMHANDLE pSSM, char *psz, size_t cbMax, size_t *pcbStr);
 VMMR3DECL(int) SSMR3GetTimer(PSSMHANDLE pSSM, PTMTIMER pTimer);
+VMMR3DECL(int) SSMR3Skip(PSSMHANDLE pSSM, size_t cb);
 
 /** @} */
 
@@ -519,7 +520,7 @@ VMMR3DECL(int) SSMR3GetTimer(PSSMHANDLE pSSM, PTMTIMER pTimer);
 
 /** @} */
 
-__END_DECLS
+RT_C_DECLS_END
 
 #endif
 

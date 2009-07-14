@@ -38,9 +38,11 @@
 #include <iprt/assert.h>
 #include <iprt/asm.h>
 
-__BEGIN_DECLS
+#include "internal-r0drv-nt.h"
+
+RT_C_DECLS_BEGIN
 NTSTATUS NTAPI ZwYieldExecution(void);
-__END_DECLS
+RT_C_DECLS_END
 
 
 RTDECL(RTNATIVETHREAD) RTThreadNativeSelf(void)
@@ -79,10 +81,82 @@ RTDECL(bool) RTThreadPreemptIsEnabled(RTTHREAD hThread)
     KIRQL Irql = KeGetCurrentIrql();
     if (Irql > APC_LEVEL)
         return false;
-#if defined(RT_ARCH_X86) || defined(RT_ARCH_AMD64)
-    if (!(ASMGetFlags() & 0x00000200 /* X86_EFL_IF */))
+    if (!ASMIntAreEnabled())
         return false;
+    return true;
+}
+
+
+RTDECL(bool) RTThreadPreemptIsPending(RTTHREAD hThread)
+{
+    Assert(hThread == NIL_RTTHREAD);
+
+    /*
+     * Read the globals and check if they are useful.
+     */
+    uint32_t const offQuantumEnd     = g_offrtNtPbQuantumEnd;
+    uint32_t const cbQuantumEnd      = g_cbrtNtPbQuantumEnd;
+    uint32_t const offDpcQueueDepth  = g_offrtNtPbDpcQueueDepth;
+    if (!offQuantumEnd && !cbQuantumEnd && !offDpcQueueDepth)
+        return false;
+    Assert((offQuantumEnd && cbQuantumEnd) || (!offQuantumEnd && !cbQuantumEnd));
+
+    /*
+     * Disable interrupts so we won't be messed around.
+     */
+    bool            fPending;
+    RTCCUINTREG     fSavedFlags  = ASMIntDisableFlags();
+
+#ifdef RT_ARCH_X86
+    PKPCR       pPcr   = (PKPCR)__readfsdword(RT_OFFSETOF(KPCR,SelfPcr));
+    uint8_t    *pbPrcb = (uint8_t *)pPcr->Prcb;
+
+#elif defined(RT_ARCH_AMD64)
+    /* HACK ALERT! The offset is from windbg/vista64. */
+    PKPCR       pPcr   = (PKPCR)__readgsqword(RT_OFFSETOF(KPCR,Self));
+    uint8_t    *pbPrcb = (uint8_t *)pPcr->CurrentPrcb;
+
+#else
+# error "port me"
 #endif
+
+    /* Check QuantumEnd. */
+    if (cbQuantumEnd == 1)
+    {
+        uint8_t volatile *pbQuantumEnd = (uint8_t volatile *)(pbPrcb + offQuantumEnd);
+        fPending = *pbQuantumEnd == TRUE;
+    }
+    else if (cbQuantumEnd == sizeof(uint32_t))
+    {
+        uint32_t volatile *pu32QuantumEnd = (uint32_t volatile *)(pbPrcb + offQuantumEnd);
+        fPending = *pu32QuantumEnd != 0;
+    }
+
+    /* Check DpcQueueDepth. */
+    if (    !fPending
+        &&  offDpcQueueDepth)
+    {
+        uint32_t volatile *pu32DpcQueueDepth = (uint32_t volatile *)(pbPrcb + offDpcQueueDepth);
+        fPending = *pu32DpcQueueDepth > 0;
+    }
+
+    ASMSetFlags(fSavedFlags);
+    return fPending;
+}
+
+
+RTDECL(bool) RTThreadPreemptIsPendingTrusty(void)
+{
+    /* RTThreadPreemptIsPending is only reliable of we've got both offsets and size. */
+    return g_offrtNtPbQuantumEnd    != 0
+        && g_cbrtNtPbQuantumEnd     != 0
+        && g_offrtNtPbDpcQueueDepth != 0;
+}
+
+
+RTDECL(bool) RTThreadPreemptIsPossible(void)
+{
+    /* yes, kernel preemption is possible. */
     return true;
 }
 
@@ -103,5 +177,14 @@ RTDECL(void) RTThreadPreemptRestore(PRTTHREADPREEMPTSTATE pState)
 
     KeLowerIrql(pState->uchOldIrql);
     pState->uchOldIrql = 255;
+}
+
+
+RTDECL(bool) RTThreadIsInInterrupt(RTTHREAD hThread)
+{
+    Assert(hThread == NIL_RTTHREAD); NOREF(hThread);
+
+    KIRQL CurIrql = KeGetCurrentIrql();
+    return CurIrql > PASSIVE_LEVEL; /** @todo Is there a more correct way? */
 }
 

@@ -38,7 +38,7 @@
 #include <setjmp.h>
 #endif
 
-__BEGIN_DECLS
+RT_C_DECLS_BEGIN
 
 
 /** CPU mode flags (DISCPUSTATE::mode).
@@ -123,6 +123,8 @@ typedef enum
 #define OPTYPE_DEFAULT_64_OP_SIZE       RT_BIT(21)  /**< Default 64 bits operand size */
 #define OPTYPE_FORCED_64_OP_SIZE        RT_BIT(22)  /**< Forced 64 bits operand size; regardless of prefix bytes */
 #define OPTYPE_REXB_EXTENDS_OPREG       RT_BIT(23)  /**< REX.B extends the register field in the opcode byte */
+#define OPTYPE_MOD_FIXED_11             RT_BIT(24)  /**< modrm.mod is always 11b */
+#define OPTYPE_FORCED_32_OP_SIZE_X86    RT_BIT(25)  /**< Forced 32 bits operand size; regardless of prefix bytes (only in 16 & 32 bits mode!) */
 #define OPTYPE_ALL                      (0xffffffff)
 
 /** Parameter usage flags.
@@ -517,6 +519,10 @@ typedef struct _DISCPUSTATE
 /** Pointer to a const disassembler CPU state. */
 typedef DISCPUSTATE const *PCDISCPUSTATE;
 
+/** The storage padding sufficient to hold the largest DISCPUSTATE in all
+ * contexts (R3, R0 and RC). Used various places in the VMM internals.   */
+#define DISCPUSTATE_PADDING_SIZE    (HC_ARCH_BITS == 64 ? 0x1a0 : 0x180)
+
 /** Opcode. */
 #pragma pack(4)
 typedef struct _OPCODE
@@ -758,7 +764,7 @@ DISDECL(size_t) DISFormatGasEx( PCDISCPUSTATE pCpu, char *pszBuf, size_t cchBuf,
 /** @todo DISAnnotate(PCDISCPUSTATE pCpu, char *pszBuf, size_t cchBuf, register reader, memory reader); */
 
 
-__END_DECLS
+RT_C_DECLS_END
 
 #endif
 

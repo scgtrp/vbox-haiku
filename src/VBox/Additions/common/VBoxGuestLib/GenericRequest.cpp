@@ -1,11 +1,10 @@
+/* $Revision$ */
 /** @file
- *
- * VBoxGuestLib - A support library for VirtualBox guest additions:
- * Generic VMMDev request management
+ * VBoxGuestLibR0 - Generic VMMDev request management.
  */
 
 /*
- * Copyright (C) 2006-2007 Sun Microsystems, Inc.
+ * Copyright (C) 2006-2009 Sun Microsystems, Inc.
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -20,16 +19,15 @@
  * additional information or have any questions.
  */
 
-#include <VBox/VBoxGuestLib.h>
 #include "VBGLInternal.h"
 #include <iprt/asm.h>
-#include <iprt/string.h>
 #include <iprt/assert.h>
+#include <iprt/string.h>
 
 DECLVBGL(int) VbglGRAlloc (VMMDevRequestHeader **ppReq, uint32_t cbSize, VMMDevRequestType reqType)
 {
     VMMDevRequestHeader *pReq;
-    int rc = VbglEnter ();
+    int rc = vbglR0Enter ();
 
     if (RT_FAILURE(rc))
         return rc;
@@ -66,7 +64,7 @@ DECLVBGL(int) VbglGRAlloc (VMMDevRequestHeader **ppReq, uint32_t cbSize, VMMDevR
 DECLVBGL(int) VbglGRPerform (VMMDevRequestHeader *pReq)
 {
     RTCCPHYS physaddr;
-    int rc = VbglEnter ();
+    int rc = vbglR0Enter ();
 
     if (RT_FAILURE(rc))
         return rc;
@@ -82,7 +80,7 @@ DECLVBGL(int) VbglGRPerform (VMMDevRequestHeader *pReq)
     }
     else
     {
-        ASMOutU32(g_vbgldata.portVMMDev + PORT_VMMDEV_REQUEST_OFFSET, (uint32_t)physaddr);
+        ASMOutU32(g_vbgldata.portVMMDev + VMMDEV_PORT_OFF_REQUEST, (uint32_t)physaddr);
         /* Make the compiler aware that the host has changed memory. */
         ASMCompilerBarrier();
         rc = pReq->rc;
@@ -92,10 +90,11 @@ DECLVBGL(int) VbglGRPerform (VMMDevRequestHeader *pReq)
 
 DECLVBGL(void) VbglGRFree (VMMDevRequestHeader *pReq)
 {
-    int rc = VbglEnter ();
+    int rc = vbglR0Enter ();
 
     if (RT_FAILURE(rc))
         return;
 
     VbglPhysHeapFree (pReq);
 }
+

@@ -1,5 +1,5 @@
 /** @file
- * PDM - Pluggable Device Manager, Interfaces.
+ * PDM - Pluggable Device Manager, Interfaces. (VMM)
  */
 
 /*
@@ -33,7 +33,7 @@
 #include <VBox/types.h>
 #include <VBox/hgcmsvc.h>
 
-__BEGIN_DECLS
+RT_C_DECLS_BEGIN
 
 /** @defgroup grp_pdm_interfaces    The PDM Interface Definitions
  * @ingroup grp_pdm
@@ -103,10 +103,6 @@ typedef enum PDMINTERFACE
     PDMINTERFACE_BLOCK_ASYNC,
     /** PDMIBLOCKASYNCPORT      - Async version of the block interface  (Up)    Coupled with PDMINTERFACE_BLOCK_ASYNC. */
     PDMINTERFACE_BLOCK_ASYNC_PORT,
-    /** PDMITRANSPORTASYNC      - Transport data async to their target  (Down)  Coupled with PDMINTERFACE_TRANSPORT_ASYNC_PORT. */
-    PDMINTERFACE_TRANSPORT_ASYNC,
-    /** PDMITRANSPORTASYNCPORT  - Transport data async to their target  (Up)    Coupled with PDMINTERFACE_TRANSPORT_ASYNC. */
-    PDMINTERFACE_TRANSPORT_ASYNC_PORT,
 
 
     /** PDMINETWORKPORT         - The network port interface.           (Down)  Coupled with PDMINTERFACE_NETWORK_CONNECTOR. */
@@ -154,9 +150,6 @@ typedef enum PDMINTERFACE
     /** VUSBIDEVICE             - VUSB Device interface.                (Up)     No coupling. */
     PDMINTERFACE_VUSB_DEVICE,
 
-    /** VUSBITIMER              - VUSB Timer interface.                 (Up)     No coupling. */
-    PDMINTERFACE_VUSB_TIMER,
-
     /** PDMIHOSTPARALLELPORT    - The Host Parallel port interface.     (Down)   Coupled with PDMINTERFACE_HOST_PARALLEL_CONNECTOR. */
     PDMINTERFACE_HOST_PARALLEL_PORT,
     /** PDMIHOSTPARALLELCONNECTOR - The Host Parallel connector interface (Up)   Coupled with PDMINTERFACE_HOST_PARALLEL_PORT. */
@@ -166,6 +159,8 @@ typedef enum PDMINTERFACE
     PDMINTERFACE_SCSI_PORT,
     /** PDMISCSICONNECTOR       - The SCSI command execution connector interface (Up) Coupled with PDMINTERFACE_SCSI_PORT. */
     PDMINTERFACE_SCSI_CONNECTOR,
+    /** PDMDDISPLAYVBVACALLBACKS - The Display VBVA callbacks. */
+    PDMINTERFACE_DISPLAY_VBVA_CALLBACKS,
 
     /** Maximum interface number. */
     PDMINTERFACE_MAX
@@ -425,6 +420,8 @@ typedef struct PDMIDISPLAYPORT
 } PDMIDISPLAYPORT;
 
 
+typedef struct _VBOXVHWACMD *PVBOXVHWACMD; /**< @todo r=bird: _VBOXVHWACMD -> VBOXVHWACMD; avoid using 1 or 2 leading underscores. Also, a line what it is to make doxygen happy. */
+
 /** Pointer to a display connector interface. */
 typedef struct PDMIDISPLAYCONNECTOR *PPDMIDISPLAYCONNECTOR;
 /**
@@ -525,6 +522,14 @@ typedef struct PDMIDISPLAYCONNECTOR
      */
     DECLR3CALLBACKMEMBER(void, pfnProcessDisplayData, (PPDMIDISPLAYCONNECTOR pInterface, void *pvVRAM, unsigned uScreenId));
 
+    /**
+     * Process the guest Video HW Acceleration command.
+     *
+     * @param   pInterface          Pointer to this interface.
+     * @param   pCmd                Video HW Acceleration Command to be processed.
+     * @thread  The emulation thread.
+     */
+    DECLR3CALLBACKMEMBER(void, pfnVHWACommandProcess, (PPDMIDISPLAYCONNECTOR pInterface, PVBOXVHWACMD pCmd));
 
     /** Read-only attributes.
      * For preformance reasons some readonly attributes are kept in the interface.
@@ -1307,162 +1312,6 @@ typedef struct PDMIMEDIAASYNC
 } PDMIMEDIAASYNC;
 
 
-/** Pointer to a async media notify interface. */
-typedef struct PDMITRANSPORTASYNCPORT *PPDMITRANSPORTASYNCPORT;
-/**
- * Notification interface for completed I/O tasks.
- * Pair with PDMITRANSPORTASYNC.
- */
-typedef struct PDMITRANSPORTASYNCPORT
-{
-    /**
-     * Notify completion of tasks.
-     *
-     * @returns VBox status code.
-     * @param   pInterface      Pointer to the interface structure containing the called function pointer.
-     * @param   pvUser          The user argument given in pfnTasksSubmit.
-     * @thread  Any thread.
-     */
-    DECLR3CALLBACKMEMBER(int, pfnTaskCompleteNotify, (PPDMITRANSPORTASYNCPORT pInterface, void *pvUser));
-
-} PDMITRANSPORTASYNCPORT;
-
-
-/** Pointer to a async media interface. */
-typedef struct PDMITRANSPORTASYNC *PPDMITRANSPORTASYNC;
-/**
- * Asynchronous transport interface.
- * Makes up the fundation for PDMIMEDIAASYNC.
- */
-typedef struct PDMITRANSPORTASYNC
-{
-    /**
-     * Read bits synchronous.
-     * Blocks until finished.
-     *
-     * @returns VBox status code.
-     * @param   pInterface      Pointer to the interface structure containint the called function pointer.
-     * @param   pStorage        The storage handle to read from.
-     * @param   off             Offset to start reading from.
-     * @param   pvBuf           Where to store the read bits.
-     * @param   cbRead          Number of bytes to read.
-     * @param   pcbRead         Where to store the number of bytes actually read.
-     * @thread  Any thread.
-     */
-    DECLR3CALLBACKMEMBER(int, pfnReadSynchronous, (PPDMITRANSPORTASYNC pInterface, void *pStorage,
-                                                   uint64_t off, void *pvBuf, size_t cbRead, size_t *pcbRead));
-
-    /**
-     * Write bits synchronous.
-     * Blocks until finished.
-     *
-     * @returns VBox status code.
-     * @param   pInterface      Pointer to the interface structure containint the called function pointer.
-     * @param   pStorage        The storage handle to write to.
-     * @param   off             Offset to start reading from.
-     * @param   pvBuf           Pointer to the buffer which contains the data to write.
-     * @param   cbWrite         Number of bytes to read.
-     * @param   pcbWritten      Where to store the number of bytes actually read.
-     * @thread  Any thread.
-     */
-    DECLR3CALLBACKMEMBER(int, pfnWriteSynchronous, (PPDMITRANSPORTASYNC pInterface, void *pStorage,
-                                                    uint64_t off, const void *pvBuf, size_t cbWrite, size_t *pcbWritten));
-
-    /**
-     * Make sure that the bits written are actually on the storage medium.
-     * This is a synchronous task
-     *
-     * @returns VBox status code.
-     * @param   pInterface      Pointer to the interface structure containing the called function pointer.
-     * @param   pStorage        The storage handle to flush-
-     * @thread  Any thread.
-     */
-    DECLR3CALLBACKMEMBER(int, pfnFlushSynchronous,(PPDMITRANSPORTASYNC pInterface, void *pStorage));
-
-    /**
-     * Get the media size in bytes.
-     *
-     * @returns Media size in bytes.
-     * @param   pInterface      Pointer to the interface structure containing the called function pointer.
-     * @param   pStorage        The storage handle.
-     * @thread  Any thread.
-     */
-    DECLR3CALLBACKMEMBER(uint64_t, pfnGetSize,(PPDMITRANSPORTASYNC pInterface, void *pStorage));
-
-    /**
-     * Check if the media is readonly or not.
-     *
-     * @returns true if readonly.
-     * @returns false if read/write.
-     * @param   pInterface      Pointer to the interface structure containing the called function pointer.
-     * @param   pStorage        The storage handle.
-     * @thread  Any thread.
-     */
-    DECLR3CALLBACKMEMBER(bool, pfnIsReadOnly,(PPDMITRANSPORTASYNC pInterface, void *pStorage));
-
-    /**
-     * Opens the data source.
-     *
-     * @returns VBox status code.
-     * @param   pInterface      Pointer to the interface structure containing the called function pointer.
-     * @param   pszPath         The path to open.
-     * @param   fReadonly       If the target shoudl opened readonly.
-     * @param   ppStorage       Where to store the storage handle.
-     * @thread  Any thread.
-     */
-    DECLR3CALLBACKMEMBER(int, pfnOpen, (PPDMITRANSPORTASYNC pInterface, const char *pszTargetPath, bool fReadonly, void **ppStorage));
-
-    /**
-     * Close the data source.
-     *
-     * @returns VBox status code.
-     * @param   pInterface      Pointer to the interface structure containing the called function pointer.
-     * @param   pStorage        The storage handle to close.
-     * @thread  Any thread.
-     */
-    DECLR3CALLBACKMEMBER(int, pfnClose, (PPDMITRANSPORTASYNC pInterface, void *pStorage));
-
-    /**
-     * Prepare an asynchronous read task.
-     *
-     * @returns VBox status code.
-     * @param   pInterface     Pointer to the interface structure containing the called function pointer.
-     * @param   pStorage       The storage handle.
-     * @param   uOffset        The offset to start reading from.
-     * @param   pvBuf          Where to store read bits.
-     * @param   cbRead         How many bytes to read.
-     * @param   ppTask         Where to store the opaque task handle.
-     */
-    DECLR3CALLBACKMEMBER(int, pfnPrepareRead, (PPDMITRANSPORTASYNC pInterface, void *pStorage, uint64_t uOffset,
-                                               void *pvBuf, size_t cbRead, void **ppTask));
-
-    /**
-     * Prepare an asynchronous write task.
-     *
-     * @returns VBox status code.
-     * @param   pInterface     Pointer to the interface structure containing the called function pointer.
-     * @param   pStorage       The storage handle.
-     * @param   uOffset        The offset to start writing to.
-     * @param   pvBuf          Where to read the data from.
-     * @param   cbWrite        How many bytes to write.
-     * @param   ppTask         Where to store the opaque task handle.
-     */
-    DECLR3CALLBACKMEMBER(int, pfnPrepareWrite, (PPDMITRANSPORTASYNC pInterface, void *pStorage, uint64_t uOffset,
-                                                void *pvBuf, size_t cbWrite, void **ppTask));
-
-    /**
-     * Submit an array of tasks for processing
-     *
-     * @returns VBox status code.
-     * @param   pInterface    Pointer to the interface structure containing the called function pointer.
-     * @param   apTasks       Array of task handles to submit.
-     * @param   cTasks        How many tasks to submit.
-     * @param   pvUser        User data which is passed on completion.
-     */
-    DECLR3CALLBACKMEMBER(int, pfnTasksSubmit, (PPDMITRANSPORTASYNC pInterface, void *apTasks[], unsigned cTasks, void *pvUser));
-} PDMITRANSPORTASYNC;
-
-
 /** @name Bit mask definitions for status line type
  * @{ */
 #define PDM_ICHAR_STATUS_LINES_DCD  RT_BIT(0)
@@ -1856,11 +1705,11 @@ typedef struct PDMIVMMDEVPORT
      * Note that there can only be one set of credentials and the guest may or may not
      * query them and may do whatever it wants with them.
      *
-     * @returns VBox status code
-     * @param   pszUsername            User name, may be empty (UTF-8)
-     * @param   pszPassword            Password, may be empty (UTF-8)
-     * @param   pszDomain              Domain name, may be empty (UTF-8)
-     * @param   fFlags                 Bitflags
+     * @returns VBox status code.
+     * @param   pszUsername            User name, may be empty (UTF-8).
+     * @param   pszPassword            Password, may be empty (UTF-8).
+     * @param   pszDomain              Domain name, may be empty (UTF-8).
+     * @param   fFlags                 VMMDEV_SETCREDENTIALS_*.
      */
     DECLR3CALLBACKMEMBER(int, pfnSetCredentials,(PPDMIVMMDEVPORT pInterface, const char *pszUsername,
                                                  const char *pszPassword, const char *pszDomain,
@@ -1918,14 +1767,25 @@ typedef struct PDMIVMMDEVPORT
 
 } PDMIVMMDEVPORT;
 
+/** @name Flags for PDMIVMMDEVPORT::pfnSetCredentials.
+ * @{ */
+/** The guest should perform a logon with the credentials. */
+#define VMMDEV_SETCREDENTIALS_GUESTLOGON                    RT_BIT(0)
+/** The guest should prevent local logons. */
+#define VMMDEV_SETCREDENTIALS_NOLOCALLOGON                  RT_BIT(1)
+/** The guest should verify the credentials. */
+#define VMMDEV_SETCREDENTIALS_JUDGE                         RT_BIT(15)
+/** @} */
+
+
 /** Forward declaration of the video accelerator command memory. */
-struct _VBVAMEMORY;
+struct VBVAMEMORY;
 /** Forward declaration of the guest information structure. */
 struct VBoxGuestInfo;
 /** Forward declaration of the guest statistics structure */
 struct VBoxGuestStatistics;
 /** Pointer to video accelerator command memory. */
-typedef struct _VBVAMEMORY *PVBVAMEMORY;
+typedef struct VBVAMEMORY *PVBVAMEMORY;
 
 /** Pointer to a VMMDev connector interface. */
 typedef struct PDMIVMMDEVCONNECTOR *PPDMIVMMDEVCONNECTOR;
@@ -2586,8 +2446,32 @@ typedef struct PDMISCSICONNECTOR
      DECLR3CALLBACKMEMBER(int, pfnSCSIRequestSend, (PPDMISCSICONNECTOR pInterface, PPDMSCSIREQUEST pSCSIRequest));
 
 } PDMISCSICONNECTOR;
+
+typedef struct PDMDDISPLAYVBVACALLBACKS *PPDMDDISPLAYVBVACALLBACKS;
+/**
+ * Display VBVA callbacks.
+ */
+typedef struct PDMDDISPLAYVBVACALLBACKS
+{
+
+    /**
+     * Informs guest about completion of processing the given Video HW Acceleration
+     * command, does not wait for the guest to process the command.
+     *
+     * @returns ???
+     * @param   pInterface          Pointer to this interface.
+     * @param   pCmd                The Video HW Acceleration Command that was
+     *                              completed.
+     * @todo r=bird: if asynch mean asyncronous; then
+     *                   s/pfnVHWACommandCompleteAsynch/pfnVHWACommandCompleteAsync/;
+     *               fi
+     */
+    DECLR3CALLBACKMEMBER(int, pfnVHWACommandCompleteAsynch, (PPDMDDISPLAYVBVACALLBACKS pInterface, PVBOXVHWACMD pCmd));
+
+} PDMDDISPLAYVBVACALLBACKS;
+
 /** @} */
 
-__END_DECLS
+RT_C_DECLS_END
 
 #endif

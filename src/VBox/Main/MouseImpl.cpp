@@ -29,7 +29,7 @@
 
 #include <VBox/pdmdrv.h>
 #include <iprt/asm.h>
-#include <VBox/VBoxDev.h>
+#include <VBox/VMMDev.h>
 
 /**
  * Mouse driver instance data.
@@ -58,6 +58,8 @@ DEFINE_EMPTY_CTOR_DTOR (Mouse)
 HRESULT Mouse::FinalConstruct()
 {
     mpDrv = NULL;
+    mLastAbsX = 0;
+    mLastAbsY = 0;
     return S_OK;
 }
 
@@ -89,7 +91,7 @@ HRESULT Mouse::init (Console *parent)
 
 #ifdef RT_OS_L4
     /* L4 console has no own mouse cursor */
-    uHostCaps = VMMDEV_MOUSEHOSTCANNOTHWPOINTER;
+    uHostCaps = VMMDEV_MOUSE_HOST_CANNOT_HWPOINTER;
 #else
     uHostCaps = 0;
 #endif
@@ -148,7 +150,7 @@ STDMETHODIMP Mouse::COMGETTER(AbsoluteSupported) (BOOL *absoluteSupported)
     *absoluteSupported = FALSE;
     uint32_t mouseCaps;
     mParent->getVMMDev()->getVMMDevPort()->pfnQueryMouseCapabilities(mParent->getVMMDev()->getVMMDevPort(), &mouseCaps);
-    *absoluteSupported = mouseCaps & VMMDEV_MOUSEGUESTWANTSABS;
+    *absoluteSupported = mouseCaps & VMMDEV_MOUSE_GUEST_CAN_ABSOLUTE;
 
     return S_OK;
 }
@@ -178,7 +180,7 @@ STDMETHODIMP Mouse::COMGETTER(NeedsHostCursor) (BOOL *needsHostCursor)
     *needsHostCursor = FALSE;
     uint32_t mouseCaps;
     mParent->getVMMDev()->getVMMDevPort()->pfnQueryMouseCapabilities(mParent->getVMMDev()->getVMMDevPort(), &mouseCaps);
-    *needsHostCursor = mouseCaps & VMMDEV_MOUSEGUESTNEEDSHOSTCUR;
+    *needsHostCursor = mouseCaps & VMMDEV_MOUSE_GUEST_NEEDS_HOST_CURSOR;
 
     return S_OK;
 }
@@ -218,7 +220,7 @@ STDMETHODIMP Mouse::PutMouseEvent(LONG dx, LONG dy, LONG dz, LONG buttonState)
      * longer wants to use absolute coordinates. If the VMM
      * device isn't aware of that yet, tell it.
      */
-    if (mouseCaps & VMMDEV_MOUSEHOSTWANTSABS)
+    if (mouseCaps & VMMDEV_MOUSE_HOST_CAN_ABSOLUTE)
     {
         mParent->getVMMDev()->getVMMDevPort()->pfnSetMouseCapabilities(
             mParent->getVMMDev()->getVMMDevPort(), uHostCaps);
@@ -275,11 +277,11 @@ STDMETHODIMP Mouse::PutMouseEventAbsolute(LONG x, LONG y, LONG dz,
      * to use absolute coordinates. If the VMM device isn't
      * aware of that yet, tell it.
      */
-    if (!(mouseCaps & VMMDEV_MOUSEHOSTWANTSABS))
+    if (!(mouseCaps & VMMDEV_MOUSE_HOST_CAN_ABSOLUTE))
     {
         mParent->getVMMDev()->getVMMDevPort()->pfnSetMouseCapabilities(
             mParent->getVMMDev()->getVMMDevPort(),
-            uHostCaps | VMMDEV_MOUSEHOSTWANTSABS);
+            uHostCaps | VMMDEV_MOUSE_HOST_CAN_ABSOLUTE);
     }
 
     Display *pDisplay = mParent->getDisplay();
@@ -304,7 +306,7 @@ STDMETHODIMP Mouse::PutMouseEventAbsolute(LONG x, LONG y, LONG dz,
     ComAssertRCRet (vrc, E_FAIL);
 
     // Check if the guest actually wants absolute mouse positions.
-    if (mouseCaps & VMMDEV_MOUSEGUESTWANTSABS)
+    if (mouseCaps & VMMDEV_MOUSE_GUEST_CAN_ABSOLUTE)
     {
         uint32_t fButtons = 0;
         if (buttonState & MouseButtonState_LeftButton)
@@ -314,8 +316,21 @@ STDMETHODIMP Mouse::PutMouseEventAbsolute(LONG x, LONG y, LONG dz,
         if (buttonState & MouseButtonState_MiddleButton)
             fButtons |= PDMIMOUSEPORT_BUTTON_MIDDLE;
 
-        vrc = mpDrv->pUpPort->pfnPutEvent(mpDrv->pUpPort, 1, 1, dz,
-                                          fButtons);
+        /* This is a workaround.  In order to alert the Guest Additions to the
+         * fact that the absolute pointer position has changed, we send a
+         * a minute movement event to the PS/2 mouse device.  But in order
+         * to avoid the mouse jiggling every time the use clicks, we check to
+         * see if the position has really changed since the last mouse event.
+         */
+        if (   ((mLastAbsX == mouseXAbs) && (mLastAbsY == mouseYAbs))
+            || (mouseCaps & VMMDEV_MOUSE_GUEST_USES_VMMDEV))
+            vrc = mpDrv->pUpPort->pfnPutEvent(mpDrv->pUpPort, 0, 0, dz,
+                                              fButtons);
+        else
+            vrc = mpDrv->pUpPort->pfnPutEvent(mpDrv->pUpPort, 1, 1, dz,
+                                              fButtons);
+        mLastAbsX = mouseXAbs;
+        mLastAbsY = mouseYAbs;
         if (RT_FAILURE (vrc))
             rc = setError (VBOX_E_IPRT_ERROR,
                 tr ("Could not send the mouse event to the virtual mouse (%Rrc)"),

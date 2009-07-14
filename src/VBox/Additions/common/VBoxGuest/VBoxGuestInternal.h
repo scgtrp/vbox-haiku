@@ -25,9 +25,13 @@
 #include <iprt/types.h>
 #include <iprt/semaphore.h>
 #include <iprt/spinlock.h>
+#include <VBox/VMMDev.h>
 #include <VBox/VBoxGuest.h>
 #include <VBox/VBoxGuestLib.h>
 
+
+/** Pointer to the VBoxGuest per session data. */
+typedef struct VBOXGUESTSESSION *PVBOXGUESTSESSION;
 
 /** Pointer to a wait-for-event entry. */
 typedef struct VBOXGUESTWAIT *PVBOXGUESTWAIT;
@@ -50,6 +54,8 @@ typedef struct VBOXGUESTWAIT
     uint32_t                    fReqEvents;
     /** The events we received. */
     uint32_t volatile           fResEvents;
+    /** The session that's waiting. */
+    PVBOXGUESTSESSION           pSession;
 #ifdef VBOX_WITH_HGCM
     /** The HGCM request we're waiting for to complete. */
     VMMDevHGCMRequestHeader volatile *pHGCMReq;
@@ -79,11 +85,18 @@ typedef struct VBOXGUESTDEVEXT
     RTIOPORT                    IOPortBase;
     /** Pointer to the mapping of the VMMDev adapter memory. */
     VMMDevMemory volatile      *pVMMDevMemory;
+    /** Events we won't permit anyone to filter out. */
+    uint32_t                    fFixedEvents;
+    /** The memory object reserving space for the guest mappings. */
+    RTR0MEMOBJ                  hGuestMappings;
 
+    /** Spinlock protecting the signaling and resetting of the wait-for-event
+     * semaphores as well as the event acking in the ISR. */
+    RTSPINLOCK                  EventSpinlock;
     /** Preallocated VMMDevEvents for the IRQ handler. */
     VMMDevEvents               *pIrqAckEvents;
-    /** Spinlock protecting the signaling and resetting of the wait-for-event semaphores. */
-    RTSPINLOCK                  WaitSpinlock;
+    /** The physical address of pIrqAckEvents. */
+    RTCCPHYS                    PhysIrqAckEvents;
     /** Wait-for-event list for threads waiting for multiple events. */
     VBOXGUESTWAITLIST           WaitList;
 #ifdef VBOX_WITH_HGCM
@@ -96,6 +109,9 @@ typedef struct VBOXGUESTDEVEXT
     VBOXGUESTWAITLIST           FreeList;
     /** Mask of pending events. */
     uint32_t volatile           f32PendingEvents;
+    /** Current VMMDEV_EVENT_MOUSE_POSITION_CHANGED sequence number.
+     * Used to implement polling.  */
+    uint32_t volatile           u32MousePosChangedSeq;
 
     /** Spinlock various items in the VBOXGUESTSESSION. */
     RTSPINLOCK                  SessionSpinlock;
@@ -107,9 +123,6 @@ typedef struct VBOXGUESTDEVEXT
 /** Pointer to the VBoxGuest driver data. */
 typedef VBOXGUESTDEVEXT *PVBOXGUESTDEVEXT;
 
-
-/** Pointer to the VBoxGuest per session data. */
-typedef struct VBOXGUESTSESSION *PVBOXGUESTSESSION;
 
 /**
  * The VBoxGuest per session data.
@@ -143,12 +156,14 @@ typedef struct VBOXGUESTSESSION
      * This will be automatically disconnected when the session is closed. */
     uint32_t volatile           aHGCMClientIds[8];
 #endif
+    /** The last consumed VMMDEV_EVENT_MOUSE_POSITION_CHANGED sequence number.
+     * Used to implement polling.  */
+    uint32_t volatile           u32MousePosChangedSeq;
 } VBOXGUESTSESSION;
 
+RT_C_DECLS_BEGIN
 
-__BEGIN_DECLS
-
-int  VBoxGuestInitDevExt(PVBOXGUESTDEVEXT pDevExt, uint16_t IOPortBase, void *pvMMIOBase, uint32_t cbMMIO, VBOXOSTYPE enmOSType);
+int  VBoxGuestInitDevExt(PVBOXGUESTDEVEXT pDevExt, uint16_t IOPortBase, void *pvMMIOBase, uint32_t cbMMIO, VBOXOSTYPE enmOSType, uint32_t fEvents);
 void VBoxGuestDeleteDevExt(PVBOXGUESTDEVEXT pDevExt);
 bool VBoxGuestCommonISR(PVBOXGUESTDEVEXT pDevExt);
 int  VBoxGuestSetGuestCapabilities(uint32_t fOr, uint32_t fNot);
@@ -161,7 +176,25 @@ int  VBoxGuestCommonIOCtlFast(unsigned iFunction, PVBOXGUESTDEVEXT pDevExt, PVBO
 int  VBoxGuestCommonIOCtl(unsigned iFunction, PVBOXGUESTDEVEXT pDevExt, PVBOXGUESTSESSION pSession,
                           void *pvData, size_t cbData, size_t *pcbDataReturned);
 
-__END_DECLS
+#if defined(RT_OS_SOLARIS) \
+ || defined(RT_OS_FREEBSD) \
+ || defined(RT_OS_LINUX)
+DECLVBGL(void *) VBoxGuestNativeServiceOpen(uint32_t *pu32Version);
+DECLVBGL(void)   VBoxGuestNativeServiceClose(void *pvOpaque);
+DECLVBGL(int)    VBoxGuestNativeServiceCall(void *pvOpaque, unsigned int iCmd, void *pvData, size_t cbSize, size_t *pcbReturn);
+#endif
+
+/**
+ * ISR callback for notifying threads polling for mouse events.
+ *
+ * This is called at the end of the ISR, after leaving the event spinlock, if
+ * VMMDEV_EVENT_MOUSE_POSITION_CHANGED was raised by the host.
+ *
+ * @param   pDevExt     The device extension.
+ */
+void VBoxGuestNativeISRMousePollEvent(PVBOXGUESTDEVEXT pDevExt);
+
+RT_C_DECLS_END
 
 #endif
 

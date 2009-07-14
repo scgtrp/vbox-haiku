@@ -48,7 +48,7 @@
  * @{
  */
 
-__BEGIN_DECLS
+RT_C_DECLS_BEGIN
 
 /** @def RTMEM_ALIGNMENT
  * The alignment of the memory blocks returned by RTMemAlloc(), RTMemAllocZ(),
@@ -145,7 +145,7 @@ RTDECL(void *) RTMemDupEx(const void *pvSrc, size_t cbSrc, size_t cbExtra) RT_NO
 RTDECL(void *)  RTMemRealloc(void *pvOld, size_t cbNew) RT_NO_THROW;
 
 /**
- * Free memory related to an virtual machine
+ * Frees memory.
  *
  * @param   pv      Pointer to memory block.
  */
@@ -158,14 +158,14 @@ RTDECL(void)    RTMemFree(void *pv) RT_NO_THROW;
  * @returns NULL on failure.
  * @param   cb      Size in bytes of the memory block to allocate.
  */
-RTDECL(void *)    RTMemExecAlloc(size_t cb) RT_NO_THROW;
+RTDECL(void *)  RTMemExecAlloc(size_t cb) RT_NO_THROW;
 
 /**
  * Free executable/read/write memory allocated by RTMemExecAlloc().
  *
  * @param   pv      Pointer to memory block.
  */
-RTDECL(void)      RTMemExecFree(void *pv) RT_NO_THROW;
+RTDECL(void)    RTMemExecFree(void *pv) RT_NO_THROW;
 
 #if defined(IN_RING0) && defined(RT_ARCH_AMD64) && defined(RT_OS_LINUX)
 /**
@@ -257,7 +257,74 @@ RTR0DECL(void *) RTMemContAlloc(PRTCCPHYS pPhys, size_t cb) RT_NO_THROW;
  */
 RTR0DECL(void) RTMemContFree(void *pv, size_t cb) RT_NO_THROW;
 
-#endif
+/**
+ * Copy memory from an user mode buffer into a kernel buffer.
+ *
+ * @retval  VINF_SUCCESS on success.
+ * @retval  VERR_ACCESS_DENIED on error.
+ *
+ * @param   pvDst       The kernel mode destination address.
+ * @param   R3PtrDst    The user mode source address.
+ * @param   cb          The number of bytes to copy.
+ */
+RTR0DECL(int) RTR0MemUserCopyFrom(void *pvDst, RTR3PTR R3PtrSrc, size_t cb);
+
+/**
+ * Copy memory from a kernel buffer into a user mode one.
+ *
+ * @retval  VINF_SUCCESS on success.
+ * @retval  VERR_ACCESS_DENIED on error.
+ *
+ * @param   R3PtrDst    The user mode destination address.
+ * @param   pvSrc       The kernel mode source address.
+ * @param   cb          The number of bytes to copy.
+ */
+RTR0DECL(int) RTR0MemUserCopyTo(RTR3PTR R3PtrDst, void const *pvSrc, size_t cb);
+
+/**
+ * Tests if the specified address is in the user addressable range.
+ *
+ * This function does not check whether the memory at that address is accessible
+ * or anything of that sort, only if the address it self is in the user mode
+ * range.
+ *
+ * @returns true if it's in the user addressable range. false if not.
+ * @param   R3Ptr       The user mode pointer to test.
+ *
+ * @remarks Some systems may have overlapping kernel and user address ranges.
+ *          One prominent example of this is the x86 version of Mac OS X. Use
+ *          RTR0MemAreKrnlAndUsrDifferent() to check.
+ */
+RTR0DECL(bool) RTR0MemUserIsValidAddr(RTR3PTR R3Ptr);
+
+/**
+ * Tests if the specified address is in the kernel mode range.
+ *
+ * This function does not check whether the memory at that address is accessible
+ * or anything of that sort, only if the address it self is in the kernel mode
+ * range.
+ *
+ * @returns true if it's in the kernel range. false if not.
+ * @param   pv          The alleged kernel mode pointer.
+ *
+ * @remarks Some systems may have overlapping kernel and user address ranges.
+ *          One prominent example of this is the x86 version of Mac OS X. Use
+ *          RTR0MemAreKrnlAndUsrDifferent() to check.
+ */
+RTR0DECL(bool) RTR0MemKernelIsValidAddr(void *pv);
+
+/**
+ * Are user mode and kernel mode address ranges distinctly different.
+ *
+ * This determins whether RTR0MemKernelIsValidAddr and RTR0MemUserIsValidAddr
+ * can be used for deciding whether some arbitrary address is a user mode or a
+ * kernel mode one.
+ *
+ * @returns true if they are, false if not.
+ */
+RTR0DECL(bool) RTR0MemAreKrnlAndUsrDifferent(void);
+
+#endif /* IN_RING0 */
 
 
 /** @name Electrical Fence Version of some APIs.
@@ -365,7 +432,7 @@ RTDECL(void *) RTMemEfDupEx(const void *pvSrc, size_t cbSrc, size_t cbExtra) RT_
 
 /** @} */
 
-__END_DECLS
+RT_C_DECLS_END
 
 
 #ifdef __cplusplus

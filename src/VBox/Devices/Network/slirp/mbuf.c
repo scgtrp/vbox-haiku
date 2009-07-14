@@ -81,6 +81,9 @@ m_get(PNATState pData)
     m->m_len = 0;
     m->m_nextpkt = 0;
     m->m_prevpkt = 0;
+#ifdef VBOX_WITH_SLIRP_ALIAS
+    m->m_la = NULL;
+#endif
 
 end_error:
     DEBUG_ARG("m = %lx", (long )m);
@@ -198,6 +201,7 @@ m_adj(struct mbuf *m, int len)
         len = -len;
         m->m_len -= len;
     }
+    Assert(m->m_len >= 0);
 }
 
 

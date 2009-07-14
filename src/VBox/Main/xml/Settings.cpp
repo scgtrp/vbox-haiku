@@ -245,6 +245,8 @@ stdx::char_auto_ptr ToStringInteger (uint64_t aValue, unsigned int aBase,
     }
 
     stdx::char_auto_ptr result (new char [len]);
+    if (aBase == 0)
+        aBase = 10;
     int vrc = RTStrFormatNumber (result.get(), aValue, aBase, 0, 0, flags);
     if (RT_SUCCESS (vrc))
         return result;
@@ -412,7 +414,7 @@ void XmlKeyBackend::setValue (const char *aName, const char *aValue)
         {
             value = xmlEncodeSpecialChars (mNode->doc, value);
             if (value == NULL)
-                throw xml::ENoMemory();
+                throw std::bad_alloc();
         }
 
         xmlNodeSetContent (mNode, value);
@@ -446,7 +448,7 @@ void XmlKeyBackend::setValue (const char *aName, const char *aValue)
     xmlAttrPtr attr = xmlSetProp (mNode, (const xmlChar *) aName,
                                   (const xmlChar *) aValue);
     if (attr == NULL)
-        throw xml::ENoMemory();
+        throw std::bad_alloc();
 }
 
 Key::List XmlKeyBackend::keys (const char *aName /* = NULL */) const
@@ -499,7 +501,7 @@ Key XmlKeyBackend::appendKey (const char *aName)
 
     xmlNodePtr node = xmlNewChild (mNode, NULL, (const xmlChar *) aName, NULL);
     if (node == NULL)
-        throw xml::ENoMemory();
+        throw std::bad_alloc();
 
     return Key (new XmlKeyBackend (node));
 }
@@ -581,7 +583,7 @@ XmlTreeBackend::XmlTreeBackend()
     /* create a parser context */
     m->ctxt = xmlNewParserCtxt();
     if (m->ctxt == NULL)
-        throw xml::ENoMemory();
+        throw std::bad_alloc();
 }
 
 XmlTreeBackend::~XmlTreeBackend()
@@ -1145,7 +1147,7 @@ xmlParserInputPtr XmlTreeBackend::ExternalEntityLoader (const char *aURI,
         delete input;
         delete ctxt;
 
-        throw xml::ENoMemory();
+        throw std::bad_alloc();
     }
     catch (const xml::EIPRTFailure &err) { sThat->m->trappedErr.reset (stdx::new_exception_trap (err)); }
     catch (const xml::Error &err) { sThat->m->trappedErr.reset (stdx::new_exception_trap (err)); }

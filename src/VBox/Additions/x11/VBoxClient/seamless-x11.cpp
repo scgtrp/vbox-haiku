@@ -1,7 +1,5 @@
 /** @file
- *
- * Seamless mode:
- * Linux guest.
+ * X11 Seamless mode.
  */
 
 /*
@@ -27,7 +25,6 @@
 #include <iprt/err.h>
 #include <iprt/assert.h>
 #include <VBox/log.h>
-#include <VBox/VBoxGuest.h>
 
 #include "seamless-guest.h"
 
@@ -36,8 +33,10 @@
 
 #include <limits.h>
 
-/* This is defined wrong in my X11 header files! */
-#define VBoxShapeNotify 64
+#ifdef TESTCASE
+#undef DefaultRootWindow
+#define DefaultRootWindow XDefaultRootWindow
+#endif
 
 /*****************************************************************************
 * Static functions                                                           *
@@ -149,6 +148,7 @@ void VBoxGuestSeamlessX11::rebuildWindowTree(void)
     LogFlowThisFunc(("called\n"));
     freeWindowTree();
     addClients(DefaultRootWindow(mDisplay.get()));
+    mChanged = true;
 }
 
 
@@ -195,11 +195,6 @@ void VBoxGuestSeamlessX11::addClientWindow(const Window hWin)
         fAddWin = false;
     }
     if (fAddWin && (winAttrib.map_state == IsUnmapped))
-        fAddWin = false;
-    if (fAddWin && (XFetchName(mDisplay, hClient, &pszWinName) != 0) && (pszWinName != NULL))
-        XFree(pszWinName);
-    else
-        /* kwin sometimes creates temporary fullscreen windows with no name. */
         fAddWin = false;
     if (fAddWin)
     {
@@ -274,7 +269,7 @@ void VBoxGuestSeamlessX11::freeWindowTree(void)
 
 
 /**
- * Waits for a position or shape-related event from guest windows 
+ * Waits for a position or shape-related event from guest windows
  *
  * @note Called from the guest event thread.
  */
@@ -285,21 +280,24 @@ void VBoxGuestSeamlessX11::nextEvent(void)
     LogFlowThisFunc(("\n"));
     /* Start by sending information about the current window setup to the host.  We do this
        here because we want to send all such information from a single thread. */
-    mObserver->notify();
+    if (mChanged)
+        mObserver->notify();
+    mChanged = false;
     XNextEvent(mDisplay, &event);
     switch (event.type)
     {
     case ConfigureNotify:
-        doConfigureEvent(&event.xconfigure);
+        doConfigureEvent(event.xconfigure.window);
         break;
     case MapNotify:
-        doMapEvent(&event.xmap);
+        doMapEvent(event.xmap.window);
         break;
     case VBoxShapeNotify:  /* This is defined wrong in my X11 header files! */
-        doShapeEvent(reinterpret_cast<XShapeEvent *>(&event));
+    /* the window member in xany is in the same place as in the shape event */
+        doShapeEvent(event.xany.window);
         break;
     case UnmapNotify:
-        doUnmapEvent(&event.xunmap);
+        doUnmapEvent(event.xunmap.window);
         break;
     default:
         break;
@@ -312,23 +310,34 @@ void VBoxGuestSeamlessX11::nextEvent(void)
  *
  * @param event the X11 event structure
  */
-void VBoxGuestSeamlessX11::doConfigureEvent(const XConfigureEvent *event)
+void VBoxGuestSeamlessX11::doConfigureEvent(Window hWin)
 {
     LogFlowThisFunc(("\n"));
     VBoxGuestWindowList::iterator iter;
 
-    iter = mGuestWindows.find(event->window);
+    iter = mGuestWindows.find(hWin);
     if (iter != mGuestWindows.end())
     {
         XWindowAttributes winAttrib;
 
-        if (XGetWindowAttributes(mDisplay, event->window, &winAttrib))
+        if (XGetWindowAttributes(mDisplay, hWin, &winAttrib))
         {
             iter->second->mX = winAttrib.x;
             iter->second->mY = winAttrib.y;
             iter->second->mWidth = winAttrib.width;
             iter->second->mHeight = winAttrib.height;
         }
+        if (iter->second->mhasShape)
+        {
+            VBoxGuestX11Pointer<XRectangle> rects;
+            int cRects = 0, iOrdering;
+
+            rects = XShapeGetRectangles(mDisplay, hWin, ShapeBounding,
+                                        &cRects, &iOrdering);
+            iter->second->mcRects = cRects;
+            iter->second->mapRects = rects;
+        }
+        mChanged = true;
     }
     LogFlowThisFunc(("returning\n"));
 }
@@ -338,15 +347,16 @@ void VBoxGuestSeamlessX11::doConfigureEvent(const XConfigureEvent *event)
  *
  * @param event the X11 event structure
  */
-void VBoxGuestSeamlessX11::doMapEvent(const XMapEvent *event)
+void VBoxGuestSeamlessX11::doMapEvent(Window hWin)
 {
     LogFlowThisFunc(("\n"));
     VBoxGuestWindowList::iterator iter;
 
-    iter = mGuestWindows.find(event->window);
+    iter = mGuestWindows.find(hWin);
     if (mGuestWindows.end() == iter)
     {
-        addClientWindow(event->window);
+        addClientWindow(hWin);
+        mChanged = true;
     }
     LogFlowThisFunc(("returning\n"));
 }
@@ -357,21 +367,23 @@ void VBoxGuestSeamlessX11::doMapEvent(const XMapEvent *event)
  *
  * @param event the X11 event structure
  */
-void VBoxGuestSeamlessX11::doShapeEvent(const XShapeEvent *event)
+void VBoxGuestSeamlessX11::doShapeEvent(Window hWin)
 {
     LogFlowThisFunc(("\n"));
     VBoxGuestWindowList::iterator iter;
 
-    iter = mGuestWindows.find(event->window);
+    iter = mGuestWindows.find(hWin);
     if (iter != mGuestWindows.end())
     {
         VBoxGuestX11Pointer<XRectangle> rects;
         int cRects = 0, iOrdering;
 
-        rects = XShapeGetRectangles(mDisplay, event->window, ShapeBounding, &cRects, &iOrdering);
+        rects = XShapeGetRectangles(mDisplay, hWin, ShapeBounding, &cRects,
+                                    &iOrdering);
         iter->second->mhasShape = true;
         iter->second->mcRects = cRects;
         iter->second->mapRects = rects;
+        mChanged = true;
     }
     LogFlowThisFunc(("returning\n"));
 }
@@ -381,15 +393,16 @@ void VBoxGuestSeamlessX11::doShapeEvent(const XShapeEvent *event)
  *
  * @param event the X11 event structure
  */
-void VBoxGuestSeamlessX11::doUnmapEvent(const XUnmapEvent *event)
+void VBoxGuestSeamlessX11::doUnmapEvent(Window hWin)
 {
     LogFlowThisFunc(("\n"));
     VBoxGuestWindowList::iterator iter;
 
-    iter = mGuestWindows.find(event->window);
+    iter = mGuestWindows.find(hWin);
     if (mGuestWindows.end() != iter)
     {
         mGuestWindows.removeWindow(iter);
+        mChanged = true;
     }
     LogFlowThisFunc(("returning\n"));
 }

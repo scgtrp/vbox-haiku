@@ -214,7 +214,7 @@ typedef PCIGLOBALS *PPCIGLOBALS;
 /*******************************************************************************
 *   Internal Functions                                                         *
 *******************************************************************************/
-__BEGIN_DECLS
+RT_C_DECLS_BEGIN
 
 PDMBOTHCBDECL(void) pciSetIrq(PPDMDEVINS pDevIns, PPCIDEVICE pPciDev, int iIrq, int iLevel);
 PDMBOTHCBDECL(void) pcibridgeSetIrq(PPDMDEVINS pDevIns, PPCIDEVICE pPciDev, int iIrq, int iLevel);
@@ -227,7 +227,7 @@ PDMBOTHCBDECL(int)  pciIOPortDataRead(PPDMDEVINS pDevIns, void *pvUser, RTIOPORT
 DECLINLINE(PPCIDEVICE) pciFindBridge(PPCIBUS pBus, uint8_t iBus);
 #endif
 
-__END_DECLS
+RT_C_DECLS_END
 
 #define DEBUG_PCI
 
@@ -932,6 +932,14 @@ static void pci_bios_init_device(PPCIGLOBALS pGlobals, uint8_t uBus, uint8_t uDe
                     goto default_map;
                 /* VGA: map frame buffer to default Bochs VBE address */
                 pci_set_io_region_addr(pGlobals, uBus, uDevFn, 0, 0xE0000000);
+#ifdef VBOX_WITH_EFI
+                /* The following is necessary for the VGA check in
+                   PciVgaMiniPortDriverBindingSupported to succeed. */
+                /** @todo Seems we're missing some I/O registers or something on the VGA device... Compare real/virt hw with lspci. */
+                pci_config_writew(pGlobals, uBus, uDevFn, PCI_COMMAND,
+                                  pci_config_readw(pGlobals, uBus, uDevFn, PCI_COMMAND)
+                                  | 1 /* Enable I/O space access. */);
+#endif
                 break;
             case 0x0800:
                 /* PIC */
@@ -1256,7 +1264,7 @@ static DECLCALLBACK(int) pciGenericLoadExec(PPDMDEVINS pDevIns, PPCIDEVICE pPciD
  * @param   pPciDev     Pointer to PCI device.
  * @param   pSSMHandle  The handle to save the state to.
  */
-static DECLCALLBACK(int) pciSaveExec(PPDMDEVINS pDevIns, PSSMHANDLE pSSMHandle)
+static DECLCALLBACK(int) pciR3SaveExec(PPDMDEVINS pDevIns, PSSMHANDLE pSSMHandle)
 {
     uint32_t    i;
     PPCIGLOBALS pThis = PDMINS_2_DATA(pDevIns, PPCIGLOBALS);
@@ -1267,6 +1275,7 @@ static DECLCALLBACK(int) pciSaveExec(PPDMDEVINS pDevIns, PSSMHANDLE pSSMHandle)
      */
     SSMR3PutU32(pSSMHandle, pThis->uConfigReg);
     SSMR3PutBool(pSSMHandle, pThis->fUseIoApic);
+
     /*
      * Save IRQ states.
      */
@@ -1281,7 +1290,7 @@ static DECLCALLBACK(int) pciSaveExec(PPDMDEVINS pDevIns, PSSMHANDLE pSSMHandle)
     SSMR3PutU32(pSSMHandle, ~0);        /* separator */
 
     /*
-     * Iterate all the devices.
+     * Iterate thru all the devices.
      */
     for (i = 0; i < RT_ELEMENTS(pBus->devices); i++)
     {
@@ -1300,6 +1309,217 @@ static DECLCALLBACK(int) pciSaveExec(PPDMDEVINS pDevIns, PSSMHANDLE pSSMHandle)
     return SSMR3PutU32(pSSMHandle, ~0); /* terminator */
 }
 
+
+/**
+ * Disables all PCI devices prior to state loading.
+ *
+ * @returns VINF_SUCCESS.
+ * @param   pBus                The PCI bus instance.
+ */
+static int pciR3CommonLoadPrep(PPCIBUS pBus)
+{
+    /*
+     * Iterate thru all the devices and write 0 to the COMMAND register.
+     * The register value is restored afterwards so we can do proper
+     * LogRels in pciR3CommonRestoreConfig.
+     */
+    for (uint32_t i = 0; i < RT_ELEMENTS(pBus->devices); i++)
+    {
+        PPCIDEVICE pDev = pBus->devices[i];
+        if (pDev)
+        {
+            uint16_t u16 = PCIDevGetCommand(pDev);
+            pDev->Int.s.pfnConfigWrite(pDev, VBOX_PCI_COMMAND, 0, 2);
+            PCIDevSetCommand(pDev, u16);
+            Assert(PCIDevGetCommand(pDev) == u16);
+        }
+    }
+    return VINF_SUCCESS;
+}
+
+
+/**
+ * Prepares a state load.
+ *
+ * This will disable all the device so that the I/O regions gets unmapped.
+ *
+ * @returns VINF_SUCCESS
+ * @param   pDevIns             The device instance.
+ * @param   pSSMHandle          The saved state handle.
+ */
+static DECLCALLBACK(int) pciR3LoadPrep(PPDMDEVINS pDevIns, PSSMHANDLE pSSMHandle)
+{
+    PPCIGLOBALS pThis = PDMINS_2_DATA(pDevIns, PPCIGLOBALS);
+    return pciR3CommonLoadPrep(&pThis->PciBus);
+}
+
+
+/**
+ * Common routine for restoring the config registers of a PCI device.
+ *
+ * @param   pDev                The PCI device.
+ * @param   pbSrcConfig         The configuration register values to be loaded.
+ * @param   fIsBridge           Whether this is a bridge device or not.
+ */
+static void pciR3CommonRestoreConfig(PPCIDEVICE pDev, uint8_t const *pbSrcConfig, bool fIsBridge)
+{
+    /*
+     * This table defines the fields for normal devices and bridge devices, and
+     * the order in which they need to be restored.
+     */
+    static const struct PciField
+    {
+        uint8_t     off;
+        uint8_t     cb;
+        uint8_t     fWritable;
+        uint8_t     fBridge;
+        const char *pszName;
+    } s_aFields[] =
+    {
+        /* off,cb,fW,fB, pszName */
+        { 0x00, 2, 0, 3, "VENDOR_ID" },
+        { 0x02, 2, 0, 3, "DEVICE_ID" },
+        { 0x06, 2, 1, 3, "STATUS" },
+        { 0x08, 1, 0, 3, "REVISION_ID" },
+        { 0x09, 1, 0, 3, "CLASS_PROG" },
+        { 0x0a, 1, 0, 3, "CLASS_SUB" },
+        { 0x0b, 1, 0, 3, "CLASS_BASE" },
+        { 0x0c, 1, 0, 3, "CACHE_LINE_SIZE" },   // fWritable = ??
+        { 0x0d, 1, 0, 3, "LATENCY_TIMER" },     // fWritable = ??
+        { 0x0e, 1, 0, 3, "HEADER_TYPE" },       // fWritable = ??
+        { 0x0f, 1, 0, 3, "BIST" },              // fWritable = ??
+        { 0x10, 4, 1, 3, "BASE_ADDRESS_0" },
+        { 0x14, 4, 1, 3, "BASE_ADDRESS_1" },
+        { 0x18, 4, 1, 1, "BASE_ADDRESS_2" },
+        { 0x18, 1, 1, 2, "PRIMARY_BUS" },       // fWritable = ??
+        { 0x19, 1, 1, 2, "SECONDARY_BUS" },     // fWritable = ??
+        { 0x1a, 1, 1, 2, "SUBORDINATE_BUS" },   // fWritable = ??
+        { 0x1b, 1, 1, 2, "SEC_LATENCY_TIMER" }, // fWritable = ??
+        { 0x1c, 4, 1, 1, "BASE_ADDRESS_3" },
+        { 0x1c, 1, 1, 2, "IO_BASE" },           // fWritable = ??
+        { 0x1d, 1, 1, 2, "IO_LIMIT" },          // fWritable = ??
+        { 0x1e, 2, 1, 2, "SEC_STATUS" },        // fWritable = ??
+        { 0x20, 4, 1, 1, "BASE_ADDRESS_4" },
+        { 0x20, 2, 1, 2, "MEMORY_BASE" },       // fWritable = ??
+        { 0x22, 2, 1, 2, "MEMORY_LIMIT" },      // fWritable = ??
+        { 0x24, 4, 1, 1, "BASE_ADDRESS_4" },
+        { 0x24, 2, 1, 2, "PREF_MEMORY_BASE" },  // fWritable = ??
+        { 0x26, 2, 1, 2, "PREF_MEMORY_LIMIT" }, // fWritable = ??
+        { 0x28, 4, 1, 1, "CARDBUS_CIS" },       // fWritable = ??
+        { 0x28, 4, 1, 2, "PREF_BASE_UPPER32" }, // fWritable = ??
+        { 0x2c, 2, 0, 1, "SUBSYSTEM_VENDOR_ID" },// fWritable = !?
+        { 0x2c, 4, 1, 2, "PREF_LIMIT_UPPER32" },// fWritable = ??
+        { 0x2e, 2, 0, 1, "SUBSYSTEM_ID" },      // fWritable = !?
+        { 0x30, 4, 1, 1, "ROM_ADDRESS" },       // fWritable = ?!
+        { 0x30, 2, 1, 2, "IO_BASE_UPPER16" },   // fWritable = ?!
+        { 0x32, 2, 1, 2, "IO_LIMIT_UPPER16" },  // fWritable = ?!
+        { 0x34, 4, 0, 3, "CAPABILITY_LIST" },   // fWritable = !? cb=!?
+        { 0x38, 4, 1, 1, "???" },               // ???
+        { 0x38, 4, 1, 2, "ROM_ADDRESS_BR" },    // fWritable = !? cb=!? fBridge=!?
+        { 0x3c, 1, 1, 3, "INTERRUPT_LINE" },    // fBridge=??
+        { 0x3d, 1, 0, 3, "INTERRUPT_PIN" },     // fBridge=??
+        { 0x3e, 1, 0, 1, "MIN_GNT" },           // fWritable = !?
+        { 0x3e, 1, 1, 2, "BRIDGE_CONTROL" },    // fWritable = !? cb=!?
+        { 0x3f, 1, 1, 3, "MAX_LAT" },           // fWritable = !? fBridge=!?
+        /* The COMMAND register must come last as it requires the *ADDRESS*
+           registers to be restored before we pretent to change it from 0 to
+           whatever value the guest assigned it. */
+        { 0x04, 2, 1, 3, "COMMAND" },
+    };
+
+#ifdef RT_STRICT
+    /* Check that we've got full register coverage. */
+    uint32_t bmDevice[0x40 / 32];
+    uint32_t bmBridge[0x40 / 32];
+    RT_ZERO(bmDevice);
+    RT_ZERO(bmBridge);
+    for (uint32_t i = 0; i < RT_ELEMENTS(s_aFields); i++)
+    {
+        uint8_t off = s_aFields[i].off;
+        uint8_t cb  = s_aFields[i].cb;
+        uint8_t f   = s_aFields[i].fBridge;
+        while (cb-- > 0)
+        {
+            if (f & 1) AssertMsg(!ASMBitTest(bmDevice, off), ("%#x\n", off));
+            if (f & 2) AssertMsg(!ASMBitTest(bmBridge, off), ("%#x\n", off));
+            if (f & 1) ASMBitSet(bmDevice, off);
+            if (f & 2) ASMBitSet(bmBridge, off);
+            off++;
+        }
+    }
+    for (uint32_t off = 0; off < 0x40; off++)
+    {
+        AssertMsg(ASMBitTest(bmDevice, off), ("%#x\n", off));
+        AssertMsg(ASMBitTest(bmBridge, off), ("%#x\n", off));
+    }
+#endif
+
+    /*
+     * Loop thru the fields covering the 64 bytes of standard registers.
+     */
+    uint8_t const fBridge = fIsBridge ? 2 : 1;
+    uint8_t *pbDstConfig = &pDev->config[0];
+    for (uint32_t i = 0; i < RT_ELEMENTS(s_aFields); i++)
+        if (s_aFields[i].fBridge & fBridge)
+        {
+            uint8_t const   off = s_aFields[i].off;
+            uint8_t const   cb  = s_aFields[i].cb;
+            uint32_t        u32Src;
+            uint32_t        u32Dst;
+            switch (cb)
+            {
+                case 1:
+                    u32Src = pbSrcConfig[off];
+                    u32Dst = pbDstConfig[off];
+                    break;
+                case 2:
+                    u32Src = *(uint16_t const *)&pbSrcConfig[off];
+                    u32Dst = *(uint16_t const *)&pbDstConfig[off];
+                    break;
+                case 4:
+                    u32Src = *(uint32_t const *)&pbSrcConfig[off];
+                    u32Dst = *(uint32_t const *)&pbDstConfig[off];
+                    break;
+                default:
+                    AssertFailed();
+                    continue;
+            }
+
+            if (    u32Src != u32Dst
+                ||  off == VBOX_PCI_COMMAND)
+            {
+                if (u32Src != u32Dst)
+                {
+                    if (!s_aFields[i].fWritable)
+                        LogRel(("PCI: %8s/%u: %2u-bit field %s: %x -> %x - !READ ONLY!\n",
+                                pDev->name, pDev->pDevIns->iInstance, cb*8, s_aFields[i].pszName, u32Dst, u32Src));
+                    else
+                        LogRel(("PCI: %8s/%u: %2u-bit field %s: %x -> %x\n",
+                                pDev->name, pDev->pDevIns->iInstance, cb*8, s_aFields[i].pszName, u32Dst, u32Src));
+                }
+                if (off == VBOX_PCI_COMMAND)
+                    PCIDevSetCommand(pDev, 0); /* For remapping, see pciR3CommonLoadPrep. */
+                pDev->Int.s.pfnConfigWrite(pDev, off, u32Src, cb);
+            }
+        }
+
+    /*
+     * The device dependent registers.
+     *
+     * We will not use ConfigWrite here as we have no clue about the size
+     * of the registers, so the device is responsible for correctly
+     * restoring functionality governed by these registers.
+     */
+    for (uint32_t off = 0x40; off < sizeof(pDev->config); off++)
+        if (pbDstConfig[off] != pbSrcConfig[off])
+        {
+            LogRel(("PCI: %8s/%u: register %02x: %02x -> %02x\n",
+                    pDev->name, pDev->pDevIns->iInstance, off, pbDstConfig[off], pbSrcConfig[off])); /** @todo make this Log() later. */
+            pbDstConfig[off] = pbSrcConfig[off];
+        }
+}
+
+
 /**
  * Loads a saved PCI device state.
  *
@@ -1308,10 +1528,10 @@ static DECLCALLBACK(int) pciSaveExec(PPDMDEVINS pDevIns, PSSMHANDLE pSSMHandle)
  * @param   pSSMHandle  The handle to the saved state.
  * @param   u32Version  The data unit version number.
  */
-static DECLCALLBACK(int) pciLoadExec(PPDMDEVINS pDevIns, PSSMHANDLE pSSMHandle, uint32_t u32Version)
+static DECLCALLBACK(int) pciR3LoadExec(PPDMDEVINS pDevIns, PSSMHANDLE pSSMHandle, uint32_t u32Version)
 {
-    PPCIGLOBALS  pThis = PDMINS_2_DATA(pDevIns, PPCIGLOBALS);
-    PPCIBUS      pBus  = &pThis->PciBus;
+    PPCIGLOBALS pThis = PDMINS_2_DATA(pDevIns, PPCIGLOBALS);
+    PPCIBUS     pBus  = &pThis->PciBus;
     uint32_t    u32;
     uint32_t    i;
     int         rc;
@@ -1423,7 +1643,7 @@ static DECLCALLBACK(int) pciLoadExec(PPDMDEVINS pDevIns, PSSMHANDLE pSSMHandle, 
         }
 
         /* commit the loaded device config. */
-        memcpy(pDev->config, DevTmp.config, sizeof(pDev->config));
+        pciR3CommonRestoreConfig(pDev, &DevTmp.config[0], false ); /** @todo fix bridge fun! */
 
         pDev->Int.s.uIrqPinState = DevTmp.Int.s.uIrqPinState;
     }
@@ -1682,7 +1902,7 @@ static DECLCALLBACK(int) pciFakePCIBIOS(PPDMDEVINS pDevIns)
     /*
      * Set the start addresses.
      */
-    pGlobals->pci_bios_io_addr  = 0xc000;
+    pGlobals->pci_bios_io_addr  = 0xd000;
     pGlobals->pci_bios_mem_addr = UINT32_C(0xf0000000);
     pGlobals->uBus = 0;
 
@@ -1891,8 +2111,8 @@ static DECLCALLBACK(int)   pciConstruct(PPDMDEVINS pDevIns, int iInstance, PCFGM
             return rc;
     }
 
-    rc = PDMDevHlpSSMRegister(pDevIns, "pci", iInstance, VBOX_PCI_SAVED_STATE_VERSION, sizeof(*pBus),
-                              NULL, pciSaveExec, NULL, NULL, pciLoadExec, NULL);
+    rc = SSMR3RegisterDevice(PDMDevHlpGetVM(pDevIns), pDevIns, "pci", iInstance, VBOX_PCI_SAVED_STATE_VERSION, sizeof(*pBus) + 16*128, "pgm",
+                             NULL, pciR3SaveExec, NULL, pciR3LoadPrep, pciR3LoadExec, NULL);
     if (RT_FAILURE(rc))
         return rc;
 
@@ -2060,8 +2280,9 @@ static uint32_t pcibridgeConfigRead(PPDMDEVINSR3 pDevIns, uint8_t iBus, uint8_t 
  * @param   pPciDev     Pointer to PCI device.
  * @param   pSSMHandle  The handle to save the state to.
  */
-static DECLCALLBACK(int) pcibridgeSaveExec(PPDMDEVINS pDevIns, PSSMHANDLE pSSMHandle)
+static DECLCALLBACK(int) pcibridgeR3SaveExec(PPDMDEVINS pDevIns, PSSMHANDLE pSSMHandle)
 {
+/** @todo make common with pciR3SaveExec! */
     uint32_t    i;
     PPCIBUS pThis = PDMINS_2_DATA(pDevIns, PPCIBUS);
 
@@ -2085,6 +2306,23 @@ static DECLCALLBACK(int) pcibridgeSaveExec(PPDMDEVINS pDevIns, PSSMHANDLE pSSMHa
     return SSMR3PutU32(pSSMHandle, ~0); /* terminator */
 }
 
+
+/**
+ * Prepares a state load.
+ *
+ * This will disable all the device so that the I/O regions gets unmapped.
+ *
+ * @returns VINF_SUCCESS
+ * @param   pDevIns             The device instance.
+ * @param   pSSMHandle          The saved state handle.
+ */
+static DECLCALLBACK(int) pcibridgeR3LoadPrep(PPDMDEVINS pDevIns, PSSMHANDLE pSSMHandle)
+{
+    PPCIBUS pThis = PDMINS_2_DATA(pDevIns, PPCIBUS);
+    return pciR3CommonLoadPrep(pThis);
+}
+
+
 /**
  * Loads a saved PCI bridge device state.
  *
@@ -2093,12 +2331,14 @@ static DECLCALLBACK(int) pcibridgeSaveExec(PPDMDEVINS pDevIns, PSSMHANDLE pSSMHa
  * @param   pSSMHandle  The handle to the saved state.
  * @param   u32Version  The data unit version number.
  */
-static DECLCALLBACK(int) pcibridgeLoadExec(PPDMDEVINS pDevIns, PSSMHANDLE pSSMHandle, uint32_t u32Version)
+static DECLCALLBACK(int) pcibridgeR3LoadExec(PPDMDEVINS pDevIns, PSSMHANDLE pSSMHandle, uint32_t u32Version)
 {
     PPCIBUS     pBus  = PDMINS_2_DATA(pDevIns, PPCIBUS);
     uint32_t    u32;
     uint32_t    i;
     int         rc;
+
+/** @todo r=bird: this is a copy of pciR3LoadExec. combine the two!  */
 
     /*
      * Check the version.
@@ -2170,7 +2410,7 @@ static DECLCALLBACK(int) pcibridgeLoadExec(PPDMDEVINS pDevIns, PSSMHANDLE pSSMHa
         }
 
         /* commit the loaded device config. */
-        memcpy(pDev->config, DevTmp.config, sizeof(pDev->config));
+        pciR3CommonRestoreConfig(pDev, &DevTmp.config[0], false ); /** @todo fix bridge fun! */
 
         pDev->Int.s.uIrqPinState = DevTmp.Int.s.uIrqPinState;
     }
@@ -2356,8 +2596,8 @@ static DECLCALLBACK(int)   pcibridgeConstruct(PPDMDEVINS pDevIns, int iInstance,
      * Register SSM handlers. We use the same saved state version as for the host bridge
      * to make changes easier.
      */
-    rc = PDMDevHlpSSMRegister(pDevIns, "pcibridge", iInstance, VBOX_PCI_SAVED_STATE_VERSION, sizeof(*pBus),
-                              NULL, pcibridgeSaveExec, NULL, NULL, pcibridgeLoadExec, NULL);
+    rc = SSMR3RegisterDevice(PDMDevHlpGetVM(pDevIns), pDevIns, "pcibridge", iInstance, VBOX_PCI_SAVED_STATE_VERSION, sizeof(*pBus) + 16*128, "pgm",
+                             NULL, pcibridgeR3SaveExec, NULL, pcibridgeR3LoadPrep, pcibridgeR3LoadExec, NULL);
     if (RT_FAILURE(rc))
         return rc;
 

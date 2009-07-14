@@ -37,7 +37,7 @@ class ATL_NO_VTABLE SystemProperties :
     public VirtualBoxBaseNEXT,
     public VirtualBoxSupportErrorInfoImpl <SystemProperties, ISystemProperties>,
     public VirtualBoxSupportTranslation <SystemProperties>,
-    public ISystemProperties
+    VBOX_SCRIPTABLE_IMPL(ISystemProperties)
 {
 public:
 
@@ -48,8 +48,9 @@ public:
     DECLARE_PROTECT_FINAL_CONSTRUCT()
 
     BEGIN_COM_MAP(SystemProperties)
-        COM_INTERFACE_ENTRY(ISupportErrorInfo)
-        COM_INTERFACE_ENTRY(ISystemProperties)
+        COM_INTERFACE_ENTRY  (ISupportErrorInfo)
+        COM_INTERFACE_ENTRY  (ISystemProperties)
+        COM_INTERFACE_ENTRY2 (IDispatch, ISystemProperties)
     END_COM_MAP()
 
     NS_DECL_ISUPPORTS
@@ -87,10 +88,9 @@ public:
     STDMETHOD(COMSETTER(RemoteDisplayAuthLibrary)) (IN_BSTR aRemoteDisplayAuthLibrary);
     STDMETHOD(COMGETTER(WebServiceAuthLibrary)) (BSTR *aWebServiceAuthLibrary);
     STDMETHOD(COMSETTER(WebServiceAuthLibrary)) (IN_BSTR aWebServiceAuthLibrary);
-    STDMETHOD(COMGETTER(HWVirtExEnabled)) (BOOL *enabled);
-    STDMETHOD(COMSETTER(HWVirtExEnabled)) (BOOL enabled);
     STDMETHOD(COMGETTER(LogHistoryCount)) (ULONG *count);
     STDMETHOD(COMSETTER(LogHistoryCount)) (ULONG count);
+    STDMETHOD(COMGETTER(DefaultAudioDriver)) (AudioDriverType_T *aAudioDriver);
 
     // public methods only for internal purposes
 
@@ -140,8 +140,8 @@ private:
 
     Bstr mRemoteDisplayAuthLibrary;
     Bstr mWebServiceAuthLibrary;
-    BOOL mHWVirtExEnabled;
     ULONG mLogHistoryCount;
+    AudioDriverType_T mDefaultAudioDriver;
 };
 
 #endif // ____H_SYSTEMPROPERTIESIMPL

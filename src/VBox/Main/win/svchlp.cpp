@@ -178,7 +178,7 @@ int SVCHlpClient::write (const Utf8Str &aVal)
         return VERR_WRONG_ORDER;
 
     /* write -1 for NULL strings */
-    if (aVal.isNull())
+    if (aVal.isEmpty())
         return write ((size_t) ~0);
 
     size_t len = aVal.length();
@@ -233,7 +233,7 @@ int SVCHlpClient::read (Utf8Str &aVal)
         return VINF_SUCCESS;
     }
 
-    aVal.alloc (len + 1);
+    aVal.reserve(len + 1);
     aVal.mutableRaw() [len] = 0;
 
     /* read string data */
@@ -247,7 +247,7 @@ int SVCHlpClient::read (Guid &aGuid)
     Utf8Str guidStr;
     int vrc = read (guidStr);
     if (RT_SUCCESS (vrc))
-        aGuid = Guid (guidStr);
+        aGuid = Guid (guidStr.c_str());
     return vrc;
 }
 

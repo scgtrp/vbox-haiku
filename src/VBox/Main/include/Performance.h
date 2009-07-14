@@ -143,13 +143,20 @@ namespace pm
     public:
         virtual ~CollectorHAL() { };
         virtual int preCollect(const CollectorHints& /* hints */) { return VINF_SUCCESS; }
+        /** Returns averaged CPU usage in 1/1000th per cent across all host's CPUs. */
         virtual int getHostCpuLoad(ULONG *user, ULONG *kernel, ULONG *idle);
+        /** Returns the average frequency in MHz across all host's CPUs. */
         virtual int getHostCpuMHz(ULONG *mhz);
+        /** Returns the amount of physical memory in kilobytes. */
         virtual int getHostMemoryUsage(ULONG *total, ULONG *used, ULONG *available) = 0;
+        /** Returns CPU usage in 1/1000th per cent by a particular process. */
         virtual int getProcessCpuLoad(RTPROCESS process, ULONG *user, ULONG *kernel);
+        /** Returns the amount of memory used by a process in kilobytes. */
         virtual int getProcessMemoryUsage(RTPROCESS process, ULONG *used) = 0;
 
+        /** Returns CPU usage counters in platform-specific units. */
         virtual int getRawHostCpuLoad(uint64_t *user, uint64_t *kernel, uint64_t *idle);
+        /** Returns process' CPU usage counter in platform-specific units. */
         virtual int getRawProcessCpuLoad(RTPROCESS process, uint64_t *user, uint64_t *kernel, uint64_t *total);
     };
 
@@ -161,6 +168,7 @@ namespace pm
     public:
         BaseMetric(CollectorHAL *hal, const char *name, ComPtr<IUnknown> object)
             : mHAL(hal), mPeriod(0), mLength(0), mName(name), mObject(object), mLastSampleTaken(0), mEnabled(false) {};
+        virtual ~BaseMetric() {};
 
         virtual void init(ULONG period, ULONG length) = 0;
         virtual void preCollect(CollectorHints& hints) = 0;
@@ -197,6 +205,8 @@ namespace pm
     public:
         HostCpuLoad(CollectorHAL *hal, ComPtr<IUnknown> object, SubMetric *user, SubMetric *kernel, SubMetric *idle)
         : BaseMetric(hal, "CPU/Load", object), mUser(user), mKernel(kernel), mIdle(idle) {};
+        ~HostCpuLoad() { delete mUser; delete mKernel; delete mIdle; };
+
         void init(ULONG period, ULONG length);
 
         void collect();
@@ -230,6 +240,7 @@ namespace pm
     public:
         HostCpuMhz(CollectorHAL *hal, ComPtr<IUnknown> object, SubMetric *mhz)
         : BaseMetric(hal, "CPU/MHz", object), mMHz(mhz) {};
+        ~HostCpuMhz() { delete mMHz; };
 
         void init(ULONG period, ULONG length);
         void preCollect(CollectorHints& /* hints */) {}
@@ -247,6 +258,7 @@ namespace pm
     public:
         HostRamUsage(CollectorHAL *hal, ComPtr<IUnknown> object, SubMetric *total, SubMetric *used, SubMetric *available)
         : BaseMetric(hal, "RAM/Usage", object), mTotal(total), mUsed(used), mAvailable(available) {};
+        ~HostRamUsage() { delete mTotal; delete mUsed; delete mAvailable; };
 
         void init(ULONG period, ULONG length);
         void preCollect(CollectorHints& hints);
@@ -266,6 +278,7 @@ namespace pm
     public:
         MachineCpuLoad(CollectorHAL *hal, ComPtr<IUnknown> object, RTPROCESS process, SubMetric *user, SubMetric *kernel)
         : BaseMetric(hal, "CPU/Load", object), mProcess(process), mUser(user), mKernel(kernel) {};
+        ~MachineCpuLoad() { delete mUser; delete mKernel; };
 
         void init(ULONG period, ULONG length);
         void collect();
@@ -298,6 +311,7 @@ namespace pm
     public:
         MachineRamUsage(CollectorHAL *hal, ComPtr<IUnknown> object, RTPROCESS process, SubMetric *used)
         : BaseMetric(hal, "RAM/Usage", object), mProcess(process), mUsed(used) {};
+        ~MachineRamUsage() { delete mUsed; };
 
         void init(ULONG period, ULONG length);
         void preCollect(CollectorHints& hints);

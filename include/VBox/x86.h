@@ -1,9 +1,11 @@
 /** @file
- * X86 (and AMD64) Structures and Definitions.
+ * X86 (and AMD64) Structures and Definitions (VMM,++).
+ *
+ * x86.mac is generated from this file by running 'kmk incs' in the root.
  */
 
 /*
- * Copyright (C) 2006-2007 Sun Microsystems, Inc.
+ * Copyright (C) 2006-2009 Sun Microsystems, Inc.
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -27,11 +29,6 @@
  * additional information or have any questions.
  */
 
-/*
- * x86.mac is generated from this file using:
- *      sed -e '/__VBox_x86_h__/d' -e '/#define/!d' -e 's/#define/%define/' include/VBox/x86.h
- */
-
 #ifndef ___VBox_x86_h
 #define ___VBox_x86_h
 
@@ -39,7 +36,7 @@
 #include <iprt/assert.h>
 
 /* Workaround for Solaris sys/regset.h defining CS, DS */
-#if defined(RT_OS_SOLARIS)
+#ifdef RT_OS_SOLARIS
 # undef CS
 # undef DS
 #endif
@@ -206,15 +203,17 @@ typedef struct X86CPUIDFEATECX
     /** Bit 0 - SSE3 - Supports SSE3 or not. */
     unsigned    u1SSE3 : 1;
     /** Reserved. */
-    unsigned    u2Reserved1 : 2;
+    unsigned    u1Reserved1 : 1;
+    /** Bit 2 - DS Area 64-bit layout. */
+    unsigned    u1DTE64 : 1;
     /** Bit 3 - MONITOR - Supports MONITOR/MWAIT. */
     unsigned    u1Monitor : 1;
     /** Bit 4 - CPL-DS - CPL Qualified Debug Store. */
     unsigned    u1CPLDS : 1;
     /** Bit 5 - VMX - Virtual Machine Technology. */
     unsigned    u1VMX : 1;
-    /** Reserved. */
-    unsigned    u1Reserved2 : 1;
+    /** Bit 6 - SMX: Safer Mode Extensions. */
+    unsigned    u1SMX : 1;
     /** Bit 7 - EST - Enh. SpeedStep Tech. */
     unsigned    u1EST : 1;
     /** Bit 8 - TM2 - Terminal Monitor 2. */
@@ -224,14 +223,35 @@ typedef struct X86CPUIDFEATECX
     /** Bit 10 - CNTX-ID - L1 Context ID. */
     unsigned    u1CNTXID : 1;
     /** Reserved. */
-    unsigned    u2Reserved4 : 2;
+    unsigned    u2Reserved2 : 2;
     /** Bit 13 - CX16 - CMPXCHG16B. */
     unsigned    u1CX16 : 1;
     /** Bit 14 - xTPR Update Control. Processor supports changing IA32_MISC_ENABLES[bit 23]. */
     unsigned    u1TPRUpdate : 1;
+    /** Bit 15 - PDCM - Perf/Debug Capability MSR. */
+    unsigned    u1PDCM : 1;
     /** Reserved. */
-    unsigned    u17Reserved5 : 17;
-
+    unsigned    u2Reserved3 : 2;
+    /** Bit 18 - Direct Cache Access. */
+    unsigned    u1DCA : 1;
+    /** Bit 19 - SSE4_1 - Supports SSE4_1 or not. */
+    unsigned    u1SSE4_1 : 1;
+    /** Bit 20 - SSE4_2 - Supports SSE4_2 or not. */
+    unsigned    u1SSE4_2 : 1;
+    /** Bit 21 - x2APIC. */
+    unsigned    u1x2APIC : 1;
+    /** Bit 22 - MOVBE - Supports MOVBE. */
+    unsigned    u1MOVBE : 1;
+    /** Bit 23 - POPCNT - Supports POPCNT. */
+    unsigned    u1POPCNT : 1;
+    /** Reserved. */
+    unsigned    u2Reserved4 : 2;
+    /** Bit 26 - XSAVE - Supports XSAVE. */
+    unsigned    u1XSAVE : 1;
+    /** Bit 27 - OSXSAVE - Supports OSXSAVE. */
+    unsigned    u1OSXSAVE : 1;
+    /** Reserved. */
+    unsigned    u4Reserved5 : 4;
 } X86CPUIDFEATECX;
 /** Pointer to CPUID Feature Information - ECX. */
 typedef X86CPUIDFEATECX *PX86CPUIDFEATECX;
@@ -334,12 +354,16 @@ typedef const X86CPUIDFEATEDX *PCX86CPUIDFEATEDX;
  */
 /** ECX Bit 0 - SSE3 - Supports SSE3 or not. */
 #define X86_CPUID_FEATURE_ECX_SSE3      RT_BIT(0)
+/** ECX Bit 2 - DTES64 - DS Area 64-bit Layout. */
+#define X86_CPUID_FEATURE_ECX_DTES64    RT_BIT(2)
 /** ECX Bit 3 - MONITOR - Supports MONITOR/MWAIT. */
 #define X86_CPUID_FEATURE_ECX_MONITOR   RT_BIT(3)
 /** ECX Bit 4 - CPL-DS - CPL Qualified Debug Store. */
 #define X86_CPUID_FEATURE_ECX_CPLDS     RT_BIT(4)
 /** ECX Bit 5 - VMX - Virtual Machine Technology. */
 #define X86_CPUID_FEATURE_ECX_VMX       RT_BIT(5)
+/** ECX Bit 6 - SMX - Safer Mode Extensions. */
+#define X86_CPUID_FEATURE_ECX_SMX       RT_BIT(6)
 /** ECX Bit 7 - EST - Enh. SpeedStep Tech. */
 #define X86_CPUID_FEATURE_ECX_EST       RT_BIT(7)
 /** ECX Bit 8 - TM2 - Terminal Monitor 2. */
@@ -352,10 +376,24 @@ typedef const X86CPUIDFEATEDX *PCX86CPUIDFEATEDX;
 #define X86_CPUID_FEATURE_ECX_CX16      RT_BIT(13)
 /** ECX Bit 14 - xTPR Update Control. Processor supports changing IA32_MISC_ENABLES[bit 23]. */
 #define X86_CPUID_FEATURE_ECX_TPRUPDATE RT_BIT(14)
+/** ECX Bit 15 - PDCM - Perf/Debug Capability MSR. */
+#define X86_CPUID_FEATURE_ECX_PDCM      RT_BIT(15)
+/** ECX Bit 18 - DCA - Direct Cache Access. */
+#define X86_CPUID_FEATURE_ECX_DCA       RT_BIT(18)
+/** ECX Bit 19 - SSE4_1 - Supports SSE4_1 or not. */
+#define X86_CPUID_FEATURE_ECX_SSE4_1    RT_BIT(19)
+/** ECX Bit 20 - SSE4_2 - Supports SSE4_2 or not. */
+#define X86_CPUID_FEATURE_ECX_SSE4_2    RT_BIT(20)
 /** ECX Bit 21 - x2APIC support. */
 #define X86_CPUID_FEATURE_ECX_X2APIC    RT_BIT(21)
+/** ECX Bit 22 - MOVBE instruction. */
+#define X86_CPUID_FEATURE_ECX_MOVBE     RT_BIT(22)
 /** ECX Bit 23 - POPCOUNT instruction. */
 #define X86_CPUID_FEATURE_ECX_POPCOUNT  RT_BIT(23)
+/** ECX Bit 26 - XSAVE instruction. */
+#define X86_CPUID_FEATURE_ECX_XSAVE     RT_BIT(26)
+/** ECX Bit 27 - OSXSAVE instruction. */
+#define X86_CPUID_FEATURE_ECX_OSXSAVE   RT_BIT(27)
 
 
 /** Bit 0 - FPU - x87 FPU on Chip. */
@@ -1899,49 +1937,6 @@ typedef const X86FXSTATE *PCX86FXSTATE;
  */
 
 /**
- * Generic descriptor table entry
- */
-#pragma pack(1)
-typedef struct X86DESCGENERIC
-{
-    /** Limit - Low word. */
-    unsigned    u16LimitLow : 16;
-    /** Base address - lowe word.
-     * Don't try set this to 24 because MSC is doing studing things then. */
-    unsigned    u16BaseLow : 16;
-    /** Base address - first 8 bits of high word. */
-    unsigned    u8BaseHigh1 : 8;
-    /** Segment Type. */
-    unsigned    u4Type : 4;
-    /** Descriptor Type. System(=0) or code/data selector */
-    unsigned    u1DescType : 1;
-    /** Descriptor Privelege level. */
-    unsigned    u2Dpl : 2;
-    /** Flags selector present(=1) or not. */
-    unsigned    u1Present : 1;
-    /** Segment limit 16-19. */
-    unsigned    u4LimitHigh : 4;
-    /** Available for system software. */
-    unsigned    u1Available : 1;
-    /** 32 bits mode: Reserved - 0, long mode: Long Attribute Bit. */
-    unsigned    u1Long : 1;
-    /** This flags meaning depends on the segment type. Try make sense out
-     * of the intel manual yourself.  */
-    unsigned    u1DefBig : 1;
-    /** Granularity of the limit. If set 4KB granularity is used, if
-     * clear byte. */
-    unsigned    u1Granularity : 1;
-    /** Base address - highest 8 bits. */
-    unsigned    u8BaseHigh2 : 8;
-} X86DESCGENERIC;
-#pragma pack()
-/** Pointer to a generic descriptor entry. */
-typedef X86DESCGENERIC *PX86DESCGENERIC;
-/** Pointer to a const generic descriptor entry. */
-typedef const X86DESCGENERIC *PCX86DESCGENERIC;
-
-
-/**
  * Descriptor attributes.
  */
 typedef struct X86DESCATTRBITS
@@ -1978,12 +1973,87 @@ typedef union X86DESCATTR
     X86DESCATTRBITS    n;
 } X86DESCATTR;
 #pragma pack()
-
 /** Pointer to descriptor attributes. */
 typedef X86DESCATTR *PX86DESCATTR;
 /** Pointer to const descriptor attributes. */
 typedef const X86DESCATTR *PCX86DESCATTR;
 
+
+/**
+ * Generic descriptor table entry
+ */
+#pragma pack(1)
+typedef struct X86DESCGENERIC
+{
+    /** Limit - Low word. */
+    unsigned    u16LimitLow : 16;
+    /** Base address - lowe word.
+     * Don't try set this to 24 because MSC is doing stupid things then. */
+    unsigned    u16BaseLow : 16;
+    /** Base address - first 8 bits of high word. */
+    unsigned    u8BaseHigh1 : 8;
+    /** Segment Type. */
+    unsigned    u4Type : 4;
+    /** Descriptor Type. System(=0) or code/data selector */
+    unsigned    u1DescType : 1;
+    /** Descriptor Privelege level. */
+    unsigned    u2Dpl : 2;
+    /** Flags selector present(=1) or not. */
+    unsigned    u1Present : 1;
+    /** Segment limit 16-19. */
+    unsigned    u4LimitHigh : 4;
+    /** Available for system software. */
+    unsigned    u1Available : 1;
+    /** 32 bits mode: Reserved - 0, long mode: Long Attribute Bit. */
+    unsigned    u1Long : 1;
+    /** This flags meaning depends on the segment type. Try make sense out
+     * of the intel manual yourself.  */
+    unsigned    u1DefBig : 1;
+    /** Granularity of the limit. If set 4KB granularity is used, if
+     * clear byte. */
+    unsigned    u1Granularity : 1;
+    /** Base address - highest 8 bits. */
+    unsigned    u8BaseHigh2 : 8;
+} X86DESCGENERIC;
+#pragma pack()
+/** Pointer to a generic descriptor entry. */
+typedef X86DESCGENERIC *PX86DESCGENERIC;
+/** Pointer to a const generic descriptor entry. */
+typedef const X86DESCGENERIC *PCX86DESCGENERIC;
+
+/**
+ * Call-, Interrupt-, Trap- or Task-gate descriptor (legacy).
+ */
+typedef struct X86DESCGATE
+{
+    /** Target code segment offset - Low word.
+     * Ignored if task-gate. */
+    unsigned    u16OffsetLow : 16;
+    /** Target code segment selector for call-, interrupt- and trap-gates,
+     * TSS selector if task-gate. */
+    unsigned    u16Sel : 16;
+    /** Number of parameters for a call-gate.
+     * Ignored if interrupt-, trap- or task-gate. */
+    unsigned    u4ParmCount : 4;
+    /** Reserved / ignored. */
+    unsigned    u4Reserved : 4;
+    /** Segment Type. */
+    unsigned    u4Type : 4;
+    /** Descriptor Type (0 = system). */
+    unsigned    u1DescType : 1;
+    /** Descriptor Privelege level. */
+    unsigned    u2Dpl : 2;
+    /** Flags selector present(=1) or not. */
+    unsigned    u1Present : 1;
+    /** Target code segment offset - High word.
+     * Ignored if task-gate. */
+    unsigned    u16OffsetHigh : 16;
+} X86DESCGATE;
+AssertCompileSize(X86DESCGATE, 8);
+/** Pointer to a Call-, Interrupt-, Trap- or Task-gate descriptor entry. */
+typedef X86DESCGATE *PX86DESCGATE;
+/** Pointer to a const Call-, Interrupt-, Trap- or Task-gate descriptor entry. */
+typedef const X86DESCGATE *PCX86DESCGATE;
 
 /**
  * Descriptor table entry.
@@ -1993,10 +2063,8 @@ typedef union X86DESC
 {
     /** Generic descriptor view. */
     X86DESCGENERIC  Gen;
-#if 0
-    /** IDT view. */
-    VBOXIDTE        Idt;
-#endif
+    /** Gate descriptor view. */
+    X86DESCGATE     Gate;
 
     /** 8 bit unsigned interger view. */
     uint8_t         au8[8];
@@ -2005,17 +2073,17 @@ typedef union X86DESC
     /** 32 bit unsigned interger view. */
     uint32_t        au32[2];
 } X86DESC;
+AssertCompileSize(X86DESC, 8);
 #pragma pack()
 /** Pointer to descriptor table entry. */
 typedef X86DESC *PX86DESC;
 /** Pointer to const descriptor table entry. */
 typedef const X86DESC *PCX86DESC;
 
-
 /** @def X86DESC_BASE
  * Return the base address of a descriptor.
  */
-#define X86DESC_BASE(desc) \
+#define X86DESC_BASE(desc) /*ASM-NOINC*/ \
         (  ((uint32_t)((desc).Gen.u8BaseHigh2) << 24) \
          | (           (desc).Gen.u8BaseHigh1  << 16) \
          | (           (desc).Gen.u16BaseLow        ) )
@@ -2023,7 +2091,7 @@ typedef const X86DESC *PCX86DESC;
 /** @def X86DESC_LIMIT
  * Return the limit of a descriptor.
  */
-#define X86DESC_LIMIT(desc) \
+#define X86DESC_LIMIT(desc) /*ASM-NOINC*/ \
         (  ((uint32_t)((desc).Gen.u4LimitHigh) << 16) \
          | (           (desc).Gen.u16LimitLow       ) )
 
@@ -2037,7 +2105,7 @@ typedef struct X86DESC64GENERIC
     /** Limit - Low word - *IGNORED*. */
     unsigned    u16LimitLow : 16;
     /** Base address - lowe word. - *IGNORED*
-     * Don't try set this to 24 because MSC is doing studing things then. */
+     * Don't try set this to 24 because MSC is doing stupid things then. */
     unsigned    u16BaseLow : 16;
     /** Base address - first 8 bits of high word. - *IGNORED* */
     unsigned    u8BaseHigh1 : 8;
@@ -2077,6 +2145,8 @@ typedef const X86DESC64GENERIC *PCX86DESC64GENERIC;
 
 /**
  * System descriptor table entry (64 bits)
+ *
+ * @remarks This is, save a couple of comments, identical to X86DESC64GENERIC...
  */
 #pragma pack(1)
 typedef struct X86DESC64SYSTEM
@@ -2084,7 +2154,7 @@ typedef struct X86DESC64SYSTEM
     /** Limit - Low word. */
     unsigned    u16LimitLow     : 16;
     /** Base address - lowe word.
-     * Don't try set this to 24 because MSC is doing studing things then. */
+     * Don't try set this to 24 because MSC is doing stupid things then. */
     unsigned    u16BaseLow      : 16;
     /** Base address - first 8 bits of high word. */
     unsigned    u8BaseHigh1     : 8;
@@ -2117,10 +2187,48 @@ typedef struct X86DESC64SYSTEM
     unsigned    u19Reserved     : 19;
 } X86DESC64SYSTEM;
 #pragma pack()
-/** Pointer to a generic descriptor entry. */
+/** Pointer to a system descriptor entry. */
 typedef X86DESC64SYSTEM *PX86DESC64SYSTEM;
-/** Pointer to a const generic descriptor entry. */
+/** Pointer to a const system descriptor entry. */
 typedef const X86DESC64SYSTEM *PCX86DESC64SYSTEM;
+
+/**
+ * Call-, Interrupt-, Trap- or Task-gate descriptor (64-bit).
+ */
+typedef struct X86DESC64GATE
+{
+    /** Target code segment offset - Low word. */
+    unsigned    u16OffsetLow : 16;
+    /** Target code segment selector. */
+    unsigned    u16Sel : 16;
+    /** Interrupt stack table for interrupt- and trap-gates.
+     * Ignored by call-gates. */
+    unsigned    u3IST : 3;
+    /** Reserved / ignored. */
+    unsigned    u5Reserved : 5;
+    /** Segment Type. */
+    unsigned    u4Type : 4;
+    /** Descriptor Type (0 = system). */
+    unsigned    u1DescType : 1;
+    /** Descriptor Privelege level. */
+    unsigned    u2Dpl : 2;
+    /** Flags selector present(=1) or not. */
+    unsigned    u1Present : 1;
+    /** Target code segment offset - High word.
+     * Ignored if task-gate. */
+    unsigned    u16OffsetHigh : 16;
+    /** Target code segment offset - Top dword.
+     * Ignored if task-gate. */
+    unsigned    u32OffsetTop : 32;
+    /** Reserved / ignored / must be zero.
+     * For call-gates bits 8 thru 12 must be zero, the other gates ignores this. */
+    unsigned    u32Reserved : 32;
+} X86DESC64GATE;
+AssertCompileSize(X86DESC64GATE, 16);
+/** Pointer to a Call-, Interrupt-, Trap- or Task-gate descriptor entry. */
+typedef X86DESC64GATE *PX86DESC64GATE;
+/** Pointer to a const Call-, Interrupt-, Trap- or Task-gate descriptor entry. */
+typedef const X86DESC64GATE *PCX86DESC64GATE;
 
 
 /**
@@ -2133,9 +2241,8 @@ typedef union X86DESC64
     X86DESC64GENERIC    Gen;
     /** System descriptor view. */
     X86DESC64SYSTEM     System;
-#if 0
+    /** Gate descriptor view. */
     X86DESC64GATE       Gate;
-#endif
 
     /** 8 bit unsigned interger view. */
     uint8_t             au8[16];
@@ -2146,6 +2253,7 @@ typedef union X86DESC64
     /** 64 bit unsigned interger view. */
     uint64_t            au64[2];
 } X86DESC64;
+AssertCompileSize(X86DESC64, 16);
 #pragma pack()
 /** Pointer to descriptor table entry. */
 typedef X86DESC64 *PX86DESC64;
@@ -2160,7 +2268,7 @@ typedef X86DESC     X86DESCHC;
 typedef X86DESC     *PX86DESCHC;
 #endif
 
-/** @def X86DESC_LIMIT
+/** @def X86DESC64_BASE
  * Return the base of a 64-bit descriptor.
  */
 #define X86DESC64_BASE(desc) \

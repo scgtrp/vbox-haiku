@@ -33,6 +33,8 @@
 *   Header Files                                                               *
 *******************************************************************************/
 #include <iprt/string.h>
+#include "internal/iprt.h"
+
 #include <iprt/alloc.h>
 #include <iprt/assert.h>
 #include <iprt/err.h>
@@ -46,11 +48,12 @@
  * @param   pszString      Pointer to buffer with string to free.
  *                         NULL is accepted.
  */
-RTR3DECL(void)  RTStrFree(char *pszString)
+RTDECL(void)  RTStrFree(char *pszString)
 {
     if (pszString)
         RTMemTmpFree(pszString);
 }
+RT_EXPORT_SYMBOL(RTStrFree);
 
 
 /**
@@ -59,7 +62,7 @@ RTR3DECL(void)  RTStrFree(char *pszString)
  * @returns Pointer to the allocated UTF-8 string.
  * @param   pszString       UTF-8 string to duplicate.
  */
-RTR3DECL(char *) RTStrDup(const char *pszString)
+RTDECL(char *) RTStrDup(const char *pszString)
 {
     Assert(VALID_PTR(pszString));
     size_t cch = strlen(pszString) + 1;
@@ -68,6 +71,7 @@ RTR3DECL(char *) RTStrDup(const char *pszString)
         memcpy(psz, pszString, cch);
     return psz;
 }
+RT_EXPORT_SYMBOL(RTStrDup);
 
 
 /**
@@ -78,7 +82,7 @@ RTR3DECL(char *) RTStrDup(const char *pszString)
  *                          The returned pointer must be freed using RTStrFree().
  * @param   pszString       UTF-8 string to duplicate.
  */
-RTR3DECL(int)  RTStrDupEx(char **ppszString, const char *pszString)
+RTDECL(int)  RTStrDupEx(char **ppszString, const char *pszString)
 {
     Assert(VALID_PTR(ppszString));
     Assert(VALID_PTR(pszString));
@@ -93,4 +97,5 @@ RTR3DECL(int)  RTStrDupEx(char **ppszString, const char *pszString)
     }
     return VERR_NO_MEMORY;
 }
+RT_EXPORT_SYMBOL(RTStrDupEx);
 

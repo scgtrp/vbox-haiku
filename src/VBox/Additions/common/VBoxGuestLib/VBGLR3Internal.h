@@ -22,12 +22,14 @@
 #ifndef ___VBGLR3Internal_h
 #define ___VBGLR3Internal_h
 
-#if defined(RT_OS_WINDOWS)
+#if defined(RT_OS_WINDOWS) /** @todo explain why this is here. */
 # include <Windows.h>
 #endif
+#include <VBox/VMMDev.h>
 #include <VBox/VBoxGuest.h>
+#include <VBox/VBoxGuestLib.h>
 
-__BEGIN_DECLS
+RT_C_DECLS_BEGIN
 
 int     vbglR3DoIOCtl(unsigned iFunction, void *pvData, size_t cbData);
 int     vbglR3GRAlloc(VMMDevRequestHeader **ppReq, uint32_t cb, VMMDevRequestType enmReqType);
@@ -92,6 +94,7 @@ DECLINLINE(void) VbglHGCMParmPtrSetString(HGCMFunctionParameter *pParm, const ch
 
 #endif /* ___iprt_string_h */
 
-__END_DECLS
+RT_C_DECLS_END
 
 #endif
+

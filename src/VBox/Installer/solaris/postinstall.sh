@@ -30,7 +30,7 @@ fi
 osversion=`uname -r`
 currentzone=`zonename`
 if test "$currentzone" = "global"; then
-    echo "Configuring VirtualBox kernel modules..."
+    echo "Loading VirtualBox kernel modules..."
     /opt/VirtualBox/vboxdrv.sh stopall silentunload checkarch
     rc=$?
     if test "$rc" -eq 0; then
@@ -43,6 +43,15 @@ if test "$currentzone" = "global"; then
             if test -f /platform/i86pc/kernel/drv/vboxnet.conf; then
                 /opt/VirtualBox/vboxdrv.sh netstart
                 rc=$?
+
+                # nwam/dhcpagent fix
+                nwamfile=/etc/nwam/llp
+                nwambackupfile=$nwamfile.vbox
+                if test "$rc" -eq 0 && test -f "$nwamfile"; then
+                    sed -e '/vboxnet/d' $nwamfile > $nwambackupfile
+                    echo "vboxnet0	static 192.168.56.1" >> $nwambackupfile
+                    mv -f $nwambackupfile $nwamfile
+                fi
             fi
 
             # Load VBoxNetFilter vboxflt
@@ -57,8 +66,7 @@ if test "$currentzone" = "global"; then
                 rc=$?
                 if test "$rc" -eq 0; then
                     # Add vboxusbmon to the devlink.tab
-                    sed -e '
-                    /name=vboxusbmon/d' /etc/devlink.tab > /etc/devlink.vbox
+                    sed -e '/name=vboxusbmon/d' /etc/devlink.tab > /etc/devlink.vbox
                     echo "type=ddi_pseudo;name=vboxusbmon	\D" >> /etc/devlink.vbox
                     mv -f /etc/devlink.vbox /etc/devlink.tab
                 fi
@@ -70,50 +78,20 @@ if test "$currentzone" = "global"; then
     # track problems when older vboxdrv is hanging about in memory and add_drv of the new
     # one suceeds and it appears as though the new one is being used.
     if test "$rc" -ne 0; then
-        echo "## Configuration failed. Aborting installation."
+        echo "## Loading failed. Aborting installation."
         exit 2
     fi
-fi
 
-# create symlinks and hardlinks
-VBOXBASEDIR="/opt/VirtualBox"
-SYSISAEXEC="/usr/lib/isaexec"
-echo "Creating links..."
-if test -f "$VBOXBASEDIR/amd64/VirtualBox" || test -f "$VBOXBASEDIR/i386/VirtualBox"; then
-    /usr/sbin/installf -c none $PKGINST /usr/bin/VirtualBox=$VBOXBASEDIR/VBox.sh s
-    /usr/sbin/installf -c none $PKGINST /usr/bin/VBoxQtconfig=$VBOXBASEDIR/VBox.sh s
-fi
-/usr/sbin/installf -c none $PKGINST /usr/bin/VBoxManage=$VBOXBASEDIR/VBox.sh s
-/usr/sbin/installf -c none $PKGINST /usr/bin/VBoxSDL=$VBOXBASEDIR/VBox.sh s
-if test -f "$VBOXBASEDIR/amd64/VBoxHeadless" || test -f "$VBOXBASEDIR/i386/VBoxHeadless"; then
-    if test -d $VBOXBASEDIR/amd64; then
-        /usr/sbin/installf -c none $PKGINST $VBOXBASEDIR/amd64/rdesktop-vrdp-keymaps=$VBOXBASEDIR/rdesktop-vrdp-keymaps s
-        /usr/sbin/installf -c none $PKGINST $VBOXBASEDIR/amd64/additions=$VBOXBASEDIR/additions s
-        if test -f $VBOXBASEDIR/VirtualBox.chm; then
-            /usr/sbin/installf -c none $PKGINST $VBOXBASEDIR/amd64/VirtualBox.chm=$VBOXBASEDIR/VirtualBox.chm s
-        fi
-    fi
-    if test -d $VBOXBASEDIR/i386; then
-        /usr/sbin/installf -c none $PKGINST $VBOXBASEDIR/i386/rdesktop-vrdp-keymaps=$VBOXBASEDIR/rdesktop-vrdp-keymaps s
-        /usr/sbin/installf -c none $PKGINST $VBOXBASEDIR/i386/additions=$VBOXBASEDIR/additions s
-        if test -f $VBOXBASEDIR/VirtualBox.chm; then
-            /usr/sbin/installf -c none $PKGINST $VBOXBASEDIR/i386/VirtualBox.chm=$VBOXBASEDIR/VirtualBox.chm s
-        fi
-    fi
-    /usr/sbin/installf -c none $PKGINST /usr/bin/VBoxHeadless=/$VBOXBASEDIR/VBox.sh s
-    /usr/sbin/installf -c none $PKGINST /usr/bin/VBoxVRDP=$VBOXBASEDIR/VBox.sh s
-fi
+    echo "Configuring services and drivers..."
 
-if test "$currentzone" = "global"; then
     # Web service
-    if test -f /var/svc/manifest/application/virtualbox/webservice.xml; then
-        /usr/sbin/svccfg import /var/svc/manifest/application/virtualbox/webservice.xml
+    if test -f /var/svc/manifest/application/virtualbox/virtualbox-webservice.xml; then
+        /usr/sbin/svccfg import /var/svc/manifest/application/virtualbox/virtualbox-webservice.xml
         /usr/sbin/svcadm disable -s svc:/application/virtualbox/webservice:default
     fi
 
     # Add vboxdrv to the devlink.tab
-    sed -e '
-/name=vboxdrv/d' /etc/devlink.tab > /etc/devlink.vbox
+    sed -e '/name=vboxdrv/d' /etc/devlink.tab > /etc/devlink.vbox
     echo "type=ddi_pseudo;name=vboxdrv	\D" >> /etc/devlink.vbox
     mv -f /etc/devlink.vbox /etc/devlink.tab
 
@@ -132,9 +110,36 @@ if test "$currentzone" = "global"; then
     fi
 
     # Zone access service
-    if test -f /var/svc/manifest/application/virtualbox/zoneaccess.xml; then
-        /usr/sbin/svccfg import /var/svc/manifest/application/virtualbox/zoneaccess.xml
+    if test -f /var/svc/manifest/application/virtualbox/virtualbox-zoneaccess.xml; then
+        /usr/sbin/svccfg import /var/svc/manifest/application/virtualbox/virtualbox-zoneaccess.xml
         /usr/sbin/svcadm enable -s svc:/application/virtualbox/zoneaccess
+    fi
+
+    # Install python bindings
+    if test -f "/opt/VirtualBox/sdk/installer/vboxapisetup.py" || test -h "/opt/VirtualBox/sdk/installer/vboxapisetup.py"; then
+        PYTHONBIN=`which python`
+        if test -f "$PYTHONBIN" || test -h "$PYTHONBIN"; then
+            echo "Installing Python bindings..."
+
+            VBOX_INSTALL_PATH=/opt/VirtualBox
+            export VBOX_INSTALL_PATH
+            cd /opt/VirtualBox/sdk/installer
+            $PYTHONBIN ./vboxapisetup.py install > /dev/null
+
+            # remove files installed by Python build
+            rm -rf $VBOX_INSTALL_PATH/sdk/installer/build
+        else
+            echo "** WARNING! Python not found, skipped installed Python bindings."
+            echo "   Manually run '/opt/VirtualBox/sdk/installer/vboxapisetup.py install'"
+            echo "   to install the bindings when python is available."
+        fi
+    fi
+
+    # Update boot archive
+    BOOTADMBIN=/sbin/bootadm
+    if test -f "$BOOTADMBIN" || test -h "$BOOTADMBIN"; then
+        echo "Updating boot archive..."
+        $BOOTADMBIN update-archive > /dev/null
     fi
 fi
 

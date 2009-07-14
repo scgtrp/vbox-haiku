@@ -1,6 +1,6 @@
 /* $Id$ */
 /** @file
- * GVM - The Global VM Data.
+ * GVM - The Global VM Data. (VMM)
  */
 
 /*
@@ -42,6 +42,10 @@ typedef struct UVMCPU
 {
     /** Pointer to the UVM structure.  */
     PUVM                            pUVM;
+    /** Pointer to the VM structure.  */
+    PVM                             pVM;
+    /** Pointer to the VMCPU structure.  */
+    PVMCPU                          pVCpu;
     /** The virtual CPU ID.  */
     RTCPUID                         idCpu;
 
@@ -54,8 +58,6 @@ typedef struct UVMCPU
         uint8_t                     padding[768];
     } vm;
 } UVMCPU;
-/** Pointer to the per virtual CPU ring-3 (user mode) data. */
-typedef UVMCPU *PUVMCPU;
 
 
 /**
@@ -70,7 +72,8 @@ typedef struct UVM
 {
     /** Magic / eye-catcher (UVM_MAGIC). */
     uint32_t        u32Magic;
-    uint32_t        uReserved;          /**< alignment */
+    /** The number of virtual CPUs. */
+    uint32_t        cCpus;
     /** The ring-3 mapping of the shared VM structure. */
     PVM             pVM;
     /** Pointer to the next VM.

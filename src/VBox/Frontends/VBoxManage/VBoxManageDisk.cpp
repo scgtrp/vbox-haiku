@@ -4,7 +4,7 @@
  */
 
 /*
- * Copyright (C) 2006-2008 Sun Microsystems, Inc.
+ * Copyright (C) 2006-2009 Sun Microsystems, Inc.
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -27,7 +27,7 @@
 #include <VBox/com/com.h>
 #include <VBox/com/array.h>
 #include <VBox/com/ErrorInfo.h>
-#include <VBox/com/errorprint2.h>
+#include <VBox/com/errorprint.h>
 #include <VBox/com/VirtualBox.h>
 
 #include <iprt/asm.h>
@@ -275,7 +275,9 @@ int handleCreateHardDisk(HandlerArg *a)
             showProgress(progress);
             if (SUCCEEDED(rc))
             {
-                progress->COMGETTER(ResultCode)(&rc);
+                LONG iRc;
+                progress->COMGETTER(ResultCode)(&iRc);
+                rc = iRc;
                 if (FAILED(rc))
                 {
                     com::ProgressErrorInfo info(progress);
@@ -288,7 +290,7 @@ int handleCreateHardDisk(HandlerArg *a)
                 {
                     doClose = !fRemember;
 
-                    Guid uuid;
+                    Bstr uuid;
                     CHECK_ERROR(hardDisk, COMGETTER(Id)(uuid.asOutParam()));
 
                     if (DiskType == HardDiskType_Writethrough)
@@ -296,7 +298,7 @@ int handleCreateHardDisk(HandlerArg *a)
                         CHECK_ERROR(hardDisk, COMSETTER(Type)(HardDiskType_Writethrough));
                     }
 
-                    RTPrintf("Disk image created. UUID: %s\n", uuid.toString().raw());
+                    RTPrintf("Disk image created. UUID: %s\n", Utf8Str(uuid).raw());
                 }
             }
         }
@@ -408,7 +410,7 @@ int handleModifyHardDisk(HandlerArg *a)
 
     /* first guess is that it's a UUID */
     Guid uuid(FilenameOrUuid);
-    rc = a->virtualBox->GetHardDisk(uuid, hardDisk.asOutParam());
+    rc = a->virtualBox->GetHardDisk(uuid.toUtf16(), hardDisk.asOutParam());
     /* no? then it must be a filename */
     if (!hardDisk)
     {
@@ -439,21 +441,54 @@ int handleModifyHardDisk(HandlerArg *a)
 
     if (fModifyCompact)
     {
-#if 1
-        RTPrintf("Error: Compact hard disk operation is not implemented!\n");
-        RTPrintf("The functionality will be restored later.\n");
-        return 1;
-#else
+        bool unknown = false;
         /* the hard disk image might not be registered */
         if (!hardDisk)
         {
-            a->virtualBox->OpenHardDisk(Bstr(FilenameOrUuid), AccessMode_ReadWrite, hardDisk.asOutParam());
-            if (!hardDisk)
-                return errorArgument("Hard disk image not found");
+            unknown = true;
+            rc = a->virtualBox->OpenHardDisk(Bstr(FilenameOrUuid), AccessMode_ReadWrite, false, Bstr(""), false, Bstr(""), hardDisk.asOutParam());
+            if (rc == VBOX_E_FILE_ERROR)
+            {
+                char szFilenameAbs[RTPATH_MAX] = "";
+                int vrc = RTPathAbs(FilenameOrUuid, szFilenameAbs, sizeof(szFilenameAbs));
+                if (RT_FAILURE(vrc))
+                {
+                    RTPrintf("Cannot convert filename \"%s\" to absolute path\n", FilenameOrUuid);
+                    return 1;
+                }
+                CHECK_ERROR(a->virtualBox, OpenHardDisk(Bstr(szFilenameAbs), AccessMode_ReadWrite, false, Bstr(""), false, Bstr(""), hardDisk.asOutParam()));
+            }
+            else if (FAILED(rc))
+                CHECK_ERROR(a->virtualBox, OpenHardDisk(Bstr(FilenameOrUuid), AccessMode_ReadWrite, false, Bstr(""), false, Bstr(""), hardDisk.asOutParam()));
         }
-
-        /** @todo implement compacting of images. */
-#endif
+        if (SUCCEEDED(rc) && hardDisk)
+        {
+            ComPtr<IProgress> progress;
+            CHECK_ERROR(hardDisk, Compact(progress.asOutParam()));
+            if (SUCCEEDED(rc))
+            {
+                showProgress(progress);
+                LONG iRc;
+                progress->COMGETTER(ResultCode)(&iRc);
+                rc = iRc;
+            }
+            if (FAILED(rc))
+            {
+                if (rc == E_NOTIMPL)
+                {
+                    RTPrintf("Error: Compact hard disk operation is not implemented!\n");
+                    RTPrintf("The functionality will be restored later.\n");
+                }
+                else if (rc == VBOX_E_NOT_SUPPORTED)
+                {
+                    RTPrintf("Error: Compact hard disk operation for this format is not implemented yet!\n");
+                }
+                else
+                    com::GluePrintRCMessage(rc);
+            }
+            if (unknown)
+                hardDisk->Close();
+        }
     }
 
     return SUCCEEDED(rc) ? 0 : 1;
@@ -465,6 +500,7 @@ static const RTGETOPTDEF g_aCloneHardDiskOptions[] =
     { "-format",        'o', RTGETOPT_REQ_STRING },
     { "--static",       'F', RTGETOPT_REQ_NOTHING },
     { "-static",        'F', RTGETOPT_REQ_NOTHING },
+    { "--existing",     'E', RTGETOPT_REQ_NOTHING },
     { "--variant",      'm', RTGETOPT_REQ_STRING },
     { "-variant",       'm', RTGETOPT_REQ_STRING },
     { "--type",         't', RTGETOPT_REQ_STRING },
@@ -482,7 +518,9 @@ int handleCloneHardDisk(HandlerArg *a)
     Bstr src, dst;
     Bstr format;
     HardDiskVariant_T DiskVariant = HardDiskVariant_Standard;
+    bool fExisting = false;
     bool fRemember = false;
+    bool fSetDiskType = false;
     HardDiskType_T DiskType = HardDiskType_Normal;
 
     int c;
@@ -496,6 +534,18 @@ int handleCloneHardDisk(HandlerArg *a)
         {
             case 'o':   // --format
                 format = ValueUnion.psz;
+                break;
+
+            case 'F':   // --static
+            {
+                unsigned uDiskVariant = (unsigned)DiskVariant;
+                uDiskVariant |= HardDiskVariant_Fixed;
+                DiskVariant = (HardDiskVariant_T)uDiskVariant;
+                break;
+            }
+
+            case 'E':   // --existing
+                fExisting = true;
                 break;
 
             case 'm':   // --variant
@@ -512,6 +562,7 @@ int handleCloneHardDisk(HandlerArg *a)
                 vrc = parseDiskType(ValueUnion.psz, &DiskType);
                 if (RT_FAILURE(vrc))
                     return errorArgument("Invalid hard disk type '%s'", ValueUnion.psz);
+                fSetDiskType = true;
                 break;
 
             case VINF_GETOPT_NOT_OPTION:
@@ -544,27 +595,38 @@ int handleCloneHardDisk(HandlerArg *a)
         return errorSyntax(USAGE_CLONEHD, "Mandatory UUID or input file parameter missing");
     if (dst.isEmpty())
         return errorSyntax(USAGE_CLONEHD, "Mandatory output file parameter missing");
+    if (fExisting && (!format.isEmpty() || DiskVariant != HardDiskType_Normal))
+        return errorSyntax(USAGE_CLONEHD, "Specified options which cannot be used with --existing");
 
     ComPtr<IHardDisk> srcDisk;
     ComPtr<IHardDisk> dstDisk;
-    bool unknown = false;
+    bool fSrcUnknown = false;
+    bool fDstUnknown = false;
 
     /* first guess is that it's a UUID */
-    Guid uuid(Utf8Str(src).raw());
-    rc = a->virtualBox->GetHardDisk(uuid, srcDisk.asOutParam());
+    rc = a->virtualBox->GetHardDisk(src, srcDisk.asOutParam());
     /* no? then it must be a filename */
     if (FAILED (rc))
-    {
         rc = a->virtualBox->FindHardDisk(src, srcDisk.asOutParam());
-        /* no? well, then it's an unkwnown image */
-        if (FAILED (rc))
+    /* no? well, then it's an unknown image */
+    if (FAILED (rc))
+    {
+        rc = a->virtualBox->OpenHardDisk(src, AccessMode_ReadWrite, false, Bstr(""), false, Bstr(""), srcDisk.asOutParam());
+        if (rc == VBOX_E_FILE_ERROR)
         {
-            CHECK_ERROR(a->virtualBox, OpenHardDisk(src, AccessMode_ReadWrite, srcDisk.asOutParam()));
-            if (SUCCEEDED (rc))
+            char szFilenameAbs[RTPATH_MAX] = "";
+            int vrc = RTPathAbs(Utf8Str(src), szFilenameAbs, sizeof(szFilenameAbs));
+            if (RT_FAILURE(vrc))
             {
-                unknown = true;
+                RTPrintf("Cannot convert filename \"%s\" to absolute path\n", Utf8Str(src).raw());
+                return 1;
             }
+            CHECK_ERROR(a->virtualBox, OpenHardDisk(Bstr(szFilenameAbs), AccessMode_ReadWrite, false, Bstr(""), false, Bstr(""), srcDisk.asOutParam()));
         }
+        else if (FAILED(rc))
+            CHECK_ERROR(a->virtualBox, OpenHardDisk(src, AccessMode_ReadWrite, false, Bstr(""), false, Bstr(""), srcDisk.asOutParam()));
+        if (SUCCEEDED (rc))
+            fSrcUnknown = true;
     }
 
     do
@@ -572,19 +634,59 @@ int handleCloneHardDisk(HandlerArg *a)
         if (!SUCCEEDED(rc))
             break;
 
-        if (format.isEmpty())
+        /* open/create destination hard disk */
+        if (fExisting)
         {
-            /* get the format of the source hard disk */
-            CHECK_ERROR_BREAK(srcDisk, COMGETTER(Format) (format.asOutParam()));
+            /* first guess is that it's a UUID */
+            rc = a->virtualBox->GetHardDisk(dst, dstDisk.asOutParam());
+            /* no? then it must be a filename */
+            if (FAILED (rc))
+                rc = a->virtualBox->FindHardDisk(dst, dstDisk.asOutParam());
+            /* no? well, then it's an unknown image */
+            if (FAILED (rc))
+            {
+                rc = a->virtualBox->OpenHardDisk(dst, AccessMode_ReadWrite, false, Bstr(""), false, Bstr(""), dstDisk.asOutParam());
+                if (rc == VBOX_E_FILE_ERROR)
+                {
+                    char szFilenameAbs[RTPATH_MAX] = "";
+                    int vrc = RTPathAbs(Utf8Str(dst), szFilenameAbs, sizeof(szFilenameAbs));
+                    if (RT_FAILURE(vrc))
+                    {
+                        RTPrintf("Cannot convert filename \"%s\" to absolute path\n", Utf8Str(dst).raw());
+                        return 1;
+                    }
+                    CHECK_ERROR_BREAK(a->virtualBox, OpenHardDisk(Bstr(szFilenameAbs), AccessMode_ReadWrite, false, Bstr(""), false, Bstr(""), dstDisk.asOutParam()));
+                }
+                else if (FAILED(rc))
+                    CHECK_ERROR_BREAK(a->virtualBox, OpenHardDisk(dst, AccessMode_ReadWrite, false, Bstr(""), false, Bstr(""), dstDisk.asOutParam()));
+                if (SUCCEEDED (rc))
+                    fDstUnknown = true;
+            }
+            else
+                fRemember = true;
+            if (SUCCEEDED(rc))
+            {
+                /* Perform accessibility check now. */
+                MediaState_T state;
+                CHECK_ERROR_BREAK(dstDisk, COMGETTER(State)(&state));
+            }
+            CHECK_ERROR_BREAK(dstDisk, COMGETTER(Format) (format.asOutParam()));
         }
-
-        CHECK_ERROR_BREAK(a->virtualBox, CreateHardDisk(format, dst, dstDisk.asOutParam()));
+        else
+        {
+            /* use the format of the source hard disk if unspecified */
+            if (format.isEmpty())
+                CHECK_ERROR_BREAK(srcDisk, COMGETTER(Format) (format.asOutParam()));
+            CHECK_ERROR_BREAK(a->virtualBox, CreateHardDisk(format, dst, dstDisk.asOutParam()));
+        }
 
         ComPtr<IProgress> progress;
         CHECK_ERROR_BREAK(srcDisk, CloneTo(dstDisk, DiskVariant, NULL, progress.asOutParam()));
 
         showProgress(progress);
-        progress->COMGETTER(ResultCode)(&rc);
+        LONG iRc;
+        progress->COMGETTER(ResultCode)(&iRc);
+        rc = iRc;
         if (FAILED(rc))
         {
             com::ProgressErrorInfo info(progress);
@@ -595,10 +697,11 @@ int handleCloneHardDisk(HandlerArg *a)
             break;
         }
 
+        Bstr uuid;
         CHECK_ERROR_BREAK(dstDisk, COMGETTER(Id)(uuid.asOutParam()));
 
         RTPrintf("Clone hard disk created in format '%ls'. UUID: %s\n",
-                 format.raw(), uuid.toString().raw());
+                 format.raw(), Utf8Str(uuid).raw());
     }
     while (0);
 
@@ -607,8 +710,12 @@ int handleCloneHardDisk(HandlerArg *a)
         /* forget the created clone */
         dstDisk->Close();
     }
+    else if (fSetDiskType)
+    {
+        CHECK_ERROR(dstDisk, COMSETTER(Type)(DiskType));
+    }
 
-    if (unknown)
+    if (fSrcUnknown)
     {
         /* close the unknown hard disk to forget it again */
         srcDisk->Close();
@@ -992,9 +1099,9 @@ int handleAddiSCSIDisk(HandlerArg *a)
             CHECK_ERROR(hardDisk, COMSETTER(Type)(DiskType));
         }
 
-        Guid guid;
+        Bstr guid;
         CHECK_ERROR(hardDisk, COMGETTER(Id)(guid.asOutParam()));
-        RTPrintf("iSCSI disk created. UUID: %s\n", guid.toString().raw());
+        RTPrintf("iSCSI disk created. UUID: %s\n", Utf8Str(guid).raw());
     }
     while (0);
 
@@ -1003,7 +1110,7 @@ int handleAddiSCSIDisk(HandlerArg *a)
 
 static const RTGETOPTDEF g_aShowHardDiskInfoOptions[] =
 {
-    { "--dummy",    '\0', RTGETOPT_REQ_NOTHING },   // placeholder for C++
+    { "--dummy",    256, RTGETOPT_REQ_NOTHING },   // placeholder for C++
 };
 
 int handleShowHardDiskInfo(HandlerArg *a)
@@ -1051,7 +1158,7 @@ int handleShowHardDiskInfo(HandlerArg *a)
     ComPtr<IHardDisk> hardDisk;
     bool unknown = false;
     /* first guess is that it's a UUID */
-    Guid uuid(FilenameOrUuid);
+    Bstr uuid(FilenameOrUuid);
     rc = a->virtualBox->GetHardDisk(uuid, hardDisk.asOutParam());
     /* no? then it must be a filename */
     if (FAILED (rc))
@@ -1060,7 +1167,20 @@ int handleShowHardDiskInfo(HandlerArg *a)
         /* no? well, then it's an unkwnown image */
         if (FAILED (rc))
         {
-            CHECK_ERROR(a->virtualBox, OpenHardDisk(Bstr(FilenameOrUuid), AccessMode_ReadWrite, hardDisk.asOutParam()));
+            rc = a->virtualBox->OpenHardDisk(Bstr(FilenameOrUuid), AccessMode_ReadWrite, false, Bstr(""), false, Bstr(""), hardDisk.asOutParam());
+            if (rc == VBOX_E_FILE_ERROR)
+            {
+                char szFilenameAbs[RTPATH_MAX] = "";
+                int vrc = RTPathAbs(FilenameOrUuid, szFilenameAbs, sizeof(szFilenameAbs));
+                if (RT_FAILURE(vrc))
+                {
+                    RTPrintf("Cannot convert filename \"%s\" to absolute path\n", FilenameOrUuid);
+                    return 1;
+                }
+                CHECK_ERROR(a->virtualBox, OpenHardDisk(Bstr(szFilenameAbs), AccessMode_ReadWrite, false, Bstr(""), false, Bstr(""), hardDisk.asOutParam()));
+            }
+            else if (FAILED(rc))
+                CHECK_ERROR(a->virtualBox, OpenHardDisk(Bstr(FilenameOrUuid), AccessMode_ReadWrite, false, Bstr(""), false, Bstr(""), hardDisk.asOutParam()));
             if (SUCCEEDED (rc))
             {
                 unknown = true;
@@ -1073,7 +1193,7 @@ int handleShowHardDiskInfo(HandlerArg *a)
             break;
 
         hardDisk->COMGETTER(Id)(uuid.asOutParam());
-        RTPrintf("UUID:                 %s\n", uuid.toString().raw());
+        RTPrintf("UUID:                 %s\n", Utf8Str(uuid).raw());
 
         /* check for accessibility */
         /// @todo NEWMEDIA check accessibility of all parents
@@ -1132,7 +1252,7 @@ int handleShowHardDiskInfo(HandlerArg *a)
 
         if (!unknown)
         {
-            com::SafeGUIDArray machineIds;
+            com::SafeArray<BSTR> machineIds;
             hardDisk->COMGETTER(MachineIds)(ComSafeArrayAsOutParam(machineIds));
             for (size_t j = 0; j < machineIds.size(); ++ j)
             {
@@ -1142,9 +1262,9 @@ int handleShowHardDiskInfo(HandlerArg *a)
                 Bstr name;
                 machine->COMGETTER(Name)(name.asOutParam());
                 machine->COMGETTER(Id)(uuid.asOutParam());
-                RTPrintf("%s%lS (UUID: %RTuuid)\n",
+                RTPrintf("%s%lS (UUID: %lS)\n",
                          j == 0 ? "In use by VMs:        " : "                      ",
-                         name.raw(), &machineIds[j]);
+                         name.raw(), machineIds[j]);
             }
             /// @todo NEWMEDIA check usage in snapshots too
             /// @todo NEWMEDIA also list children
@@ -1180,6 +1300,8 @@ static const RTGETOPTDEF g_aOpenMediumOptions[] =
     { "floppy",         'f', RTGETOPT_REQ_NOTHING },
     { "--type",         't', RTGETOPT_REQ_STRING },
     { "-type",          't', RTGETOPT_REQ_STRING },     // deprecated
+    { "--uuid",         'u', RTGETOPT_REQ_UUID },
+    { "--parentuuid",   'p', RTGETOPT_REQ_UUID },
 };
 
 int handleOpenMedium(HandlerArg *a)
@@ -1195,6 +1317,12 @@ int handleOpenMedium(HandlerArg *a)
     const char *Filename = NULL;
     HardDiskType_T DiskType = HardDiskType_Normal;
     bool fDiskType = false;
+    bool fSetImageId = false;
+    bool fSetParentId = false;
+    Guid ImageId;
+    ImageId.clear();
+    Guid ParentId;
+    ParentId.clear();
 
     int c;
     RTGETOPTUNION ValueUnion;
@@ -1228,6 +1356,16 @@ int handleOpenMedium(HandlerArg *a)
                 if (RT_FAILURE(vrc))
                     return errorArgument("Invalid hard disk type '%s'", ValueUnion.psz);
                 fDiskType = true;
+                break;
+
+            case 'u':   // --uuid
+                ImageId = ValueUnion.Uuid;
+                fSetImageId = true;
+                break;
+
+            case 'p':   // --parentuuid
+                ParentId = ValueUnion.Uuid;
+                fSetParentId = true;
                 break;
 
             case VINF_GETOPT_NOT_OPTION:
@@ -1270,7 +1408,9 @@ int handleOpenMedium(HandlerArg *a)
     if (cmd == CMD_DISK)
     {
         ComPtr<IHardDisk> hardDisk;
-        rc = a->virtualBox->OpenHardDisk(Bstr(Filename), AccessMode_ReadWrite, hardDisk.asOutParam());
+        Bstr ImageIdStr = BstrFmt("%RTuuid", &ImageId);
+        Bstr ParentIdStr = BstrFmt("%RTuuid", &ParentId);
+        rc = a->virtualBox->OpenHardDisk(Bstr(Filename), AccessMode_ReadWrite, fSetImageId, ImageIdStr, fSetParentId, ParentIdStr, hardDisk.asOutParam());
         if (rc == VBOX_E_FILE_ERROR)
         {
             char szFilenameAbs[RTPATH_MAX] = "";
@@ -1280,10 +1420,10 @@ int handleOpenMedium(HandlerArg *a)
                 RTPrintf("Cannot convert filename \"%s\" to absolute path\n", Filename);
                 return 1;
             }
-            CHECK_ERROR(a->virtualBox, OpenHardDisk(Bstr(szFilenameAbs), AccessMode_ReadWrite, hardDisk.asOutParam()));
+            CHECK_ERROR(a->virtualBox, OpenHardDisk(Bstr(szFilenameAbs), AccessMode_ReadWrite, fSetImageId, ImageIdStr, fSetParentId, ParentIdStr, hardDisk.asOutParam()));
         }
-        else
-            CHECK_ERROR(a->virtualBox, OpenHardDisk(Bstr(Filename), AccessMode_ReadWrite, hardDisk.asOutParam()));
+        else if (FAILED(rc))
+            CHECK_ERROR(a->virtualBox, OpenHardDisk(Bstr(Filename), AccessMode_ReadWrite, fSetImageId, ImageIdStr, fSetParentId, ParentIdStr, hardDisk.asOutParam()));
         if (SUCCEEDED(rc) && hardDisk)
         {
             /* change the type if requested */
@@ -1295,10 +1435,10 @@ int handleOpenMedium(HandlerArg *a)
     }
     else if (cmd == CMD_DVD)
     {
-        if (fDiskType)
+        if (fDiskType || fSetImageId || fSetParentId)
             return errorSyntax(USAGE_OPENMEDIUM, "Invalid option for DVD images");
         ComPtr<IDVDImage> dvdImage;
-        rc = a->virtualBox->OpenDVDImage(Bstr(Filename), Guid(), dvdImage.asOutParam());
+        rc = a->virtualBox->OpenDVDImage(Bstr(Filename), Bstr(), dvdImage.asOutParam());
         if (rc == VBOX_E_FILE_ERROR)
         {
             char szFilenameAbs[RTPATH_MAX] = "";
@@ -1308,17 +1448,17 @@ int handleOpenMedium(HandlerArg *a)
                 RTPrintf("Cannot convert filename \"%s\" to absolute path\n", Filename);
                 return 1;
             }
-            CHECK_ERROR(a->virtualBox, OpenDVDImage(Bstr(szFilenameAbs), Guid(), dvdImage.asOutParam()));
+            CHECK_ERROR(a->virtualBox, OpenDVDImage(Bstr(szFilenameAbs), Bstr(), dvdImage.asOutParam()));
         }
-        else
-            CHECK_ERROR(a->virtualBox, OpenDVDImage(Bstr(Filename), Guid(), dvdImage.asOutParam()));
+        else if (FAILED(rc))
+            CHECK_ERROR(a->virtualBox, OpenDVDImage(Bstr(Filename), Bstr(), dvdImage.asOutParam()));
     }
     else if (cmd == CMD_FLOPPY)
     {
-        if (fDiskType)
-            return errorSyntax(USAGE_OPENMEDIUM, "Invalid option for DVD images");
+        if (fDiskType || fSetImageId || fSetParentId)
+            return errorSyntax(USAGE_OPENMEDIUM, "Invalid option for floppy images");
         ComPtr<IFloppyImage> floppyImage;
-         rc = a->virtualBox->OpenFloppyImage(Bstr(Filename), Guid(), floppyImage.asOutParam());
+         rc = a->virtualBox->OpenFloppyImage(Bstr(Filename), Bstr(), floppyImage.asOutParam());
         if (rc == VBOX_E_FILE_ERROR)
         {
             char szFilenameAbs[RTPATH_MAX] = "";
@@ -1328,10 +1468,10 @@ int handleOpenMedium(HandlerArg *a)
                 RTPrintf("Cannot convert filename \"%s\" to absolute path\n", Filename);
                 return 1;
             }
-            CHECK_ERROR(a->virtualBox, OpenFloppyImage(Bstr(szFilenameAbs), Guid(), floppyImage.asOutParam()));
+            CHECK_ERROR(a->virtualBox, OpenFloppyImage(Bstr(szFilenameAbs), Bstr(), floppyImage.asOutParam()));
         }
-        else
-            CHECK_ERROR(a->virtualBox, OpenFloppyImage(Bstr(Filename), Guid(), floppyImage.asOutParam()));
+        else if (FAILED(rc))
+            CHECK_ERROR(a->virtualBox, OpenFloppyImage(Bstr(Filename), Bstr(), floppyImage.asOutParam()));
     }
 
     return SUCCEEDED(rc) ? 0 : 1;
@@ -1413,7 +1553,7 @@ int handleCloseMedium(HandlerArg *a)
         return errorSyntax(USAGE_CLOSEMEDIUM, "Disk name or UUID required");
 
     /* first guess is that it's a UUID */
-    Guid uuid(FilenameOrUuid);
+    Bstr uuid(FilenameOrUuid);
 
     if (cmd == CMD_DISK)
     {

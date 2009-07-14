@@ -106,8 +106,6 @@ BOOLEAN vboxLikesVideoMode(uint32_t width, uint32_t height, uint32_t bpp)
 {
     BOOLEAN bRC = FALSE;
 
-    dprintf(("VBoxVideo::vboxLikesVideoMode: width: %d, height: %d, bpp: %d\n", width, height, bpp));
-
     VMMDevVideoModeSupportedRequest *req = NULL;
 
     int rc = VbglGRAlloc((VMMDevRequestHeader**)&req, sizeof(VMMDevVideoModeSupportedRequest), VMMDevReq_VideoModeSupported);
@@ -137,7 +135,7 @@ BOOLEAN vboxLikesVideoMode(uint32_t width, uint32_t height, uint32_t bpp)
         VbglGRFree(&req->header);
     }
 
-    dprintf(("VBoxVideoMode::vboxLikesVideoMode: returning %d\n", bRC));
+    dprintf(("VBoxVideo::vboxLikesVideoMode: width: %d, height: %d, bpp: %d -> %s\n", width, height, bpp, (bRC == 1) ? "OK" : "FALSE"));
     return bRC;
 }
 
@@ -194,7 +192,7 @@ static BOOLEAN vboxQueryPointerPosInternal (uint16_t *pointerXPos, uint16_t *poi
 
         if (RT_SUCCESS(rc) && RT_SUCCESS(req->header.rc))
         {
-            if (req->mouseFeatures & VBOXGUEST_MOUSE_HOST_CAN_ABSOLUTE)
+            if (req->mouseFeatures & VMMDEV_MOUSE_HOST_CAN_ABSOLUTE)
             {
                 if (pointerXPos)
                 {
@@ -284,6 +282,7 @@ winVersion_t vboxQueryWinVersion()
     return winVersion;
 }
 
+#ifndef VBOX_WITH_HGSMI
 /**
  * Sends the pointer shape to the VMMDev
  *
@@ -358,3 +357,4 @@ BOOLEAN vboxUpdatePointerShape(PVIDEO_POINTER_ATTRIBUTES pointerAttr, uint32_t c
 
     return bRC;
 }
+#endif /* VBOX_WITH_HGSMI */

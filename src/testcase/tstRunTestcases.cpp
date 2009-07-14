@@ -44,7 +44,8 @@ static unsigned     g_cPasses = 0;
 static unsigned     g_cFailures = 0;
 /** The number of skipped testcases. */
 static unsigned     g_cSkipped = 0;
-/** The exclude list. */
+/** The exclude list.
+ * @note Stripped extensions! */
 static const char  *g_apszExclude[] =
 {
 #if 1 // slow stuff
@@ -62,6 +63,7 @@ static const char  *g_apszExclude[] =
     "testcase/tstDir",              /* useless, requires parameters */
     "testcase/tstDir-2",            /* useless, requires parameters */
     "testcase/tstGlobalConfig",
+    "testcase/tstHostHardwareLinux", /* must be killed with CTRL-C */
     "testcase/tstLdr-2",
     "testcase/tstLdr-3",
     "testcase/tstLdr",
@@ -69,11 +71,15 @@ static const char  *g_apszExclude[] =
     "testcase/tstLdrObj",
     "testcase/tstLdrObjR0",
     "testcase/tstMove",
+    "testcase/tstR0ThreadPreemption", /* r0 driver, not directly executable */
+    "testcase/tstRTR0MemUserKernel", /* r0 driver, not directly executable */
     "testcase/tstRunTestcases",
+    "testcase/tstRTS3",             /* requires parameters <access key>, <secret key> */
     "testcase/tstSDL",
     "testcase/tstTime-3",
     "testcase/tstSeamlessX11",
     "testcase/tstVBoxControl",
+    "testcase/tstVDCopy",           /* requires parameters <hdd1>, <hdd2> */
     "./tstRunTestcases",
     "./tstAnimate",
     "./tstAPI",
@@ -84,11 +90,13 @@ static const char  *g_apszExclude[] =
     "./tstVBoxDbg",
     "./tstVMM-2",
     "./tstTestServMgr",
+    "./tstPDMAsyncCompletion",      /* requires parameters <source>, <dest> */
     "./tstXptDump",
     "./tstnsIFileEnumerator",
     "./tstSimpleTypeLib",
     "./tstTestAtoms",
     "./tstXptLink",
+    "./tstXPCOMCGlue",              /* user interaction required */
     "./tstTestCallTemplates",
 #if 1 // later
     "testcase/tstIntNetR0",
@@ -198,7 +206,7 @@ static void Process(const char *pszFilter, const char *pszDir)
                         if (rc != VERR_PROCESS_RUNNING)
                             break;
                         RTTIMESPEC Now;
-                        if (RTTimeSpecGetMilli(RTTimeSpecSub(RTTimeNow(&Now), &Start)) > 60*1000 /* 1 min */)
+                        if (RTTimeSpecGetMilli(RTTimeSpecSub(RTTimeNow(&Now), &Start)) > 120*1000 /* 1 min */)
                         {
                             RTPrintf("*** %s: FAILED - timed out. killing it.\n", pszTestcase);
                             RTProcTerminate(Process);
@@ -263,10 +271,10 @@ int main(int argc, char **argv)
     if (argc == 1)
     {
         char szPath[RTPATH_MAX];
-        int rc = RTPathProgram(szPath, sizeof(szPath) - sizeof("/.."));
+        int rc = RTPathExecDir(szPath, sizeof(szPath) - sizeof("/.."));
         if (RT_FAILURE(rc))
         {
-            RTPrintf("fatal error: RTPathProgram -> %Rrc\n", rc);
+            RTPrintf("fatal error: RTPathExecDir -> %Rrc\n", rc);
             return 1;
         }
         rc = RTPathSetCurrent(strcat(szPath, "/.."));

@@ -52,7 +52,7 @@ class ATL_NO_VTABLE Mouse :
     public VirtualBoxBaseNEXT,
     public VirtualBoxSupportErrorInfoImpl <Mouse, IMouse>,
     public VirtualBoxSupportTranslation <Mouse>,
-    public IMouse
+    VBOX_SCRIPTABLE_IMPL(IMouse)
 {
 public:
 
@@ -63,8 +63,9 @@ public:
     DECLARE_PROTECT_FINAL_CONSTRUCT()
 
     BEGIN_COM_MAP(Mouse)
-        COM_INTERFACE_ENTRY(ISupportErrorInfo)
-        COM_INTERFACE_ENTRY(IMouse)
+        COM_INTERFACE_ENTRY  (ISupportErrorInfo)
+        COM_INTERFACE_ENTRY  (IMouse)
+        COM_INTERFACE_ENTRY2 (IDispatch, IMouse)
     END_COM_MAP()
 
     NS_DECL_ISUPPORTS
@@ -104,6 +105,8 @@ private:
     struct DRVMAINMOUSE    *mpDrv;
 
     LONG uHostCaps;
+    uint32_t mLastAbsX;
+    uint32_t mLastAbsY;
 };
 
 #endif // ____H_MOUSEIMPL

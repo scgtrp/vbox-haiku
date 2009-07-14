@@ -246,6 +246,7 @@
 <xsd:simpleType name="TPortMode">
   <xsd:restriction base="xsd:string">
     <xsd:enumeration value="Disconnected"/>
+    <xsd:enumeration value="RawFile"/>
     <xsd:enumeration value="HostPipe"/>
     <xsd:enumeration value="HostDevice"/>
   </xsd:restriction>
@@ -449,7 +450,7 @@
 <xsd:simpleType name="TCPUCount">
   <xsd:restriction base="xsd:unsignedInt">
     <xsd:minInclusive value="1"/>
-    <xsd:maxInclusive value="255"/>
+    <xsd:maxInclusive value="32"/>
   </xsd:restriction>
 </xsd:simpleType>
 

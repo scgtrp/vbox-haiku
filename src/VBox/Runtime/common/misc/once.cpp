@@ -28,10 +28,13 @@
  * additional information or have any questions.
  */
 
+
 /*******************************************************************************
 *   Header Files                                                               *
 *******************************************************************************/
 #include <iprt/once.h>
+#include "internal/iprt.h"
+
 #include <iprt/semaphore.h>
 #include <iprt/thread.h>
 #include <iprt/err.h>
@@ -158,4 +161,19 @@ RTDECL(int) RTOnce(PRTONCE pOnce, PFNRTONCE pfnOnce, void *pvUser1, void *pvUser
      */
     return ASMAtomicUoReadS32(&pOnce->rc);
 }
+RT_EXPORT_SYMBOL(RTOnce);
+
+
+RTDECL(void) RTOnceReset(PRTONCE pOnce)
+{
+    /* Cannot be done while busy! */
+    AssertPtr(pOnce);
+    Assert(pOnce->hEventMulti == NIL_RTSEMEVENTMULTI);
+    Assert(pOnce->iState != 1);
+
+    /* Do the same as RTONCE_INITIALIZER does. */
+    ASMAtomicWriteS32(&pOnce->rc, VERR_INTERNAL_ERROR);
+    ASMAtomicWriteS32(&pOnce->iState, -1);
+}
+RT_EXPORT_SYMBOL(RTOnceReset);
 

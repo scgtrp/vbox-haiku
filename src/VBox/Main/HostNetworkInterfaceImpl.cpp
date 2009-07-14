@@ -27,6 +27,9 @@
 
 #ifndef RT_OS_WINDOWS
 #include <arpa/inet.h>
+# ifdef RT_OS_FREEBSD
+#  include <netinet/in.h> /* INADDR_NONE */
+# endif
 #endif /* RT_OS_WINDOWS */
 
 // constructor / destructor
@@ -176,14 +179,14 @@ STDMETHODIMP HostNetworkInterface::COMGETTER(Name) (BSTR *aInterfaceName)
  * @returns COM status code
  * @param   aGuid address of result pointer
  */
-STDMETHODIMP HostNetworkInterface::COMGETTER(Id) (OUT_GUID aGuid)
+STDMETHODIMP HostNetworkInterface::COMGETTER(Id) (BSTR *aGuid)
 {
     CheckComArgOutPointerValid(aGuid);
 
     AutoCaller autoCaller (this);
     CheckComRCReturnRC (autoCaller.rc());
 
-    mGuid.cloneTo (aGuid);
+    mGuid.toUtf16().cloneTo (aGuid);
 
     return S_OK;
 }
@@ -497,7 +500,7 @@ STDMETHODIMP HostNetworkInterface::EnableStaticIpConfigV6 (IN_BSTR aIPV6Address,
             m.realIPV6PrefixLength = aIPV6MaskPrefixLength;
             if (FAILED(mVBox->SetExtraData(Bstr(Utf8StrFmt("HostOnly/%ls/IPV6Address", mInterfaceName.raw())), Bstr(aIPV6Address))))
                 return E_FAIL;
-            if (FAILED(mVBox->SetExtraData(Bstr(Utf8StrFmt("HostOnly/%ls/IPV6NetMask", mInterfaceName.raw())), 
+            if (FAILED(mVBox->SetExtraData(Bstr(Utf8StrFmt("HostOnly/%ls/IPV6NetMask", mInterfaceName.raw())),
                                            Bstr(Utf8StrFmt("%u", aIPV6MaskPrefixLength)))))
                 return E_FAIL;
         }

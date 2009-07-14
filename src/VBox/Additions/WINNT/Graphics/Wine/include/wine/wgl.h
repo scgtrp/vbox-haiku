@@ -88,6 +88,10 @@
 #define WGL_GENERIC_ACCELERATION_ARB		0x2026
 #define WGL_FULL_ACCELERATION_ARB		0x2027
 
+#define WGL_SWAP_EXCHANGE_ARB		0x2028
+#define WGL_SWAP_COPY_ARB			0x2029
+#define WGL_SWAP_UNDEFINED_ARB		0x202A
+
 #define WGL_PBUFFER_WIDTH_ARB                   0x2034
 #define WGL_PBUFFER_HEIGHT_ARB                  0x2035
 #define WGL_PBUFFER_LOST_ARB                    0x2036
@@ -189,6 +193,13 @@
 #define WGL_FRAMEBUFFER_SRGB_CAPABLE_EXT  0x20A9
 #ifndef GLX_FRAMEBUFFER_SRGB_CAPABLE_EXT
 # define GLX_FRAMEBUFFER_SRGB_CAPABLE_EXT 0x20B2
+#endif
+
+/* WGL_EXT_pixel_format_packed_float */
+#define WGL_TYPE_RGBA_UNSIGNED_FLOAT_EXT 0x20A8
+#ifndef GLX_EXT_fbconfig_packed_float
+#define GLX_RGBA_UNSIGNED_FLOAT_TYPE_EXT 0x20B1
+#define GLX_RGBA_UNSIGNED_FLOAT_BIT_EXT  0x00000008
 #endif
 
 /** WGL_ARB_create_context */

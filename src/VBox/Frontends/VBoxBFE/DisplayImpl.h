@@ -27,7 +27,7 @@
 #include <VBox/pdm.h>
 
 #include "Framebuffer.h"
-struct _VBVACMDHDR;
+struct VBVACMDHDR;
 
 class VMDisplay
 {
@@ -41,7 +41,7 @@ public:
     int handleDisplayResize (int w, int h);
     void handleDisplayUpdate (int x, int y, int cx, int cy);
 
-    int VideoAccelEnable (bool fEnable, struct _VBVAMEMORY *pVbvaMemory);
+    int VideoAccelEnable (bool fEnable, struct VBVAMEMORY *pVbvaMemory);
     void VideoAccelFlush (void);
     bool VideoAccelAllowed (void);
 
@@ -54,7 +54,7 @@ public:
     uint32_t getHeight();
     uint32_t getBitsPerPixel();
 
-    STDMETHODIMP RegisterExternalFramebuffer(Framebuffer *Framebuffer);
+    STDMETHODIMP SetFramebuffer(unsigned iScreenID, Framebuffer *Framebuffer);
     STDMETHODIMP InvalidateAndUpdate();
     STDMETHODIMP ResizeCompleted();
 
@@ -83,27 +83,26 @@ private:
     struct DRVMAINDISPLAY  *mpDrv;
 
     Framebuffer *mFramebuffer;
-    bool mInternalFramebuffer, mFramebufferOpened;
+    bool mFramebufferOpened;
 
     ULONG mSupportedAccelOps;
-    RTSEMEVENTMULTI mUpdateSem;
 
-    struct _VBVAMEMORY *mpVbvaMemory;
+    struct VBVAMEMORY *mpVbvaMemory;
     bool        mfVideoAccelEnabled;
 
-    struct _VBVAMEMORY *mpPendingVbvaMemory;
+    struct VBVAMEMORY *mpPendingVbvaMemory;
     bool        mfPendingVideoAccelEnable;
     bool        mfMachineRunning;
 
     uint8_t    *mpu8VbvaPartial;
     uint32_t   mcbVbvaPartial;
 
-    bool vbvaFetchCmd (struct _VBVACMDHDR **ppHdr, uint32_t *pcbCmd);
-    void vbvaReleaseCmd (struct _VBVACMDHDR *pHdr, int32_t cbCmd);
+    bool vbvaFetchCmd (struct VBVACMDHDR **ppHdr, uint32_t *pcbCmd);
+    void vbvaReleaseCmd (struct VBVACMDHDR *pHdr, int32_t cbCmd);
 
     void handleResizeCompletedEMT (void);
     volatile uint32_t mu32ResizeStatus;
-    
+
     enum {
         ResizeStatus_Void,
         ResizeStatus_InProgress,

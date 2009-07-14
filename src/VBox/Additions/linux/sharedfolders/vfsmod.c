@@ -440,9 +440,6 @@ static struct file_system_type vboxsf_fs_type = {
 };
 #endif
 
-extern int CMC_API
-vboxadd_cmc_ctl_guest_filter_mask (uint32_t or_mask, uint32_t not_mask);
-
 /* Module initialization/finalization handlers */
 static int __init
 init (void)
@@ -458,7 +455,7 @@ init (void)
                         "Mount information structure is too large %lu\n"
                         "Must be less than or equal to %lu\n",
                         (unsigned long)sizeof (struct vbsf_mount_info_new),
-                        PAGE_SIZE);
+                        (unsigned long)PAGE_SIZE);
                 return -EINVAL;
         }
 
@@ -466,11 +463,6 @@ init (void)
         if (err) {
                 LogFunc(("register_filesystem err=%d\n", err));
                 return err;
-        }
-
-        if (vboxadd_cmc_ctl_guest_filter_mask (VMMDEV_EVENT_HGCM, 0)) {
-                rcRet = -EINVAL;
-                goto fail0;
         }
 
         rcVBox = vboxInit ();
@@ -505,7 +497,6 @@ init (void)
  fail1:
         vboxUninit ();
  fail0:
-        vboxadd_cmc_ctl_guest_filter_mask (0, VMMDEV_EVENT_HGCM);
         unregister_filesystem (&vboxsf_fs_type);
         return rcRet;
 }
@@ -517,7 +508,6 @@ fini (void)
 
         vboxDisconnect (&client_handle);
         vboxUninit ();
-        vboxadd_cmc_ctl_guest_filter_mask (0, VMMDEV_EVENT_HGCM);
         unregister_filesystem (&vboxsf_fs_type);
 }
 

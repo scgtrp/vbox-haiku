@@ -74,16 +74,16 @@ typedef struct _SSB
 typedef struct _VRAMLAYOUT
 {
     ULONG cbVRAM;
-    
+
     ULONG offFrameBuffer;
     ULONG cbFrameBuffer;
-    
+
     ULONG offDDRAWHeap; //@todo
     ULONG cbDDRAWHeap;
-    
+
     ULONG offVBVABuffer;
     ULONG cbVBVABuffer;
-    
+
     ULONG offDisplayInformation;
     ULONG cbDisplayInformation;
 } VRAMLAYOUT;
@@ -92,6 +92,39 @@ typedef struct
 {
     PPDEV   ppdev;
 } VBOXSURF, *PVBOXSURF;
+
+#ifdef VBOX_WITH_VIDEOHWACCEL
+typedef struct _VBOXVHWAREGION
+{
+    RECT DirtyMem;
+    bool bValid;
+}VBOXVHWAREGION, *PVBOXVHWAREGION;
+
+typedef struct _VBOXVHWASURFDESC
+{
+    VBOXVHWA_SURFHANDLE hHostHandle;
+    volatile uint32_t cPendingBltsSrc;
+    volatile uint32_t cPendingBltsDst;
+    volatile uint32_t cPendingFlipsCurr;
+    volatile uint32_t cPendingFlipsTarg;
+    uint32_t cBitsPerPixel;
+    bool bHidden;
+    VBOXVHWAREGION DirtyRegion;
+}VBOXVHWASURFDESC, *PVBOXVHWASURFDESC;
+
+typedef struct _VBOXVHWAINFO
+{
+    uint32_t caps;
+    uint32_t caps2;
+    uint32_t colorKeyCaps;
+    uint32_t stretchCaps;
+    uint32_t surfaceCaps;
+    uint32_t numOverlays;
+    uint32_t numFourCC;
+    HGSMIOFFSET FourCC;
+    BOOLEAN bVHWAEnabled;
+} VBOXVHWAINFO;
+#endif
 
 struct  _PDEV
 {
@@ -110,7 +143,7 @@ struct  _PDEV
     POINTL  ptlDevOrg;                  // Device origin for DualView (0,0 for primary view).
     ULONG   ulMode;                     // Mode the mini-port driver is in.
     LONG    lDeltaScreen;               // Distance from one scan to the next.
-    
+
     PVOID   pOffscreenList;             // linked list of DCI offscreen surfaces.
     FLONG   flRed;                      // For bitfields device, Red Mask
     FLONG   flGreen;                    // For bitfields device, Green Mask
@@ -127,7 +160,7 @@ struct  _PDEV
     PALETTEENTRY *pPal;                 // If this is pal managed, this is the pal
     BOOL    bSupportDCI;                // Does the miniport support DCI?
     FLONG   flHooks;
-    
+
 #ifndef VBOX_WITH_HGSMI
     VBVAENABLERESULT vbva;
     uint32_t         u32VRDPResetFlag;
@@ -163,17 +196,25 @@ struct  _PDEV
     BOOLEAN bHGSMISupported;
     HGSMIHEAP hgsmiDisplayHeap;
     VBVABUFFER *pVBVA; /* Pointer to the pjScreen + layout->offVBVABuffer. NULL if VBVA is not enabled. */
+
+    HVBOXVIDEOHGSMI hMpHGSMI; /* context handler passed to miniport HGSMI callbacks */
+    PFNVBOXVIDEOHGSMICOMPLETION pfnHGSMICommandComplete; /* called to complete the command we receive from the miniport */
+    PFNVBOXVIDEOHGSMICOMMANDS   pfnHGSMIRequestCommands; /* called to requests the commands posted to us from the host */
 #endif /* VBOX_WITH_HGSMI */
+
+#ifdef VBOX_WITH_VIDEOHWACCEL
+    VBOXVHWAINFO vhwaInfo;
+#endif
 };
 
-#ifdef VBOX_WITH_OPENGL 
-typedef struct 
-{ 
-    DWORD dwVersion; 
-    DWORD dwDriverVersion; 
-    WCHAR szDriverName[256]; 
-} OPENGL_INFO, *POPENGL_INFO; 
-#endif 
+#ifdef VBOX_WITH_OPENGL
+typedef struct
+{
+    DWORD dwVersion;
+    DWORD dwDriverVersion;
+    WCHAR szDriverName[256];
+} OPENGL_INFO, *POPENGL_INFO;
+#endif
 
 #ifndef VBOX_WITH_HGSMI
 /* The global semaphore handle for all driver instances. */
@@ -244,6 +285,80 @@ void VBoxUpdateDisplayInfo (PPDEV ppdev);
 
 void drvLoadEng (void);
 
+#ifdef VBOX_WITH_HGSMI
+void vboxVBVAHostCommandComplete(PPDEV ppdev, VBVAHOSTCMD * pCmd);
+
+ #ifdef VBOX_WITH_VIDEOHWACCEL
+
+#define VBOXDD_CHECKFLAG(_v, _f) ((_v) & (_f)) == (_f)
+
+typedef DECLCALLBACK(void) FNVBOXVHWACMDCOMPLETION(PPDEV ppdev, VBOXVHWACMD * pCmd, void * pContext);
+typedef FNVBOXVHWACMDCOMPLETION *PFNVBOXVHWACMDCOMPLETION;
+
+VBOXVHWACMD* vboxVHWACommandCreate (PPDEV ppdev, VBOXVHWACMD_TYPE enmCmd, VBOXVHWACMD_LENGTH cbCmd);
+void vboxVHWACommandFree (PPDEV ppdev, VBOXVHWACMD* pCmd);
+BOOL vboxVHWACommandSubmit (PPDEV ppdev, VBOXVHWACMD* pCmd);
+void vboxVHWACommandSubmitAsynch (PPDEV ppdev, VBOXVHWACMD* pCmd, PFNVBOXVHWACMDCOMPLETION pfnCompletion, void * pContext);
+void vboxVHWACommandSubmitAsynchByEvent (PPDEV ppdev, VBOXVHWACMD* pCmd, PEVENT pEvent);
+void vboxVHWACommandCheckHostCmds(PPDEV ppdev);
+
+int vboxVHWAInitHostInfo1(PPDEV ppdev);
+int vboxVHWAInitHostInfo2(PPDEV ppdev, DWORD *pFourCC);
+
+VBOXVHWACMD_QUERYINFO1* vboxVHWAQueryHostInfo1(PPDEV ppdev);
+void vboxVHWAFreeHostInfo1(PPDEV ppdev, VBOXVHWACMD_QUERYINFO1* pInfo);
+VBOXVHWACMD_QUERYINFO2* vboxVHWAQueryHostInfo2(PPDEV ppdev, uint32_t numFourCC);
+void vboxVHWAFreeHostInfo2(PPDEV ppdev, VBOXVHWACMD_QUERYINFO2* pInfo);
+
+void vboxVHWAInit();
+void vboxVHWATerm();
+uint32_t vboxVHWAUnsupportedDDCAPS(uint32_t caps);
+uint32_t vboxVHWAUnsupportedDDSCAPS(uint32_t caps);
+uint32_t vboxVHWAUnsupportedDDPFS(uint32_t caps);
+uint32_t vboxVHWASupportedDDCAPS(uint32_t caps);
+uint32_t vboxVHWASupportedDDSCAPS(uint32_t caps);
+uint32_t vboxVHWASupportedDDPFS(uint32_t caps);
+
+uint32_t vboxVHWAUnsupportedDDCEYCAPS(uint32_t caps);
+uint32_t vboxVHWASupportedDDCEYCAPS(uint32_t caps);
+
+uint32_t vboxVHWAToDDBLTs(uint32_t caps);
+uint32_t vboxVHWAFromDDBLTs(uint32_t caps);
+
+uint32_t vboxVHWAFromDDCAPS2(uint32_t caps);
+uint32_t vboxVHWAToDDCAPS2(uint32_t caps);
+
+void vboxVHWAFromDDBLTFX(VBOXVHWA_BLTFX *pVHWABlt, DDBLTFX *pDdBlt);
+
+void vboxVHWAFromDDCOLORKEY(VBOXVHWA_COLORKEY *pVHWACKey, DDCOLORKEY  *pDdCKey);
+
+uint32_t vboxVHWAFromDDOVERs(uint32_t caps);
+uint32_t vboxVHWAToDDOVERs(uint32_t caps);
+uint32_t vboxVHWAFromDDCKEYs(uint32_t caps);
+uint32_t vboxVHWAToDDCKEYs(uint32_t caps);
+
+void vboxVHWAFromDDOVERLAYFX(VBOXVHWA_OVERLAYFX *pVHWAOverlay, DDOVERLAYFX *pDdOverlay);
+
+uint32_t vboxVHWAFromDDCAPS(uint32_t caps);
+uint32_t vboxVHWAToDDCAPS(uint32_t caps);
+uint32_t vboxVHWAFromDDSCAPS(uint32_t caps);
+uint32_t vboxVHWAToDDSCAPS(uint32_t caps);
+uint32_t vboxVHWAFromDDPFS(uint32_t caps);
+uint32_t vboxVHWAToDDPFS(uint32_t caps);
+uint32_t vboxVHWAFromDDCKEYCAPS(uint32_t caps);
+uint32_t vboxVHWAToDDCKEYCAPS(uint32_t caps);
+int vboxVHWAFromDDPIXELFORMAT(VBOXVHWA_PIXELFORMAT *pVHWAFormat, DDPIXELFORMAT *pDdFormat);
+int vboxVHWAFromDDSURFACEDESC(VBOXVHWA_SURFACEDESC *pVHWADesc, DDSURFACEDESC *pDdDesc);
+void vboxVHWAFromRECTL(VBOXVHWA_RECTL *pDst, RECTL *pSrc);
+PVBOXVHWASURFDESC vboxVHWASurfDescAlloc();
+void vboxVHWASurfDescFree(PVBOXVHWASURFDESC pDesc);
+
+int vboxVHWAEnable(PPDEV ppdev);
+int vboxVHWADisable(PPDEV ppdev);
+
+ #endif
+#endif
+
 BOOL bIsScreenSurface (SURFOBJ *pso);
 
 __inline SURFOBJ *getSurfObj (SURFOBJ *pso)
@@ -251,7 +366,7 @@ __inline SURFOBJ *getSurfObj (SURFOBJ *pso)
     if (pso)
     {
         PPDEV ppdev = (PPDEV)pso->dhpdev;
-    
+
         if (ppdev)
         {
             if (ppdev->psoScreenBitmap && pso->hsurf == ppdev->hsurfScreen)
@@ -261,7 +376,7 @@ __inline SURFOBJ *getSurfObj (SURFOBJ *pso)
             }
         }
     }
-    
+
     return pso;
 }
 
@@ -275,7 +390,7 @@ __inline int format2BytesPerPixel(const SURFOBJ *pso)
         case BMF_24BPP: return 3;
         case BMF_32BPP: return 4;
     }
-    
+
     return 0;
 }
 
@@ -289,7 +404,7 @@ void vbvaReportDirtyRect (PPDEV ppdev, RECTL *prcl);
 
 #define VRDP_TEXT_MAX_GLYPH_SIZE 0x100
 #define VRDP_TEXT_MAX_GLYPHS     0xfe
- 
+
 BOOL vboxReportText (PPDEV ppdev,
                      VRDPCLIPRECTS *pClipRects,
                      STROBJ   *pstro,

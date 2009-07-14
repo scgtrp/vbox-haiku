@@ -92,7 +92,7 @@ do { \
 
 #define BOOL_STR(a) ((a) ? "TRUE" : "FALSE")
 
-#include <VBox/VBoxGuest.h>
+#include <VBox/VMMDev.h>
 
 /* All drivers should typically include these */
 #include "xf86.h"
@@ -252,6 +252,7 @@ extern Bool vboxRetrieveVideoMode(ScrnInfoPtr pScrn, uint32_t *pcx, uint32_t *pc
 /* DRI stuff */
 extern Bool VBOXDRIScreenInit(int scrnIndex, ScreenPtr pScreen, VBOXPtr pVBox);
 extern Bool VBOXDRIFinishScreenInit(ScreenPtr pScreen);
+extern void VBOXDRIUpdateStride(ScrnInfoPtr pScrn, VBOXPtr pVBox);
 extern void VBOXDRICloseScreen(ScreenPtr pScreen, VBOXPtr pVBox);
 
 #endif /* _VBOXVIDEO_H_ */

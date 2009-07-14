@@ -1,9 +1,11 @@
 /** @file
- * VirtualBox Parameter Definitions.
+ * VirtualBox Parameter Definitions. (VMM,+)
+ *
+ * param.mac is generated from this file by running 'kmk incs' in the root.
  */
 
 /*
- * Copyright (C) 2006-2007 Sun Microsystems, Inc.
+ * Copyright (C) 2006-2009 Sun Microsystems, Inc.
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -119,9 +121,39 @@
  * @{
  */
 /** VMM stack size. */
-#define VMM_STACK_SIZE              8192U
+#ifdef RT_OS_DARWIN
+# define VMM_STACK_SIZE             16384U
+#else
+# define VMM_STACK_SIZE             8192U
+#endif
+/** Min number of Virtual CPUs. */
+#define VMM_MIN_CPU_COUNT           1
+/** Max number of Virtual CPUs. */
+#define VMM_MAX_CPU_COUNT           32
+
 /** @} */
 
+
+/** @defgroup   grp_vbox_pci        PCI Identifiers
+ * @{ */
+/** VirtualBox PCI vendor ID. */
+#define VBOX_PCI_VENDORID           (0x80ee)
+
+/** @name VirtualBox graphics card identifiers
+ * @{ */
+#define VBOX_VENDORID               VBOX_PCI_VENDORID   /**< @todo wonderful choice of name! Please squeeze a _VGA_ or something in there, please. */
+#define VBOX_DEVICEID               (0xbeef)            /**< @todo ditto. */
+#define VBOX_VESA_VENDORID          VBOX_PCI_VENDORID
+#define VBOX_VESA_DEVICEID          (0xbeef)
+/** @} */
+
+/** @name VMMDev PCI card identifiers
+ * @{ */
+#define VMMDEV_VENDORID             VBOX_PCI_VENDORID
+#define VMMDEV_DEVICEID             (0xcafe)
+/** @} */
+
+/** @} */
 
 /** @} */
 

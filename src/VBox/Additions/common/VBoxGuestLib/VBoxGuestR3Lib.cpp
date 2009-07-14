@@ -31,20 +31,24 @@
 # define INCL_ERRORS
 # include <os2.h>
 
-#elif defined(RT_OS_SOLARIS) || defined(RT_OS_FREEBSD)
+#elif defined(RT_OS_FREEBSD) \
+   || defined(RT_OS_LINUX) \
+   || defined(RT_OS_SOLARIS)
 # include <sys/types.h>
 # include <sys/stat.h>
+# if defined(RT_OS_LINUX) /** @todo check this on solaris+freebsd as well. */
+#  include <sys/ioctl.h>
+# endif
 # include <errno.h>
 # include <unistd.h>
 #endif
 
-#include <iprt/time.h>
-#include <iprt/asm.h>
-#include <iprt/string.h>
-#include <iprt/file.h>
 #include <iprt/assert.h>
+#include <iprt/asm.h>
+#include <iprt/file.h>
+#include <iprt/time.h>
+#include <iprt/string.h>
 #include <iprt/thread.h>
-#include <VBox/VBoxGuest.h>
 #include <VBox/log.h>
 #include "VBGLR3Internal.h"
 
@@ -365,7 +369,11 @@ int vbglR3DoIOCtl(unsigned iFunction, void *pvData, size_t cbData)
     Hdr.u32Padding = 0;
 # endif
 
-/** @todo test status code passing! */
+/** @todo test status code passing! Check that the kernel doesn't do any
+ *        error checks using specific errno values, and just pass an VBox
+ *        error instead of an errno.h one. Alternatively, extend/redefine the
+ *        header with an error code return field (much better alternative
+ *        actually). */
     int rc = ioctl((int)g_File, iFunction, &Hdr);
     if (rc == -1)
     {
@@ -373,6 +381,27 @@ int vbglR3DoIOCtl(unsigned iFunction, void *pvData, size_t cbData)
         return RTErrConvertFromErrno(rc);
     }
     return VINF_SUCCESS;
+
+#elif defined(RT_OS_LINUX)
+# ifdef VBOX_VBGLR3_XFREE86
+    int rc = xf86ioctl((int)g_File, iFunction, pvData);
+# else
+    int rc = ioctl((int)g_File, iFunction, pvData);
+# endif
+    if (RT_LIKELY(rc == 0))
+        return VINF_SUCCESS;
+
+    /* Positive values are negated VBox error status codes. */
+    if (rc > 0)
+        rc = -rc;
+    else
+# ifdef VBOX_VBGLR3_XFREE86
+        rc = VERR_FILE_IO_ERROR;
+#  else
+        rc = RTErrConvertFromErrno(errno);
+# endif
+    NOREF(cbData);
+    return rc;
 
 #elif defined(VBOX_VBGLR3_XFREE86)
     /* PORTME - This is preferred over the RTFileIOCtl variant below, just be careful with the (int). */

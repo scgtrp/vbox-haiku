@@ -28,22 +28,17 @@
 #include <errno.h>
 #include <signal.h>
 
+#include <X11/Xlib.h>
+
 #include <iprt/env.h>
 #include <iprt/initterm.h>
 #include <iprt/path.h>
 #include <iprt/stream.h>
 #include <iprt/string.h>
-#include <VBox/VBoxGuest.h>
+#include <VBox/VBoxGuestLib.h>
 #include <VBox/log.h>
 
 #include "VBoxClient.h"
-
-#ifdef DYNAMIC_RESIZE
-# include "displaychange.h"
-# ifdef SEAMLESS_GUEST
-#  include "seamless.h"
-# endif
-#endif
 
 #define TRACE RTPrintf("%s: %d\n", __PRETTY_FUNCTION__, __LINE__); Log(("%s: %d\n", __PRETTY_FUNCTION__, __LINE__))
 

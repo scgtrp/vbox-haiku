@@ -450,6 +450,7 @@ VBOX_CORE_DOXYFILE_INPUT_DIRS = \
 VBOX_CORE_DOXYFILE_INPUT_FIRST =\
 	$(PATH_ROOT)/doc/VBox-doc.c \
 	$(PATH_ROOT)/doc/VBox-CodingGuidelines.cpp \
+	$(PATH_ROOT)/doc/VBox-MakefileGuidelines.cpp \
 	$(PATH_ROOT)/src/VBox/VMM/VMMCodingGuidelines.cpp \
 	$(PATH_ROOT)/src/VBox/VMM/VMMDocsRawMode.cpp \
 	$(PATH_ROOT)/include/VBox/cdefs.h \
@@ -619,23 +620,12 @@ VBOX_ADDITIONS_BUILD_SUBDIRNAME := $(lastword $(subst /, ,$(PATH_ROOT)))
 
 VBOX_KMK_TIME = $(KBUILD_BIN_PATH)/kmk_time
 
-# Oh well, this gets really fancy - ms vc8 doesn't work inside ssh due to some
-# session setup issue. So do this indirectly through psexec. The downside is
-# that there is no direct build feedback. Also I couldn't get the share to
-# work via psexec, so rsync over the result of the build.
 additions-build-win.amd64:
 ifeq ($(KBUILD_TARGET),win)
 	+ $(VBOX_KMK_TIME) $(KMK) $(VBOX_ADDITIONS_BUILD.amd64)
 else
 	$(call MSG_L1,Building Windows/amd64 additions)
-	rsync -av --no-owner --no-group --delete --delete-excluded --exclude .svn/ --exclude tinderclient.log . 192.168.27.5:/cygdrive/e/$(VBOX_ADDITIONS_BUILD_SUBDIRNAME)
-	$(VBOX_KMK_TIME) ssh vbox@192.168.27.5 c:/psexec/psexec.exe \\\\\\\\addvm -u vbox -p $(WIN64PASSWORD) c:\\\\cygwin\\\\bin\\\\bash.exe -c \''PATH=/usr/bin:/bin e:/$(VBOX_ADDITIONS_BUILD_SUBDIRNAME)/tools/env.sh kmk $(VBOX_ADDITIONS_BUILD.amd64) > e:/$(VBOX_ADDITIONS_BUILD_SUBDIRNAME).log 2>&1'\'; \
-	rc=$$?; \
-	rsync -av --delete 192.168.27.5:/cygdrive/e/$(VBOX_ADDITIONS_BUILD_SUBDIRNAME)/out/win.amd64/ out/win.amd64; \
-	mkdir -p out/win.amd64; \
-	rsync -a --delete 192.168.27.5:/cygdrive/e/$(VBOX_ADDITIONS_BUILD_SUBDIRNAME).log out/win.amd64/build.log; \
-	cat out/win.amd64/build.log; \
-	exit $$rc
+	$(VBOX_KMK_TIME) ssh vbox@192.168.27.5 "cd e:/$(VBOX_ADDITIONS_BUILD_SUBDIRNAME) && tools/env.sh kmk $(VBOX_ADDITIONS_BUILD.amd64)"
 endif
 
 additions-build-win.x86:
@@ -643,8 +633,7 @@ ifeq ($(KBUILD_TARGET),win)
 	+ $(VBOX_KMK_TIME) $(KMK) $(VBOX_ADDITIONS_BUILD.x86)
 else
 	$(call MSG_L1,Building Windows/x86 additions)
-	rsync -av --no-owner --no-group --delete --delete-excluded --exclude .svn/ --exclude out/ --exclude tinderclient.log . 192.168.27.5:/cygdrive/e/$(VBOX_ADDITIONS_BUILD_SUBDIRNAME)
-	$(VBOX_KMK_TIME) ssh vbox@192.168.27.5 " cd /cygdrive/e/$(VBOX_ADDITIONS_BUILD_SUBDIRNAME) && PATH_OUT_BASE=Z:/$(VBOX_ADDITIONS_BUILD_SUBDIRNAME)/out tools/env.sh kmk $(VBOX_ADDITIONS_BUILD.x86)"
+	$(VBOX_KMK_TIME) ssh vbox@192.168.27.5 " cd e:/$(VBOX_ADDITIONS_BUILD_SUBDIRNAME) && tools/env.sh kmk $(VBOX_ADDITIONS_BUILD.x86)"
 endif
 
 additions-build-solaris.amd64:
@@ -652,7 +641,9 @@ ifeq ($(KBUILD_TARGET),solaris)
 	+ $(VBOX_KMK_TIME) $(KMK) $(VBOX_ADDITIONS_BUILD.amd64)
 else
 	$(call MSG_L1,Building Solaris/amd64 additions)
-	$(VBOX_KMK_TIME) ssh vbox@192.168.27.4 " cd /mnt/vbox/$(VBOX_ADDITIONS_BUILD_SUBDIRNAME) && ./tools/env.sh --no-wine kmk $(VBOX_ADDITIONS_BUILD.amd64) "
+	rsync -av --delete --delete-excluded --exclude .svn --exclude FetchDir --exclude tinderclient.log --exclude win.amd64 --exclude win.x86 . 192.168.27.4:/mnt/tinderbox/$(VBOX_ADDITIONS_BUILD_SUBDIRNAME)
+	$(VBOX_KMK_TIME) ssh vbox@192.168.27.4 " cd /mnt/tinderbox/$(VBOX_ADDITIONS_BUILD_SUBDIRNAME) && tools/env.sh --no-wine kmk $(VBOX_ADDITIONS_BUILD.amd64) "
+	rsync -av --delete 192.168.27.4:/mnt/tinderbox/$(VBOX_ADDITIONS_BUILD_SUBDIRNAME)/out/solaris.amd64 out/
 endif
 
 # ASSUMES 64-bit is built already. See @todo above.
@@ -661,14 +652,16 @@ ifeq ($(KBUILD_TARGET),solaris)
 	+ $(VBOX_KMK_TIME) $(KMK) $(VBOX_ADDITIONS_BUILD.x86) VBOX_WITH_COMBINED_SOLARIS_GUEST_PACKAGE=1
 else
 	$(call MSG_L1,Building Solaris/x86 additions)
-	$(VBOX_KMK_TIME) ssh vbox@192.168.27.4 " cd /mnt/vbox/$(VBOX_ADDITIONS_BUILD_SUBDIRNAME) && ./tools/env.sh --no-wine kmk $(VBOX_ADDITIONS_BUILD.x86) VBOX_WITH_COMBINED_SOLARIS_GUEST_PACKAGE=1"
+	rsync -av --delete --delete-excluded --exclude .svn --exclude FetchDir --exclude tinderclient.log --exclude win.amd64 --exclude win.x86 . 192.168.27.4:/mnt/tinderbox/$(VBOX_ADDITIONS_BUILD_SUBDIRNAME)
+	$(VBOX_KMK_TIME) ssh vbox@192.168.27.4 " cd /mnt/tinderbox/$(VBOX_ADDITIONS_BUILD_SUBDIRNAME) && tools/env.sh --no-wine kmk $(VBOX_ADDITIONS_BUILD.x86) VBOX_WITH_COMBINED_SOLARIS_GUEST_PACKAGE=1"
+	rsync -av --delete 192.168.27.4:/mnt/tinderbox/$(VBOX_ADDITIONS_BUILD_SUBDIRNAME)/out/solaris.x86 out/
 endif
 
 additions-build-os2.x86:
 #ifeq ($(KBUILD_TARGET),os2)
 #	+ $(VBOX_KMK_TIME) $(KMK) $(VBOX_ADDITIONS_BUILD.x86)
 #else
-#	$(VBOX_KMK_TIME) ssh vbox@192.168.27.3 " cd /mnt/vbox/$(VBOX_ADDITIONS_BUILD_SUBDIRNAME) && ./tools/env.sh --no-wine kmk $(VBOX_ADDITIONS_BUILD.x86) "
+#	$(VBOX_KMK_TIME) ssh vbox@192.168.27.3 " cd /mnt/tinderbox/$(VBOX_ADDITIONS_BUILD_SUBDIRNAME) && tools/env.sh --no-wine kmk $(VBOX_ADDITIONS_BUILD.x86) "
 #endif
 
 additions-build-linux.amd64:
@@ -676,7 +669,7 @@ ifeq ($(KBUILD_TARGET).$(KBUILD_TARGET_ARCH),linux.amd64)
 	+ $(VBOX_KMK_TIME) $(KMK) $(VBOX_ADDITIONS_BUILD.amd64)
 else
 	$(call MSG_L1,Building Linux/amd64 additions)
-	$(VBOX_KMK_TIME) ssh vbox@192.168.27.12 " cd /mnt/vbox/$(VBOX_ADDITIONS_BUILD_SUBDIRNAME) && ./tools/env.sh --no-wine kmk $(VBOX_ADDITIONS_BUILD.amd64) "
+	$(VBOX_KMK_TIME) ssh vbox@192.168.27.12 " cd /mnt/tinderbox/$(VBOX_ADDITIONS_BUILD_SUBDIRNAME) && tools/env.sh --no-wine kmk $(VBOX_ADDITIONS_BUILD.amd64) "
 endif
 
 additions-build-linux.x86:
@@ -684,7 +677,7 @@ ifeq ($(KBUILD_TARGET).$(KBUILD_TARGET_ARCH),linux.x86)
 	+ $(VBOX_KMK_TIME) $(KMK) $(VBOX_ADDITIONS_BUILD.x86)
 else
 	$(call MSG_L1,Building Linux/x86 additions)
-	$(VBOX_KMK_TIME) ssh vbox@192.168.27.2 " cd /mnt/vbox/$(VBOX_ADDITIONS_BUILD_SUBDIRNAME) && ./tools/env.sh --no-wine kmk $(VBOX_ADDITIONS_BUILD.x86) "
+	$(VBOX_KMK_TIME) ssh vbox@192.168.27.2 " cd /mnt/tinderbox/$(VBOX_ADDITIONS_BUILD_SUBDIRNAME) && tools/env.sh --no-wine kmk $(VBOX_ADDITIONS_BUILD.x86) "
 endif
 
 
@@ -705,36 +698,110 @@ additions-packing:
 
 
 #
-# Generate VirtualBox-OSE-x.x.x.tar.bz2 tarballs for distribution
-#
+# Generate VirtualBox-OSE-x.x.x.tar.bz2 (OSE) tarballs for distribution
 # - includes kBuild
 # - must be executed on an OSE checkout
 #
 
 # the path where to store the tarball
-TARBALLPATH ?= $(shell cd $(PATH_ROOT)/..; pwd)
-#TARBALLPATH ?= $(abspath $(PATH_ROOT)/..) - this should also do the trick without spawning a shell.
+TARBALLPATH ?= $(abspath $(PATH_ROOT)/..)
 # the root directory inside the tarball
 TARBALLROOT ?= VirtualBox-$(VBOX_VERSION_STRING)
 # the name of the tarball file
 TARBALLNAME ?= VirtualBox-$(VBOX_VERSION_STRING).tar.bz2
-snapshot:
+snapshot-ose:
 	@$(call MSG_L1,Creating tarball $(TARBALLPATH)/$(TARBALLNAME))
-	@if [ -d "$(PATH_ROOT)/src/VBox/Devices/USB" ]; then echo; echo "Found USB stuff, refused to build OSE tarball!"; echo; exit 1; fi
+	@if [ -d "$(PATH_ROOT)/src/VBox/Devices/USB" ]; then \
+	    echo; \
+	    echo "Found USB stuff, refused to build OSE tarball!"; \
+	    echo; \
+	    exit 1; \
+	fi; \
+	if [ -z "$(VBOX_OSE)" ]; then \
+	    echo; \
+	    echo "Please do 'kmk snapshot-ose VBOX_OSE=1'"; \
+	    echo; \
+	    exit 1; \
+	fi
 	$(QUIET)$(MKDIR) -p $(TARBALLPATH)
-	$(QUIET)$(RM) -f $(wildcard $(TARBALLPATH)/VirtualBox*)
+	$(QUIET)$(RM) -f $(TARBALLPATH)/$(TARBALLROOT)
 	$(QUIET)$(LN_SYMLINK) $(PATH_ROOT) $(TARBALLPATH)/$(TARBALLROOT)
 	$(QUIET)tar -cjh --owner 0 --group 0 --totals \
 	    --exclude=.svn \
 	    --exclude=$(TARBALLROOT)/out \
 	    --exclude=$(TARBALLROOT)/env.sh \
 	    --exclude=$(TARBALLROOT)/configure.log \
+	    --exclude=$(TARBALLROOT)/build.log \
 	    --exclude=$(TARBALLROOT)/AutoConfig.kmk \
 	    --exclude=$(TARBALLROOT)/LocalConfig.kmk \
+	    --exclude=$(TARBALLROOT)/prebuild \
 	    -C $(TARBALLPATH) \
 	    -f $(TARBALLPATH)/$(TARBALLNAME) \
 	    $(TARBALLROOT)
 	$(QUIET)$(RM) $(TARBALLPATH)/$(TARBALLROOT)
+
+
+#
+# Generate VirtualBox-x.x.x.tar.bz2 (PUEL) zip archives for internal use only
+# - includes kBuild
+# - must be executed on an PUEL checkout
+#
+
+# the path where to store the zip archive
+ZIPPATH ?= $(abspath $(PATH_ROOT)/..)
+# the root directory inside the zip archive
+ZIPROOT ?= VirtualBox-$(VBOX_VERSION_STRING)
+# the name of the zip archive
+ZIPNAME ?= VirtualBox-$(VBOX_VERSION_STRING).zip
+snapshot-puel:
+	@$(call MSG_L1,Creating zip $(ZIPPATH)/$(ZIPNAME))
+	@if [ ! -d "$(PATH_ROOT)/src/VBox/Devices/USB" ]; then \
+	    echo; \
+	    echo "Did not find USB stuff, is this an OSE branch?"; \
+	    echo; \
+	    exit 1; \
+	 fi
+	@if [ -z "$(PASSWORD)" ]; then \
+	    echo; \
+	    echo "Please specify a password with PASSWORD=..."; \
+	    echo; \
+	    exit 1; \
+	 fi
+	$(QUIET)$(MKDIR) -p $(ZIPPATH)
+	$(QUIET)$(RM) -f $(ZIPPATH)/$(ZIPROOT)
+	$(QUIET)$(RM) -f $(ZIPPATH)/$(ZIPNAME)
+	$(QUIET)$(LN_SYMLINK) $(PATH_ROOT) $(ZIPPATH)/$(ZIPROOT)
+	$(QUIET)(cd $(ZIPPATH); 7z a \
+	    -l -tzip -mmt=on -mx=7 -p$(PASSWORD) \
+	    -xr!.svn \
+	    -i!$(ZIPROOT)/Config.kmk \
+	    -i!$(ZIPROOT)/Doxyfile.Core \
+	    -i!$(ZIPROOT)/Makefile.kmk \
+	    -i!$(ZIPROOT)/configure \
+	    -i!$(ZIPROOT)/configure.vbs \
+	    -i!$(ZIPROOT)/doc \
+	    -i!$(ZIPROOT)/include \
+	    -i!$(ZIPROOT)/kBuild \
+	    -i!$(ZIPROOT)/src \
+	    -i!$(ZIPROOT)/tools/env.sh \
+	    -i!$(ZIPROOT)/tools/linux.x86/bin/* \
+	    -i!$(ZIPROOT)/tools/linux.amd64/bin/* \
+	    -x!$(ZIPROOT)/doc/Devices \
+	    -x!$(ZIPROOT)/doc/\*pdf \
+	    -x!$(ZIPROOT)/doc/L4VM \
+	    -x!$(ZIPROOT)/doc/VMM \
+	    -x!$(ZIPROOT)/doc/licenses_old \
+	    -x!$(ZIPROOT)/doc/manual/de_DE \
+	    -x!$(ZIPROOT)/doc/manual/fr_FR \
+	    -x!$(ZIPROOT)/src/tests \
+	    -x!$(ZIPROOT)/src/VBox/Artwork \
+	    -x!$(ZIPROOT)/src/VBox/Installer/AMI \
+	    -x!$(ZIPROOT)/src/VBox/Installer/Avanquest \
+	    -x!$(ZIPROOT)/src/VBox/Installer/Encore \
+	    -x!$(ZIPROOT)/src/VBox/Installer/linux/debian \
+	    -x!$(ZIPROOT)/src/VBox/Installer/linux/rpm \
+	    $(ZIPPATH)/$(ZIPNAME))
+	$(QUIET)$(RM) $(ZIPPATH)/$(ZIPROOT)
 
 
 #
@@ -747,19 +814,11 @@ include $(KBUILD_PATH)/subfooter.kmk
 # Generate x86.mac and err.mac.
 #
 incs:
-	$(SED) -f include/VBox/err.sed --output include/VBox/err.mac include/VBox/err.h
+	$(SED) -f include/VBox/err.sed     --output include/VBox/err.mac   include/VBox/err.h
 	$(APPEND) include/VBox/err.mac '%include "iprt/err.mac"'
-	$(SED) -f include/VBox/err.sed --output include/iprt/err.mac include/iprt/err.h
-	$(SED) \
-		-e '/__VBox_x86_h__/d' \
-		-e '/#define/!d' \
-		-e '/\\$$/d' \
-		-e 's/#define/%define/' \
-		-e 's/\([0-9a-fA-F][0-9a-fA-F]*\)U$$/\1/' \
-		-e 's/\([0-9a-fA-F][0-9a-fA-F]*\)U[[:space:]]/\1 /' \
-		-e 's/[[:space:]]\/\*\*<.*$$//' \
-		--output include/VBox/x86.mac \
-		include/VBox/x86.h
+	$(SED) -f include/VBox/err.sed     --output include/iprt/err.mac   include/iprt/err.h
+	$(SED) -f include/VBox/various.sed --output include/VBox/x86.mac   include/VBox/x86.h
+	$(SED) -f include/VBox/various.sed --output include/VBox/param.mac include/VBox/param.h
 
 
 #
@@ -768,8 +827,8 @@ incs:
 vslick.h: include/VBox/cdefs.h include/iprt/cdefs.h $(MAKEFILE)
 	$(RM) -f -- $@ $@.tmp $@.tmp2 $@.tmp3
 	$(APPEND) $@.tmp '// autogenerated'
-	#@$(APPEND) $@.tmp '#define __BEGIN_DECLS '
-	#@$(APPEND) $@.tmp '#define __END_DECLS '
+	@$(APPEND) $@.tmp '#define RT_C_DECLS_BEGIN '
+	@$(APPEND) $@.tmp '#define RT_C_DECLS_END '
 
 	@$(APPEND) $@.tmp '#define ATL_NO_VTABLE '
 	@$(APPEND) $@.tmp '#define BEGIN_COM_MAP(a) '

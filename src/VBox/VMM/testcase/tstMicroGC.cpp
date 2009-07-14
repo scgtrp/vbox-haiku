@@ -37,9 +37,9 @@
 /*******************************************************************************
 *   Internal Functions                                                         *
 *******************************************************************************/
-__BEGIN_DECLS
+RT_C_DECLS_BEGIN
 DECLEXPORT(int) tstMicroGC(PTSTMICRO pTst, unsigned uTestcase);
-__END_DECLS
+RT_C_DECLS_END
 
 
 /**

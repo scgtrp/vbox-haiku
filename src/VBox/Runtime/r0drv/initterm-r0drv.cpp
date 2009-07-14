@@ -33,6 +33,8 @@
 *   Header Files                                                               *
 *******************************************************************************/
 #include <iprt/initterm.h>
+#include "internal/iprt.h"
+
 #include <iprt/asm.h>
 #include <iprt/assert.h>
 #include <iprt/err.h>
@@ -77,7 +79,7 @@ RTR0DECL(int) RTR0Init(unsigned fReserved)
     rc = rtR0InitNative();
     if (RT_SUCCESS(rc))
     {
-#if !defined(RT_OS_LINUX) && !defined(RT_OS_WINDOWS)
+#if !defined(RT_OS_LINUX)
         rc = rtThreadInit();
 #endif
         if (RT_SUCCESS(rc))
@@ -95,6 +97,7 @@ RTR0DECL(int) RTR0Init(unsigned fReserved)
     }
     return rc;
 }
+RT_EXPORT_SYMBOL(RTR0Init);
 
 
 /**
@@ -110,7 +113,7 @@ RTR0DECL(void) RTR0Term(void)
     if (cNewUsers != 0)
         return;
 
-#if !defined(RT_OS_LINUX) && !defined(RT_OS_WINDOWS)
+#if !defined(RT_OS_LINUX)
     rtThreadTerm();
 #endif
 #ifndef IN_GUEST /* play safe for now */
@@ -119,4 +122,5 @@ RTR0DECL(void) RTR0Term(void)
 #endif
     rtR0TermNative();
 }
+RT_EXPORT_SYMBOL(RTR0Term);
 

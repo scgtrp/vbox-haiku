@@ -31,6 +31,8 @@ const char* VBoxDefs::GUI_Seamless = "GUI/Seamless";
 const char* VBoxDefs::GUI_AutoresizeGuest = "GUI/AutoresizeGuest";
 const char* VBoxDefs::GUI_FirstRun = "GUI/FirstRun";
 const char* VBoxDefs::GUI_SaveMountedAtRuntime = "GUI/SaveMountedAtRuntime";
+const char* VBoxDefs::GUI_ShowMiniToolBar = "GUI/ShowMiniToolBar";
+const char* VBoxDefs::GUI_MiniToolBarAutoHide = "GUI/MiniToolBarAutoHide";
 const char* VBoxDefs::GUI_LastCloseAction = "GUI/LastCloseAction";
 const char* VBoxDefs::GUI_SuppressMessages = "GUI/SuppressMessages";
 const char* VBoxDefs::GUI_PermanentSharedFoldersAtRuntime = "GUI/PermanentSharedFoldersAtRuntime";
@@ -38,12 +40,13 @@ const char* VBoxDefs::GUI_PermanentSharedFoldersAtRuntime = "GUI/PermanentShared
 const char* VBoxDefs::GUI_LicenseKey = "GUI/LicenseAgreed";
 #endif
 const char* VBoxDefs::GUI_RegistrationDlgWinID = "GUI/RegistrationDlgWinID";
-const char* VBoxDefs::GUI_RegistrationData = "GUI/RegistrationData";
+const char* VBoxDefs::GUI_RegistrationData = "GUI/SUNOnlineData";
 const char* VBoxDefs::GUI_UpdateDlgWinID = "GUI/UpdateDlgWinID";
 const char* VBoxDefs::GUI_UpdateDate = "GUI/UpdateDate";
 const char* VBoxDefs::GUI_UpdateCheckCount = "GUI/UpdateCheckCount";
 const char* VBoxDefs::GUI_LastVMSelected = "GUI/LastVMSelected";
 const char* VBoxDefs::GUI_InfoDlgState = "GUI/InfoDlgState";
+const char* VBoxDefs::GUI_RenderMode = "GUI/RenderMode";
 #ifdef VBOX_GUI_WITH_SYSTRAY
 const char* VBoxDefs::GUI_TrayIconWinID = "GUI/TrayIcon/WinID";
 const char* VBoxDefs::GUI_MainWindowCount = "GUI/MainWindowCount";
@@ -52,3 +55,7 @@ const char* VBoxDefs::GUI_MainWindowCount = "GUI/MainWindowCount";
 const char* VBoxDefs::GUI_RealtimeDockIconUpdateEnabled = "GUI/RealtimeDockIconUpdateEnabled";
 #endif /* Q_WS_MAC */
 const char* VBoxDefs::GUI_PassCAD = "GUI/PassCAD";
+const char* VBoxDefs::GUI_Export_StorageType = "GUI/Export/StorageType";
+const char* VBoxDefs::GUI_Export_Username = "GUI/Export/Username";
+const char* VBoxDefs::GUI_Export_Hostname = "GUI/Export/Hostname";
+const char* VBoxDefs::GUI_Export_Bucket = "GUI/Export/Bucket";

@@ -53,7 +53,6 @@
 # endif
 # include <errno.h>
 #endif /* RT_OS_LINUX */
-#include <string>
 #include <vector>
 
 /*******************************************************************************
@@ -93,7 +92,7 @@ static int halFindDeviceStringMatch (DBusConnection *pConnection,
 static int halFindDeviceStringMatchVector (DBusConnection *pConnection,
                                            const char *pszKey,
                                            const char *pszValue,
-                                           std::vector<std::string> *pMatches);
+                                           std::vector<iprt::MiniString> *pMatches);
 */
 static int halGetPropertyStrings (DBusConnection *pConnection,
                                   const char *pszUdi, size_t cKeys,
@@ -103,14 +102,14 @@ static int halGetPropertyStrings (DBusConnection *pConnection,
 static int halGetPropertyStringsVector (DBusConnection *pConnection,
                                         const char *pszUdi, size_t cProps,
                                         const char **papszKeys,
-                                        std::vector<std::string> *pMatches,
+                                        std::vector<iprt::MiniString> *pMatches,
                                         bool *pfMatches, bool *pfSuccess);
 */
 static int getDriveInfoFromHal(DriveInfoList *pList, bool isDVD,
                                bool *pfSuccess);
 static int getUSBDeviceInfoFromHal(USBDeviceInfoList *pList, bool *pfSuccess);
 static int getOldUSBDeviceInfoFromHal(USBDeviceInfoList *pList, bool *pfSuccess);
-static int getUSBInterfacesFromHal(std::vector <std::string> *pList,
+static int getUSBInterfacesFromHal(std::vector <iprt::MiniString> *pList,
                                    const char *pcszUdi, bool *pfSuccess);
 static DBusHandlerResult dbusFilterFunction (DBusConnection *pConnection,
                                              DBusMessage *pMessage, void *pvUser);
@@ -142,14 +141,7 @@ int VBoxMainDriveInfo::updateDVDs ()
         {
             // this is a good guess usually
             if (validateDevice("/dev/cdrom", true))
-                try
-                {
-                    mDVDList.push_back (DriveInfo ("/dev/cdrom"));
-                }
-                catch (std::bad_alloc)
-                {
-                    rc = VERR_NO_MEMORY;
-                }
+                mDVDList.push_back(DriveInfo ("/dev/cdrom"));
 
             // check the mounted drives
             rc = getDVDInfoFromMTab((char*)"/etc/mtab", &mDVDList);
@@ -160,7 +152,7 @@ int VBoxMainDriveInfo::updateDVDs ()
         }
 #endif
     }
-    catch (std::bad_alloc)
+    catch(std::bad_alloc &e)
     {
         rc = VERR_NO_MEMORY;
     }
@@ -197,21 +189,14 @@ int VBoxMainDriveInfo::updateFloppies ()
             char devName[10];
             for (int i = 0; i <= 7; i++)
             {
-                sprintf(devName, "/dev/fd%d", i);
+                RTStrPrintf(devName, sizeof(devName), "/dev/fd%d", i);
                 if (validateDevice(devName, false))
-                    try
-                    {
-                        mFloppyList.push_back (DriveInfo (devName));
-                    }
-                    catch (std::bad_alloc)
-                    {
-                        rc = VERR_NO_MEMORY;
-                    }
+                    mFloppyList.push_back (DriveInfo (devName));
             }
         }
 #endif
     }
-    catch (std::bad_alloc)
+    catch(std::bad_alloc &e)
     {
         rc = VERR_NO_MEMORY;
     }
@@ -243,7 +228,7 @@ int VBoxMainUSBDeviceInfo::UpdateDevices ()
 #endif /* VBOX_WITH_DBUS defined */
 #endif /* RT_OS_LINUX */
     }
-    catch (std::bad_alloc)
+    catch(std::bad_alloc &e)
     {
         rc = VERR_NO_MEMORY;
     }
@@ -441,45 +426,46 @@ int getDriveInfoFromEnv(const char *pszVar, DriveInfoList *pList,
                   pList, isDVD, pfSuccess));
     int rc = VINF_SUCCESS;
     bool success = false;
-    RTMemAutoPtr<char, RTStrFree> drive;
-    const char *pszValue = RTEnvGet (pszVar);
-    if (pszValue != NULL)
+
+    try
     {
-        drive = RTStrDup (pszValue);
-        if (!drive)
-            rc = VERR_NO_MEMORY;
-    }
-    if (pszValue != NULL && RT_SUCCESS (rc))
-    {
-        char *pDrive = drive.get();
-        char *pDriveNext = strchr (pDrive, ':');
-        while (pDrive != NULL && *pDrive != '\0')
+        RTMemAutoPtr<char, RTStrFree> drive;
+        const char *pszValue = RTEnvGet (pszVar);
+        if (pszValue != NULL)
         {
-            if (pDriveNext != NULL)
-                *pDriveNext = '\0';
-            if (validateDevice(pDrive, isDVD))
+            drive = RTStrDup (pszValue);
+            if (!drive)
+                rc = VERR_NO_MEMORY;
+        }
+        if (pszValue != NULL && RT_SUCCESS (rc))
+        {
+            char *pDrive = drive.get();
+            char *pDriveNext = strchr (pDrive, ':');
+            while (pDrive != NULL && *pDrive != '\0')
             {
-                try
+                if (pDriveNext != NULL)
+                    *pDriveNext = '\0';
+                if (validateDevice(pDrive, isDVD))
                 {
                     pList->push_back (DriveInfo (pDrive));
+                    success = true;
                 }
-                catch (std::bad_alloc)
+                if (pDriveNext != NULL)
                 {
-                    rc = VERR_NO_MEMORY;
+                    pDrive = pDriveNext + 1;
+                    pDriveNext = strchr (pDrive, ':');
                 }
-                success = true;
+                else
+                    pDrive = NULL;
             }
-            if (pDriveNext != NULL)
-            {
-                pDrive = pDriveNext + 1;
-                pDriveNext = strchr (pDrive, ':');
-            }
-            else
-                pDrive = NULL;
         }
+        if (pfSuccess != NULL)
+            *pfSuccess = success;
     }
-    if (pfSuccess != NULL)
-        *pfSuccess = success;
+    catch(std::bad_alloc &e)
+    {
+        rc = VERR_NO_MEMORY;
+    }
     LogFlowFunc (("rc=%Rrc, success=%d\n", rc, success));
     return rc;
 }
@@ -499,73 +485,73 @@ int getDVDInfoFromMTab(char *mountTable, DriveInfoList *pList)
     FILE *mtab = setmntent(mountTable, "r");
     if (mtab)
     {
-        struct mntent *mntent;
-        RTMemAutoPtr <char, RTStrFree> mnt_type, mnt_dev;
-        char *tmp;
-        while (RT_SUCCESS (rc) && (mntent = getmntent(mtab)))
+        try
         {
-            mnt_type = RTStrDup (mntent->mnt_type);
-            mnt_dev = RTStrDup (mntent->mnt_fsname);
-            if (!mnt_type || !mnt_dev)
-                rc = VERR_NO_MEMORY;
-            // supermount fs case
-            if (RT_SUCCESS (rc) && strcmp(mnt_type.get(), "supermount") == 0)
+            struct mntent *mntent;
+            RTMemAutoPtr <char, RTStrFree> mnt_type, mnt_dev;
+            char *tmp;
+            while (RT_SUCCESS (rc) && (mntent = getmntent(mtab)))
             {
-                tmp = strstr(mntent->mnt_opts, "fs=");
-                if (tmp)
+                mnt_type = RTStrDup (mntent->mnt_type);
+                mnt_dev = RTStrDup (mntent->mnt_fsname);
+                if (!mnt_type || !mnt_dev)
+                    rc = VERR_NO_MEMORY;
+                // supermount fs case
+                if (RT_SUCCESS (rc) && strcmp(mnt_type.get(), "supermount") == 0)
                 {
-                    mnt_type = RTStrDup(tmp + strlen("fs="));
-                    if (!mnt_type)
-                        rc = VERR_NO_MEMORY;
-                    else
+                    tmp = strstr(mntent->mnt_opts, "fs=");
+                    if (tmp)
                     {
-                        tmp = strchr(mnt_type.get(), ',');
-                        if (tmp)
-                            *tmp = '\0';
-                    }
-                }
-                tmp = strstr(mntent->mnt_opts, "dev=");
-                if (tmp)
-                {
-                    mnt_dev = RTStrDup(tmp + strlen("dev="));
-                    if (!mnt_dev)
-                        rc = VERR_NO_MEMORY;
-                    else
-                    {
-                        tmp = strchr(mnt_dev.get(), ',');
-                        if (tmp)
-                            *tmp = '\0';
-                    }
-                }
-            }
-            // use strstr here to cover things fs types like "udf,iso9660"
-            if (RT_SUCCESS (rc) && strstr(mnt_type.get(), "iso9660") == 0)
-            {
-                if (validateDevice(mnt_dev.get(), true))
-                {
-                    bool insert = true;
-                    struct stat srcInfo;
-                    if (stat (mnt_dev.get(), &srcInfo) < 0)
-                        insert = false;
-                    for (DriveInfoList::const_iterator it = pList->begin();
-                         insert && it != pList->end(); ++it)
-                    {
-                        struct stat destInfo;
-                        if (   (stat (it->mDevice.c_str(), &destInfo) == 0)
-                            && (srcInfo.st_rdev == destInfo.st_rdev))
-                            insert = false;
-                    }
-                    if (insert)
-                        try
-                        {
-                            pList->push_back (DriveInfo (mnt_dev.get()));
-                        }
-                        catch (std::bad_alloc)
-                        {
+                        mnt_type = RTStrDup(tmp + strlen("fs="));
+                        if (!mnt_type)
                             rc = VERR_NO_MEMORY;
+                        else
+                        {
+                            tmp = strchr(mnt_type.get(), ',');
+                            if (tmp)
+                                *tmp = '\0';
                         }
+                    }
+                    tmp = strstr(mntent->mnt_opts, "dev=");
+                    if (tmp)
+                    {
+                        mnt_dev = RTStrDup(tmp + strlen("dev="));
+                        if (!mnt_dev)
+                            rc = VERR_NO_MEMORY;
+                        else
+                        {
+                            tmp = strchr(mnt_dev.get(), ',');
+                            if (tmp)
+                                *tmp = '\0';
+                        }
+                    }
+                }
+                // use strstr here to cover things fs types like "udf,iso9660"
+                if (RT_SUCCESS (rc) && strstr(mnt_type.get(), "iso9660") == 0)
+                {
+                    if (validateDevice(mnt_dev.get(), true))
+                    {
+                        bool insert = true;
+                        struct stat srcInfo;
+                        if (stat (mnt_dev.get(), &srcInfo) < 0)
+                            insert = false;
+                        for (DriveInfoList::const_iterator it = pList->begin();
+                            insert && it != pList->end(); ++it)
+                        {
+                            struct stat destInfo;
+                            if (   (stat (it->mDevice.c_str(), &destInfo) == 0)
+                                && (srcInfo.st_rdev == destInfo.st_rdev))
+                                insert = false;
+                        }
+                        if (insert)
+                            pList->push_back (DriveInfo (mnt_dev.get()));
+                    }
                 }
             }
+        }
+        catch(std::bad_alloc &e)
+        {
+            rc = VERR_NO_MEMORY;
         }
         endmntent(mtab);
     }
@@ -826,20 +812,20 @@ int halFindDeviceStringMatch (DBusConnection *pConnection, const char *pszKey,
 
 /**
  * Find the UDIs of hal entries that contain Key=Value property and return the
- * result on the end of a vector of std::string.
+ * result on the end of a vector of iprt::MiniString.
  * @returns iprt status code.  If a non-fatal error occurs, we return success
  *          but set *pfSuccess to false.
  * @param   pConnection an initialised connection DBus
  * @param   pszKey      the property key
  * @param   pszValue    the property value
- * @param   pMatches    pointer to an array of std::string to append the
+ * @param   pMatches    pointer to an array of iprt::MiniString to append the
  *                      results to.  NOT optional.
  * @param   pfSuccess   will be set to true if the operation succeeds
  */
 /* static */
 int halFindDeviceStringMatchVector (DBusConnection *pConnection,
                                     const char *pszKey, const char *pszValue,
-                                    std::vector<std::string> *pMatches,
+                                    std::vector<iprt::MiniString> *pMatches,
                                     bool *pfSuccess)
 {
     AssertPtrReturn (pConnection, VERR_INVALID_POINTER);
@@ -881,7 +867,7 @@ int halFindDeviceStringMatchVector (DBusConnection *pConnection,
         {
             pMatches->push_back(pszUdi);
         }
-        catch (std::bad_alloc)
+        catch(std::bad_alloc &e)
         {
             rc = VERR_NO_MEMORY;
         }
@@ -997,7 +983,7 @@ int halGetPropertyStrings (DBusConnection *pConnection, const char *pszUdi,
  * @param   pszUdi       the Udi of the device
  * @param   cProps       the number of property values to look up
  * @param   papszKeys    the keys of the properties to be looked up
- * @param   pMatches     pointer to an empty array of std::string to append the
+ * @param   pMatches     pointer to an empty array of iprt::MiniString to append the
  *                       results to.  NOT optional.
  * @param   pfMatches    pointer to an array of boolean values indicating
  *                       whether the respective property is a string.  If this
@@ -1009,7 +995,7 @@ int halGetPropertyStrings (DBusConnection *pConnection, const char *pszUdi,
 int halGetPropertyStringsVector (DBusConnection *pConnection,
                                  const char *pszUdi, size_t cProps,
                                  const char **papszKeys,
-                                 std::vector<std::string> *pMatches,
+                                 std::vector<iprt::MiniString> *pMatches,
                                  bool *pfMatches, bool *pfSuccess)
 {
     AssertPtrReturn (pConnection, VERR_INVALID_POINTER);
@@ -1039,7 +1025,7 @@ int halGetPropertyStringsVector (DBusConnection *pConnection,
         {
             pMatches->push_back(fMatches ? values[i] : "");
         }
-        catch (std::bad_alloc)
+        catch(std::bad_alloc &e)
         {
             rc = VERR_NO_MEMORY;
         }
@@ -1082,61 +1068,64 @@ int getDriveInfoFromHal(DriveInfoList *pList, bool isDVD, bool *pfSuccess)
     RTMemAutoPtr <DBusConnection, VBoxHalShutdown> dbusConnection;
     DBusMessageIter iterFind, iterUdis;
 
-    rc = halInit (&dbusConnection);
-    if (!dbusConnection)
-        halSuccess = false;
-    if (halSuccess && RT_SUCCESS (rc))
+    try
     {
-        rc = halFindDeviceStringMatch (dbusConnection.get(), "storage.drive_type",
-                                       isDVD ? "cdrom" : "floppy", &replyFind);
-        if (!replyFind)
+        rc = halInit (&dbusConnection);
+        if (!dbusConnection)
             halSuccess = false;
-    }
-    if (halSuccess && RT_SUCCESS (rc))
-    {
-        dbus_message_iter_init (replyFind.get(), &iterFind);
-        if (dbus_message_iter_get_arg_type (&iterFind) != DBUS_TYPE_ARRAY)
-            halSuccess = false;
-    }
-    if (halSuccess && RT_SUCCESS (rc))
-        dbus_message_iter_recurse (&iterFind, &iterUdis);
-    for (;    halSuccess && RT_SUCCESS (rc)
-           && dbus_message_iter_get_arg_type (&iterUdis) == DBUS_TYPE_STRING;
-         dbus_message_iter_next(&iterUdis))
-    {
-        /* Now get all properties from the iterator */
-        const char *pszUdi;
-        dbus_message_iter_get_basic (&iterUdis, &pszUdi);
-        static const char *papszKeys[] =
-                { "block.device", "info.product", "info.vendor" };
-        char *papszValues[RT_ELEMENTS (papszKeys)];
-        rc = halGetPropertyStrings (dbusConnection.get(), pszUdi, RT_ELEMENTS (papszKeys),
-                                    papszKeys, papszValues, &replyGet);
-        std::string description;
-        const char *pszDevice = papszValues[0], *pszProduct = papszValues[1],
-                   *pszVendor = papszValues[2];
-        if (!!replyGet && pszDevice == NULL)
-            halSuccess = false;
-        if (!!replyGet && pszDevice != NULL)
+        if (halSuccess && RT_SUCCESS (rc))
         {
-            if ((pszVendor != NULL) && (pszVendor[0] != '\0'))
-                (description += pszVendor) += " ";
-            if ((pszProduct != NULL && pszProduct[0] != '\0'))
-                description += pszProduct;
-            try
+            rc = halFindDeviceStringMatch (dbusConnection.get(), "storage.drive_type",
+                                        isDVD ? "cdrom" : "floppy", &replyFind);
+            if (!replyFind)
+                halSuccess = false;
+        }
+        if (halSuccess && RT_SUCCESS (rc))
+        {
+            dbus_message_iter_init (replyFind.get(), &iterFind);
+            if (dbus_message_iter_get_arg_type (&iterFind) != DBUS_TYPE_ARRAY)
+                halSuccess = false;
+        }
+        if (halSuccess && RT_SUCCESS (rc))
+            dbus_message_iter_recurse (&iterFind, &iterUdis);
+        for (;    halSuccess && RT_SUCCESS (rc)
+            && dbus_message_iter_get_arg_type (&iterUdis) == DBUS_TYPE_STRING;
+            dbus_message_iter_next(&iterUdis))
+        {
+            /* Now get all properties from the iterator */
+            const char *pszUdi;
+            dbus_message_iter_get_basic (&iterUdis, &pszUdi);
+            static const char *papszKeys[] =
+                    { "block.device", "info.product", "info.vendor" };
+            char *papszValues[RT_ELEMENTS (papszKeys)];
+            rc = halGetPropertyStrings (dbusConnection.get(), pszUdi, RT_ELEMENTS (papszKeys),
+                                        papszKeys, papszValues, &replyGet);
+            iprt::MiniString description;
+            const char *pszDevice = papszValues[0], *pszProduct = papszValues[1],
+                    *pszVendor = papszValues[2];
+            if (!!replyGet && pszDevice == NULL)
+                halSuccess = false;
+            if (!!replyGet && pszDevice != NULL)
             {
+                if ((pszVendor != NULL) && (pszVendor[0] != '\0'))
+                {
+                    description.append(pszVendor);
+                    description.append(" ");
+                }
+                if ((pszProduct != NULL && pszProduct[0] != '\0'))
+                    description.append(pszProduct);
                 pList->push_back (DriveInfo (pszDevice, pszUdi, description));
             }
-            catch (std::bad_alloc)
-            {
-                rc = VERR_NO_MEMORY;
-            }
         }
+        if (dbusError.HasName (DBUS_ERROR_NO_MEMORY))
+            rc = VERR_NO_MEMORY;
+        if (pfSuccess != NULL)
+            *pfSuccess = halSuccess;
     }
-    if (dbusError.HasName (DBUS_ERROR_NO_MEMORY))
+    catch(std::bad_alloc &e)
+    {
         rc = VERR_NO_MEMORY;
-    if (pfSuccess != NULL)
-        *pfSuccess = halSuccess;
+    }
     LogFlow (("rc=%Rrc, halSuccess=%d\n", rc, halSuccess));
     dbusError.FlowLog();
     return rc;
@@ -1212,7 +1201,7 @@ int getUSBDeviceInfoFromHal(USBDeviceInfoList *pList, bool *pfSuccess)
                 {
                     pList->push_back (info);
                 }
-                catch (std::bad_alloc)
+                catch(std::bad_alloc &e)
                 {
                     rc = VERR_NO_MEMORY;
                 }
@@ -1298,7 +1287,7 @@ int getOldUSBDeviceInfoFromHal(USBDeviceInfoList *pList, bool *pfSuccess)
                 {
                     pList->push_back (info);
                 }
-                catch (std::bad_alloc)
+                catch(std::bad_alloc &e)
                 {
                     rc = VERR_NO_MEMORY;
                 }
@@ -1327,7 +1316,7 @@ int getOldUSBDeviceInfoFromHal(USBDeviceInfoList *pList, bool *pfSuccess)
  * @returns IPRT status code
  */
 /* static */
-int getUSBInterfacesFromHal(std::vector <std::string> *pList,
+int getUSBInterfacesFromHal(std::vector<iprt::MiniString> *pList,
                             const char *pcszUdi, bool *pfSuccess)
 {
     AssertReturn(VALID_PTR (pList) && VALID_PTR (pcszUdi) &&
@@ -1387,7 +1376,7 @@ int getUSBInterfacesFromHal(std::vector <std::string> *pList,
             {
                 pList->push_back (pszSysfsPath);
             }
-            catch (std::bad_alloc)
+            catch(std::bad_alloc &e)
             {
                rc = VERR_NO_MEMORY;
             }

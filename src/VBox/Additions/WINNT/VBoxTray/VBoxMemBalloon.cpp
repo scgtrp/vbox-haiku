@@ -1,7 +1,6 @@
+/* $Id: $ */
 /** @file
- *
- * VBoxMemBalloon - Memory balloon notification
- *
+ * VBoxMemBalloon - Memory balloon notification.
  */
 
 /*
@@ -25,7 +24,7 @@
 #include "VBoxTray.h"
 #include "VBoxMemBalloon.h"
 #include <VBoxDisplay.h>
-#include <VBox/VBoxDev.h>
+#include <VBox/VMMDev.h>
 #include <VBoxGuestInternal.h>
 #include <iprt/assert.h>
 #include "helpers.h"
@@ -130,7 +129,7 @@ unsigned __stdcall VBoxMemBalloonThread(void *pInstance)
                 else
                     Log(("VBoxMemBalloonThread: DeviceIoControl (balloon) failed with %d\n", GetLastError()));
             }
-        } 
+        }
         else
         {
             Log(("VBoxMemBalloonThread: error 0 from DeviceIoControl VBOXGUEST_IOCTL_WAITEVENT\n"));
@@ -142,7 +141,7 @@ unsigned __stdcall VBoxMemBalloonThread(void *pInstance)
                 break;
             }
         }
-    } 
+    }
     while (!fTerminate);
 
     maskInfo.u32OrMask = 0;

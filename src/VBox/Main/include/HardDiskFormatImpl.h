@@ -45,7 +45,7 @@ class ATL_NO_VTABLE HardDiskFormat :
     public VirtualBoxBaseNEXT,
     public VirtualBoxSupportErrorInfoImpl <HardDiskFormat, IHardDiskFormat>,
     public VirtualBoxSupportTranslation <HardDiskFormat>,
-    public IHardDiskFormat
+    VBOX_SCRIPTABLE_IMPL(IHardDiskFormat)
 {
 public:
 
@@ -81,6 +81,7 @@ public:
     BEGIN_COM_MAP(HardDiskFormat)
         COM_INTERFACE_ENTRY (ISupportErrorInfo)
         COM_INTERFACE_ENTRY (IHardDiskFormat)
+        COM_INTERFACE_ENTRY (IDispatch)
     END_COM_MAP()
 
     NS_DECL_ISUPPORTS

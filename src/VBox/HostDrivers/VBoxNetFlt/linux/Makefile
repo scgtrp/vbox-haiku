@@ -25,6 +25,11 @@
 # (We have to support basic cross building (ARCH=i386|x86_64).)
 # While at it, warn about BUILD_* vars found to help with user problems.
 #
+ifeq ($(filter-out x86_64 amd64 AMD64,$(shell uname -m)),)
+ BUILD_TARGET_ARCH_DEF := amd64
+else
+ BUILD_TARGET_ARCH_DEF := x86
+endif
 ifneq ($(filter-out amd64 x86,$(BUILD_TARGET_ARCH)),)
  $(warning Ignoring unknown BUILD_TARGET_ARCH value '$(BUILD_TARGET_ARCH)'.)
  BUILD_TARGET_ARCH :=
@@ -36,15 +41,13 @@ ifeq ($(BUILD_TARGET_ARCH),)
   ifeq ($(ARCH),i386)
    BUILD_TARGET_ARCH := x86
   else
-   ifeq ($(filter-out x86_64 amd64 AMD64,$(shell uname -m)),)
-    BUILD_TARGET_ARCH := amd64
-   else
-    BUILD_TARGET_ARCH := x86
-   endif
+   BUILD_TARGET_ARCH := $(BUILD_TARGET_ARCH_DEF)
   endif
  endif
 else
- $(warning Using BUILD_TARGET_ARCH='$(BUILD_TARGET_ARCH)' from the $(origin BUILD_TARGET_ARCH).)
+ ifneq ($(BUILD_TARGET_ARCH),$(BUILD_TARGET_ARCH_DEF))
+  $(warning Using BUILD_TARGET_ARCH='$(BUILD_TARGET_ARCH)' from the $(origin BUILD_TARGET_ARCH).)
+ endif
 endif
 
 ifneq ($(filter-out release profile debug strict,$(BUILD_TYPE)),)
@@ -54,7 +57,9 @@ endif
 ifeq ($(BUILD_TYPE),)
  BUILD_TYPE := release
 else
- $(warning Using BUILD_TYPE='$(BUILD_TYPE)' from the $(origin BUILD_TYPE).)
+ ifneq ($(BUILD_TYPE),release)
+  $(warning Using BUILD_TYPE='$(BUILD_TYPE)' from the $(origin BUILD_TYPE).)
+ endif
 endif
 
 # override is required by the Debian guys
@@ -65,46 +70,7 @@ OBJS   = \
 	SUPR0IdcClient.o \
 	SUPR0IdcClientComponent.o \
 	SUPR0IdcClient-linux.o \
-	r0drv/alloc-r0drv.o \
-	r0drv/initterm-r0drv.o \
-	r0drv/memobj-r0drv.o \
-	r0drv/mpnotification-r0drv.o \
-	r0drv/powernotification-r0drv.o \
-	r0drv/linux/assert-r0drv-linux.o \
-	r0drv/linux/alloc-r0drv-linux.o \
-	r0drv/linux/initterm-r0drv-linux.o \
-	r0drv/linux/memobj-r0drv-linux.o \
-	r0drv/linux/mp-r0drv-linux.o \
-	r0drv/linux/mpnotification-r0drv-linux.o \
-	r0drv/linux/process-r0drv-linux.o \
-	r0drv/linux/semevent-r0drv-linux.o \
-	r0drv/linux/semeventmulti-r0drv-linux.o \
-	r0drv/linux/semfastmutex-r0drv-linux.o \
-	r0drv/linux/spinlock-r0drv-linux.o \
-	r0drv/linux/thread-r0drv-linux.o \
-	r0drv/linux/thread2-r0drv-linux.o \
-	r0drv/linux/time-r0drv-linux.o \
-	common/err/RTErrConvertFromErrno.o \
-	common/err/RTErrConvertToErrno.o \
-	common/log/log.o \
-	common/log/logellipsis.o \
-	common/log/logrel.o \
-	common/log/logrelellipsis.o \
-	common/log/logcom.o \
-	common/log/logformat.o \
-	common/string/strformat.o \
-	common/string/strformatrt.o \
-	common/string/strformattype.o \
-	common/string/strprintf.o \
-	common/string/strtonum.o \
-	r0drv/linux/RTLogWriteDebugger-r0drv-linux.o \
-	generic/RTAssertShouldPanic-generic.o \
-	generic/RTLogWriteStdErr-stub-generic.o \
-	generic/RTLogWriteStdOut-stub-generic.o \
-	generic/RTLogWriteUser-generic.o \
-	generic/uuid-generic.o \
-	VBox/log-vbox.o \
-	VBox/strformat-vbox.o
+
 ifeq ($(BUILD_TARGET_ARCH),x86)
 OBJS += math/gcc/divdi3.o \
 	math/gcc/moddi3.o \
@@ -112,9 +78,6 @@ OBJS += math/gcc/divdi3.o \
 	math/gcc/udivdi3.o \
         math/gcc/divdi3.o \
 	math/gcc/umoddi3.o
-endif
-ifeq ($(BUILD_TARGET_ARCH),amd64)
-OBJS += alloc/heapsimple.o
 endif
 
 ifneq ($(MAKECMDGOALS),clean)
@@ -140,7 +103,7 @@ ifeq ($(KERNELRELEASE),)
 		      KERN_DIR=<directory> and run Make again.)
   endif
   # check if versions match -- works only for later 2.6 kernels
-  VBOX_KERN_VER := $(shell $(MAKE) -sC $(KERN_DIR) kernelrelease 2> /dev/null || true)
+  VBOX_KERN_VER := $(shell $(MAKE) -sC $(KERN_DIR) --no-print-directory kernelrelease 2> /dev/null || true)
   ifneq ($(VBOX_KERN_VER),)
    ifneq ($(VBOX_KERN_VER),$(shell uname -r))
     $(error Error: /usr/src/linux (version $(VBOX_KERN_VER)) does not match \

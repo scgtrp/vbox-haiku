@@ -26,7 +26,7 @@
 #include <VBox/com/com.h>
 #include <VBox/com/array.h>
 #include <VBox/com/ErrorInfo.h>
-#include <VBox/com/errorprint2.h>
+#include <VBox/com/errorprint.h>
 #include <VBox/com/EventQueue.h>
 
 #include <VBox/com/VirtualBox.h>
@@ -65,6 +65,7 @@ int handleModifyVM(HandlerArg *a)
     char *nestedpaging = NULL;
     char *vtxvpid = NULL;
     char *pae = NULL;
+    uint32_t numCpus = UINT32_MAX;
     char *ioapic = NULL;
     uint32_t monitorcount = ~0;
     char *accelerate3d = NULL;
@@ -219,6 +220,15 @@ int handleModifyVM(HandlerArg *a)
                 return errorArgument("Missing argument to '%s'", a->argv[i]);
             i++;
             pae = a->argv[i];
+        }
+        else if (!strcmp(a->argv[i], "--cpus"))
+        {
+            if (a->argc <= i + 1)
+                return errorArgument("Missing argument to '%s'", a->argv[i]);
+            i++;
+            numCpus = RTStrToUInt32(a->argv[i]);
+            if (numCpus == UINT32_MAX)
+                return errorArgument("The number of cpus cannot be 0.", a->argv[i]);
         }
         else if (   !strcmp(a->argv[i], "--monitorcount")
                  || !strcmp(a->argv[i], "-monitorcount"))
@@ -669,6 +679,11 @@ int handleModifyVM(HandlerArg *a)
                         return errorArgument("Uart pipe must start with \\\\.\\pipe\\");
 #endif
                 }
+                else if (!strcmp(a->argv[i], "file"))
+                {
+                    uarts_mode[n - 1] = a->argv[i];
+                    i++;
+                }
                 else
                 {
                     uarts_mode[n - 1] = (char*)"device";
@@ -838,8 +853,8 @@ int handleModifyVM(HandlerArg *a)
 
     /* try to find the given machine */
     ComPtr <IMachine> machine;
-    Guid uuid (a->argv[0]);
-    if (!uuid.isEmpty())
+    Bstr uuid (a->argv[0]);
+    if (!Guid(uuid).isEmpty())
     {
         CHECK_ERROR (a->virtualBox, GetMachine (uuid, machine.asOutParam()));
     }
@@ -922,15 +937,11 @@ int handleModifyVM(HandlerArg *a)
         {
             if (!strcmp(hwvirtex, "on"))
             {
-                CHECK_ERROR(machine, COMSETTER(HWVirtExEnabled)(TSBool_True));
+                CHECK_ERROR(machine, COMSETTER(HWVirtExEnabled)(TRUE));
             }
             else if (!strcmp(hwvirtex, "off"))
             {
-                CHECK_ERROR(machine, COMSETTER(HWVirtExEnabled)(TSBool_False));
-            }
-            else if (!strcmp(hwvirtex, "default"))
-            {
-                CHECK_ERROR(machine, COMSETTER(HWVirtExEnabled)(TSBool_Default));
+                CHECK_ERROR(machine, COMSETTER(HWVirtExEnabled)(FALSE));
             }
             else
             {
@@ -989,6 +1000,10 @@ int handleModifyVM(HandlerArg *a)
                 rc = E_FAIL;
                 break;
             }
+        }
+        if (numCpus != UINT32_MAX)
+        {
+            CHECK_ERROR(machine, COMSETTER(CPUCount)(numCpus));
         }
         if (monitorcount != ~0U)
         {
@@ -1105,17 +1120,17 @@ int handleModifyVM(HandlerArg *a)
             else
             {
                 /* first guess is that it's a UUID */
-                Guid uuid(hdds[0]);
+                Bstr uuid(hdds[0]);
                 ComPtr<IHardDisk> hardDisk;
                 rc = a->virtualBox->GetHardDisk(uuid, hardDisk.asOutParam());
                 /* not successful? Then it must be a filename */
                 if (!hardDisk)
                 {
-                    CHECK_ERROR(a->virtualBox, FindHardDisk(Bstr(hdds[0]), hardDisk.asOutParam()));
+                    rc = a->virtualBox->FindHardDisk(Bstr(hdds[0]), hardDisk.asOutParam());
                     if (FAILED(rc))
                     {
                         /* open the new hard disk object */
-                        CHECK_ERROR(a->virtualBox, OpenHardDisk(Bstr(hdds[0]), AccessMode_ReadWrite, hardDisk.asOutParam()));
+                        CHECK_ERROR(a->virtualBox, OpenHardDisk(Bstr(hdds[0]), AccessMode_ReadWrite, false, Bstr(""), false, Bstr(""), hardDisk.asOutParam()));
                     }
                 }
                 if (hardDisk)
@@ -1138,17 +1153,17 @@ int handleModifyVM(HandlerArg *a)
             else
             {
                 /* first guess is that it's a UUID */
-                Guid uuid(hdds[1]);
+                Bstr uuid(hdds[1]);
                 ComPtr<IHardDisk> hardDisk;
                 rc = a->virtualBox->GetHardDisk(uuid, hardDisk.asOutParam());
                 /* not successful? Then it must be a filename */
                 if (!hardDisk)
                 {
-                    CHECK_ERROR(a->virtualBox, FindHardDisk(Bstr(hdds[1]), hardDisk.asOutParam()));
+                    rc = a->virtualBox->FindHardDisk(Bstr(hdds[1]), hardDisk.asOutParam());
                     if (FAILED(rc))
                     {
                         /* open the new hard disk object */
-                        CHECK_ERROR(a->virtualBox, OpenHardDisk(Bstr(hdds[1]), AccessMode_ReadWrite, hardDisk.asOutParam()));
+                        CHECK_ERROR(a->virtualBox, OpenHardDisk(Bstr(hdds[1]), AccessMode_ReadWrite, false, Bstr(""), false, Bstr(""), hardDisk.asOutParam()));
                     }
                 }
                 if (hardDisk)
@@ -1171,17 +1186,17 @@ int handleModifyVM(HandlerArg *a)
             else
             {
                 /* first guess is that it's a UUID */
-                Guid uuid(hdds[2]);
+                Bstr uuid(hdds[2]);
                 ComPtr<IHardDisk> hardDisk;
                 rc = a->virtualBox->GetHardDisk(uuid, hardDisk.asOutParam());
                 /* not successful? Then it must be a filename */
                 if (!hardDisk)
                 {
-                    CHECK_ERROR(a->virtualBox, FindHardDisk(Bstr(hdds[2]), hardDisk.asOutParam()));
+                    rc = a->virtualBox->FindHardDisk(Bstr(hdds[2]), hardDisk.asOutParam());
                     if (FAILED(rc))
                     {
                         /* open the new hard disk object */
-                        CHECK_ERROR(a->virtualBox, OpenHardDisk(Bstr(hdds[2]), AccessMode_ReadWrite, hardDisk.asOutParam()));
+                        CHECK_ERROR(a->virtualBox, OpenHardDisk(Bstr(hdds[2]), AccessMode_ReadWrite, false, Bstr(""), false, Bstr(""), hardDisk.asOutParam()));
                     }
                 }
                 if (hardDisk)
@@ -1239,7 +1254,7 @@ int handleModifyVM(HandlerArg *a)
             else
             {
                 /* first assume it's a UUID */
-                Guid uuid(dvd);
+                Bstr uuid(dvd);
                 ComPtr<IDVDImage> dvdImage;
                 rc = a->virtualBox->GetDVDImage(uuid, dvdImage.asOutParam());
                 if (FAILED(rc) || !dvdImage)
@@ -1249,7 +1264,7 @@ int handleModifyVM(HandlerArg *a)
                     /* not registered, do that on the fly */
                     if (!dvdImage)
                     {
-                        Guid emptyUUID;
+                        Bstr emptyUUID;
                         CHECK_ERROR(a->virtualBox, OpenDVDImage(Bstr(dvd), emptyUUID, dvdImage.asOutParam()));
                     }
                 }
@@ -1276,15 +1291,15 @@ int handleModifyVM(HandlerArg *a)
             ComPtr<IStorageController> storageController;
             CHECK_ERROR(machine, GetStorageControllerByName(Bstr("IDE"), storageController.asOutParam()));
 
-            if (RTStrICmp(idecontroller, "PIIX3"))
+            if (!RTStrICmp(idecontroller, "PIIX3"))
             {
                 CHECK_ERROR(storageController, COMSETTER(ControllerType)(StorageControllerType_PIIX3));
             }
-            else if (RTStrICmp(idecontroller, "PIIX4"))
+            else if (!RTStrICmp(idecontroller, "PIIX4"))
             {
                 CHECK_ERROR(storageController, COMSETTER(ControllerType)(StorageControllerType_PIIX4));
             }
-            else if (RTStrICmp(idecontroller, "ICH6"))
+            else if (!RTStrICmp(idecontroller, "ICH6"))
             {
                 CHECK_ERROR(storageController, COMSETTER(ControllerType)(StorageControllerType_ICH6));
             }
@@ -1337,7 +1352,7 @@ int handleModifyVM(HandlerArg *a)
                 else
                 {
                     /* first assume it's a UUID */
-                    Guid uuid(floppy);
+                    Bstr uuid(floppy);
                     ComPtr<IFloppyImage> floppyImage;
                     rc = a->virtualBox->GetFloppyImage(uuid, floppyImage.asOutParam());
                     if (FAILED(rc) || !floppyImage)
@@ -1347,7 +1362,7 @@ int handleModifyVM(HandlerArg *a)
                         /* not registered, do that on the fly */
                         if (!floppyImage)
                         {
-                            Guid emptyUUID;
+                            Bstr emptyUUID;
                             CHECK_ERROR(a->virtualBox, OpenFloppyImage(Bstr(floppy), emptyUUID, floppyImage.asOutParam()));
                         }
                     }
@@ -1421,6 +1436,14 @@ int handleModifyVM(HandlerArg *a)
                     CHECK_ERROR(audioAdapter, COMSETTER(AudioDriver)(AudioDriverType_SolAudio));
                     CHECK_ERROR(audioAdapter, COMSETTER(Enabled)(true));
                 }
+
+# ifdef VBOX_WITH_SOLARIS_OSS
+                else if (!strcmp(audio, "oss"))
+                {
+                    CHECK_ERROR(audioAdapter, COMSETTER(AudioDriver)(AudioDriverType_OSS));
+                    CHECK_ERROR(audioAdapter, COMSETTER(Enabled)(true));
+                }
+# endif
 
 #endif /* !RT_OS_SOLARIS */
 #ifdef RT_OS_DARWIN
@@ -1717,6 +1740,10 @@ int handleModifyVM(HandlerArg *a)
                         CHECK_ERROR_RET(uart, COMSETTER(HostMode) (PortMode_HostPipe), 1);
                         CHECK_ERROR_RET(uart, COMSETTER(Server) (FALSE), 1);
                     }
+                    else if (!strcmp(uarts_mode[n], "file"))
+                    {
+                        CHECK_ERROR_RET(uart, COMSETTER(HostMode) (PortMode_RawFile), 1);
+                    }
                     else
                     {
                         CHECK_ERROR_RET(uart, COMSETTER(HostMode) (PortMode_HostDevice), 1);
@@ -1888,17 +1915,17 @@ int handleModifyVM(HandlerArg *a)
                 else
                 {
                     /* first guess is that it's a UUID */
-                    Guid uuid(hdds[i]);
+                    Bstr uuid(hdds[i]);
                     ComPtr<IHardDisk> hardDisk;
                     rc = a->virtualBox->GetHardDisk(uuid, hardDisk.asOutParam());
                     /* not successful? Then it must be a filename */
                     if (!hardDisk)
                     {
-                        CHECK_ERROR(a->virtualBox, FindHardDisk(Bstr(hdds[i]), hardDisk.asOutParam()));
+                        rc =  a->virtualBox->FindHardDisk(Bstr(hdds[i]), hardDisk.asOutParam());
                         if (FAILED(rc))
                         {
                             /* open the new hard disk object */
-                            CHECK_ERROR(a->virtualBox, OpenHardDisk(Bstr(hdds[i]), AccessMode_ReadWrite, hardDisk.asOutParam()));
+                            CHECK_ERROR(a->virtualBox, OpenHardDisk(Bstr(hdds[i]), AccessMode_ReadWrite, false, Bstr(""), false, Bstr(""), hardDisk.asOutParam()));
                         }
                     }
                     if (hardDisk)
@@ -1977,17 +2004,17 @@ int handleModifyVM(HandlerArg *a)
                 else
                 {
                     /* first guess is that it's a UUID */
-                    Guid uuid(hdds[i]);
+                    Bstr uuid(hdds[i]);
                     ComPtr<IHardDisk> hardDisk;
                     rc = a->virtualBox->GetHardDisk(uuid, hardDisk.asOutParam());
                     /* not successful? Then it must be a filename */
                     if (!hardDisk)
                     {
-                        CHECK_ERROR(a->virtualBox, FindHardDisk(Bstr(hdds[i]), hardDisk.asOutParam()));
+                        rc = a->virtualBox->FindHardDisk(Bstr(hdds[i]), hardDisk.asOutParam());
                         if (FAILED(rc))
                         {
                             /* open the new hard disk object */
-                            CHECK_ERROR(a->virtualBox, OpenHardDisk(Bstr(hdds[i]), AccessMode_ReadWrite, hardDisk.asOutParam()));
+                            CHECK_ERROR(a->virtualBox, OpenHardDisk(Bstr(hdds[i]), AccessMode_ReadWrite, false, Bstr(""), false, Bstr(""), hardDisk.asOutParam()));
                         }
                     }
                     if (hardDisk)

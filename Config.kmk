@@ -144,9 +144,9 @@ endif
 #
 
 # Major version.
-VBOX_VERSION_MAJOR = 2
+VBOX_VERSION_MAJOR = 3
 # Minor version.
-VBOX_VERSION_MINOR = 2
+VBOX_VERSION_MINOR = 0
 # This is the current build number. It should be increased every time we publish a
 # new build. The define is available in every source file. Only even build numbers
 # will be published, odd numbers are set during development.
@@ -239,9 +239,6 @@ endif
 ifdef VBOX_ONLY_SDK
  VBOX_WITHOUT_ADDITIONS=1
 endif
-
-## Enable new TCG-based recompiler
-VBOX_WITH_NEW_RECOMPILER = 1
 
 # Don't create the additions ISO.
 # (Used by the additions build server, don't invert it.)
@@ -354,7 +351,7 @@ ifeq ($(KBUILD_TARGET),linux)
 # VBOX_WITH_FFMPEG = 1
 endif
 # Enable crOpenGL service
-if1of ($(KBUILD_TARGET),win linux solaris darwin)
+if1of ($(KBUILD_TARGET),win linux solaris darwin freebsd)
  VBOX_WITH_CROGL = 1
 endif
 # Enable shared folders
@@ -385,6 +382,8 @@ VBOX_WITH_AHCI = 1
 VBOX_WITH_PDM_ASYNC_COMPLETION = 1
 # Temporary switch for enabling / disabling the new USB code on Darwin.
 VBOX_WITH_NEW_USB_CODE_ON_DARWIN=1
+# Enable USB code that relies on USBA driver election callback & our own USB client driver on Solaris.
+#VBOX_WITH_NEW_USB_CODE_ON_SOLARIS=1
 # Enable the hal/sysfs USB code on Linux.  This depends on VBOX_WITH_DBUS.
 ifdef VBOX_WITH_DBUS
  VBOX_USB_WITH_SYSFS=1
@@ -393,8 +392,8 @@ endif
 VBOX_WITH_SOLARIS_VBI = 1
 # Enable 64 bits guest pointers.
 VBOX_WITH_64_BITS_GUESTS = 1
-# Enable SMP support in guests
-##VBOX_WITH_SMP_GUESTS = 1
+# Enable multi-core VCPUs.
+VBOX_WITH_MULTI_CORE = 1
 # Enable the host/guest information service (aka guest properties).
 VBOX_WITH_GUEST_PROPS = 1
 # Enable performance API.
@@ -406,18 +405,20 @@ VBOX_WITH_BUSLOGIC = 1
 # Enable LsiLogic SCSI host adapter
 VBOX_WITH_LSILOGIC = 1
 # Enable HPET device
-#VBOX_WITH_HPET = 1
+VBOX_WITH_HPET = 1
+# Enable LPC device
+VBOX_WITH_LPC = 1
 # Enable SCSI drivers
 VBOX_WITH_SCSI = 1
 # Enable host network interface API.
-if1of ($(KBUILD_TARGET), darwin solaris linux win)
+if1of ($(KBUILD_TARGET), darwin solaris linux win freebsd)
  VBOX_WITH_HOSTNETIF_API = 1
 endif
-# Enables the Python<->XPCOM and later Python<->COM bindings.
-# (Current not enabled by default because all the build servers has
-# different Python versions installed and would start burning.)
-if1of ($(KBUILD_TARGET), darwin solaris)
- VBOX_WITH_PYTHON = 1
+# Enables the Python<->XPCOM and Python<->COM bindings.
+VBOX_WITH_PYTHON ?= 1
+# Build multiple Python<->XPCOM bridges for different Python version
+ifn1of ($(KBUILD_TARGET), darwin)
+ VBOX_WITH_MULTIVERSION_PYTHON ?= 1
 endif
 # Enables hardening.
 # Most developers will want to disable this in their LocalConfig.kmk.
@@ -431,6 +432,8 @@ ifdef VBOX_WITH_HARDENING
   VBOX_PATH_APP_PRIVATE      = /opt/VirtualBox/$(if-expr $(KBUILD_TARGET_ARCH) == "amd64",amd64,i386)
  else ifeq ($(KBUILD_TARGET),darwin)
   VBOX_PATH_APP_PRIVATE      = /Applications/VirtualBox.app/Contents/MacOS
+ else ifeq ($(KBUILD_TARGET),freebsd)
+  VBOX_PATH_APP_PRIVATE      = /usr/local/lib/virtualbox
  endif
 endif
 # Where the architecture specific application files are (going to be) installed.
@@ -459,7 +462,7 @@ endif
 # depending on the location of the object.)
 #VBOX_WITH_RUNPATH = /usr/lib/virtualbox
 ifdef VBOX_WITH_HARDENING
- if1of ($(KBUILD_TARGET), solaris)
+ if1of ($(KBUILD_TARGET), solaris freebsd)
   VBOX_WITH_RUNPATH = $(VBOX_PATH_APP_PRIVATE)
  endif
 endif
@@ -483,15 +486,22 @@ ifdef VBOX_WITH_HARDENING
  endif
 endif
 # Use VBoxNetFlt for host interface networking.
-if1of ($(KBUILD_TARGET), darwin linux solaris win)
+if1of ($(KBUILD_TARGET), darwin linux solaris win freebsd)
  VBOX_WITH_NETFLT = 1
  VBOX_SOLARIS_NSL_RESOLVED = 1
- if1of ($(KBUILD_TARGET), darwin solaris)
+ if1of ($(KBUILD_TARGET), darwin solaris linux)
   VBOX_WITH_NETADP = 1
  endif
 endif
 ## Use the new version of liblzf. Remove with the old liblzf.
 #VBOX_WITH_NEW_LIBLZF = 1
+
+## For experimenting with disabling preemption instead of interrupts
+# when working VT-x/AMD-V in VMMR0.
+## @todo os2? Reconsider perhaps windows? (see defect) This should be made the default.
+if1of ($(KBUILD_TARGET), darwin freebsd linux solaris windows)
+ VBOX_WITH_VMMR0_DISABLE_PREEMPTION = 1
+endif
 
 #
 # Branding
@@ -542,7 +552,6 @@ ifeq ($(KBUILD_TARGET),darwin)
  # Later:
  VBOX_WITH_VRDP_AUTHMOD=
  VBOX_WITH_VRDP_RDESKTOP=
- VBOX_WITH_PDM_ASYNC_COMPLETION=
  ifeq ($(KBUILD_TARGET_ARCH),amd64)
   # Permanent (no working SDL).
   VBOX_WITH_VBOXSDL=
@@ -655,7 +664,7 @@ ifdef VBOX_OSE
  VBOX_WITH_USB=
  VBOX_WITH_EHCI=
  VBOX_WITH_VMI=
- ifn1of ($(KBUILD_TARGET), darwin linux solaris)
+ ifn1of ($(KBUILD_TARGET), darwin linux solaris win)
   VBOX_WITH_NETFLT=
  endif
  VBOX_WITH_DEBUGGER=
@@ -675,11 +684,9 @@ ifdef VBOX_OSE
   # Only the Linux, Solaris installers are public
   VBOX_WITH_INSTALLER=
  endif
- VBOX_WITH_AHCI=
- VBOX_WITH_PDM_ASYNC_COMPLETION=
- VBOX_WITH_BUSLOGIC=
- VBOX_WITH_LSILOGIC=
- VBOX_WITH_SCSI=
+ VBOX_WITH_HPET=
+ VBOX_WITH_LPC=
+ VBOX_WITH_SMC=
  # branding
  VBOX_BRAND_BIOS_LOGO          := $(PATH_ROOT)/src/VBox/Devices/Graphics/BIOS/ose_logo.bmp
  VBOX_BRAND_GUI_ABOUT_PNG      := $(PATH_ROOT)/src/VBox/Frontends/VirtualBox/images/OSE/about.png
@@ -929,6 +936,7 @@ ifndef VBOX_GCC_TOOL
  else ifeq ($(KBUILD_TARGET),solaris)
   VBOX_GCC_TOOL := GXX3PLAIN
   VBOX_GCC32_TOOL := GXX3PLAIN
+  TOOL_GXX3PLAIN_LD_SYSMOD ?= /usr/ccs/bin/ld
  else
   VBOX_GCC_TOOL := GXX3
   ifeq ($(KBUILD_TARGET_ARCH).$(KBUILD_HOST_ARCH),x86.amd64) ## @todo mixing target/host here!
@@ -1077,9 +1085,6 @@ endif
 ifdef VBOX_WITH_64_BITS_GUESTS
  DEFS += VBOX_WITH_64_BITS_GUESTS
 endif
-ifdef VBOX_WITH_SMP_GUESTS
- DEFS += VBOX_WITH_SMP_GUESTS
-endif
 ifdef VBOX_WITH_HARDENING
  DEFS += VBOX_WITH_HARDENING
 endif
@@ -1102,24 +1107,36 @@ endif
 VBOX_GCC_WARN     ?= -Wall $(VBOX_GCC_Wextra) $(VBOX_GCC_Wno-missing-field-initializers) -Wno-unused -Wno-trigraphs
 VBOX_GCC_PEDANTIC ?= -pedantic $(VBOX_GCC_WARN) -Wno-long-long
 ifeq ($(KBUILD_TYPE),debug)
- VBOX_GCC_FP  ?= -fno-omit-frame-pointer
- VBOX_GCC_OPT ?= -O0
- VBOX_VCC_FP  ?= -Oy-
- VBOX_VCC_OPT ?=
+ VBOX_GCC_FP     ?= -fno-omit-frame-pointer
+ VBOX_GCC_OPT    ?= -O0
+ VBOX_VCC_FP     ?= -Oy-
+ VBOX_VCC_OPT    ?=
+ VBOX_GCC_R0_FP  ?= -fno-omit-frame-pointer
+ VBOX_GCC_R0_OPT ?= -O2
+ VBOX_VCC_R0_FP  ?= -Oy-
+ VBOX_VCC_R0_OPT ?=
  VBOX_GCC_GC_FP  ?= -fno-omit-frame-pointer
- VBOX_GCC_GC_OPT ?= -O0
+ VBOX_GCC_GC_OPT ?= -O2
  VBOX_VCC_GC_FP  ?= -Oy-
  VBOX_VCC_GC_OPT ?=
 else
  # We should use -fomit-frame-pointer for GCC / -Oy for VCC.
  # -funwind-tables provides support for backtraces in gdb then.
- VBOX_GCC_FP  ?= -fno-omit-frame-pointer
- VBOX_GCC_OPT ?= -O2 $(VBOX_GCC_mtune-generic)
- VBOX_VCC_FP  ?= -Oy-
+ VBOX_GCC_FP     ?= -fno-omit-frame-pointer
+ VBOX_GCC_OPT    ?= -O2 $(VBOX_GCC_mtune-generic)
+ VBOX_VCC_FP     ?= -Oy-
  ifdef VBOX_USE_VCC80
- VBOX_VCC_OPT ?= -O2 -GS-
+ VBOX_VCC_OPT    ?= -O2 -GS-
  else
- VBOX_VCC_OPT ?= -Ogitb2
+ VBOX_VCC_OPT    ?= -Ogitb2
+ endif
+ VBOX_GCC_R0_FP  ?= -fno-omit-frame-pointer
+ VBOX_GCC_R0_OPT ?= -O2 $(VBOX_GCC_mtune-generic)
+ VBOX_VCC_R0_FP  ?= -Oy-
+ ifdef VBOX_USE_VCC80
+ VBOX_VCC_R0_OPT ?= -O2 -GS-
+ else
+ VBOX_VCC_R0_OPT ?= -Ogitb2
  endif
  VBOX_GCC_GC_FP  ?= -fno-omit-frame-pointer
  VBOX_GCC_GC_OPT ?= -O2 $(VBOX_GCC_mtune-generic)
@@ -1318,7 +1335,7 @@ else
 endif
 
 # Makeself for the linux installers.
-VBOX_MAKESELF  ?= $(PATH_DEVTOOLS)/common/makeself/v2.1.4_1/makeself.sh
+VBOX_MAKESELF  ?= $(PATH_DEVTOOLS)/common/makeself/v2.1.5/makeself.sh
 
 # Microsoft HTML Help Workshop.
 VBOX_PATH_HTML_HELP_WORKSHOP ?= $(PATH_DEVTOOLS)/win.x86/HTML_Help_Workshop/v1.3/
@@ -1429,6 +1446,8 @@ ifeq ($(KBUILD_TARGET),darwin)
  VBOX_DARWIN_DEF_SDK_10_4_CXXFLAGS  := -mmacosx-version-min=10.4 -isysroot $(VBOX_PATH_MACOSX_SDK_10_4)
  VBOX_DARWIN_DEF_SDK_10_4_OBJCFLAGS := -mmacosx-version-min=10.4 -isysroot $(VBOX_PATH_MACOSX_SDK_10_4)
  VBOX_DARWIN_DEF_SDK_10_4_LDFLAGS   := -mmacosx-version-min=10.4 -Wl,-syslibroot,$(VBOX_PATH_MACOSX_SDK_10_4) $(VBOX_DARWIN_CLASSIC_LINKER)
+## @todo try this out:
+# VBOX_DARWIN_DEF_SDK_10_4_LDFLAGS   := -mmacosx-version-min=10.4 -Wl,-syslibroot,$(VBOX_PATH_MACOSX_SDK_10_4) $(VBOX_DARWIN_CLASSIC_LINKER) -Wl,-headerpad_max_install_names
 
  # specific versions.
  VBOX_PATH_MACOSX_SDK_10_5          ?= /Developer/SDKs/MacOSX10.5.sdk
@@ -1779,21 +1798,11 @@ VBOXLNX32GUEST_SUFF_LIB = .a
 # SDKs for external libraries.
 #
 SDK_VBOX_LIBXML2          = .
-#if1of ($(KBUILD_TARGET),win os2 solaris)
- SDK_VBOX_LIBXML2_INCS   ?= $(PATH_ROOT)/src/libs/libxml2-2.6.30/include
- SDK_VBOX_LIBXML2_LIBS   ?= $(PATH_LIB)/VBox-libxml2$(VBOX_SUFF_LIB)
- SDK_VBOX_LIBXML2_DEFS   ?= LIBXML_STATIC
- SDK_VBOX_LIBXML2_DEFS.win += WIN32 _WINDOWS _MBCS
-#else if1of ($(KBUILD_TARGET),linux)
-# SDK_VBOX_LIBXML2_INCS      ?=
-# SDK_VBOX_LIBXML2_LIBS      ?=
-# SDK_VBOX_LIBXML2_CFLAGS    ?= $(shell pkg-config libxml-2.0 --cflags)
-# SDK_VBOX_LIBXML2_CXXFLAGS  ?= $(SDK_VBOX_LIBXML2_CFLAGS)
-# SDK_VBOX_LIBXML2_LDFLAGS   ?= $(shell pkg-config libxml-2.0 --libs)
-#else
-# SDK_VBOX_LIBXML2_INCS   ?=
-# SDK_VBOX_LIBXML2_LIBS   ?= xml2
-#endif
+SDK_VBOX_LIBXML2_INCS   ?= $(PATH_ROOT)/src/libs/libxml2-2.6.30/include
+SDK_VBOX_LIBXML2_DEFS  ?= _REENTRANT
+SDK_VBOX_LIBXML2_DEFS.win += WIN32 _WINDOWS _MBCS
+# note: no linking to LIB here, we do that explicitly in src/VBox/Runtime/Makefile.kmk to link
+# libxml against VBoxRT
 
 SDK_VBOX_LIBXSLT          = .
 #if1of ($(KBUILD_TARGET),win os2 solaris)
@@ -1826,12 +1835,21 @@ else
 endif
 
 SDK_VBOX_OPENSSL      = .
-SDK_VBOX_OPENSSL_DEFAULT_INCS := $(PATH_OUT)/obj/crypto-headers/include
-SDK_VBOX_OPENSSL_INCS ?= $(SDK_VBOX_OPENSSL_DEFAULT_INCS)
+SDK_VBOX_OPENSSL_VBOX_DEFAULT_INCS := $(PATH_OUT)/obj/crypto-headers/include
+SDK_VBOX_OPENSSL_INCS ?= $(SDK_VBOX_OPENSSL_VBOX_DEFAULT_INCS)
+SDK_VBOX_OPENSSL_ORDERDEPS ?= $(crypto-headers_1_TARGET)
 SDK_VBOX_OPENSSL_LIBS ?= $(PATH_LIB)/VBox-libcrypto$(VBOX_SUFF_LIB)
 # Build entire openssl library, not just the minimal subset.
 if1of ($(KBUILD_TARGET), linux solaris)
  VBOX_OPENSSL_ALL=1
+endif
+
+if1of ($(KBUILD_TARGET).$(KBUILD_TARGET_ARCH), win.x86 win.amd64 linux.x86 linux.amd64 solaris.x86 solaris.amd64 darwin.x86 darwin.amd64 freebsd.x86 freebsd.amd64)
+ VBOX_WITH_LIBCURL = 1
+ SDK_VBOX_LIBCURL       = .
+ SDK_VBOX_LIBCURL_INCS ?= $(PATH_ROOT)/src/libs/curl-7.19.4/include
+ SDK_VBOX_LIBCURL_LIBS ?= $(PATH_LIB)/VBox-libcurl$(VBOX_SUFF_LIB)
+ SDK_VBOX_LIBCURL_DEFS ?= BUILDING_LIBCURL
 endif
 
 SDK_VBOX_FFMPEG       = .
@@ -1853,6 +1871,7 @@ else
 endif
 
 SDK_VBOX_BOOST        = .
+SDK_VBOX_BOOST_DEFS  ?= BOOST_DISABLE_ASSERTS
 SDK_VBOX_BOOST_INCS  ?= $(PATH_ROOT)/src/libs/boost-1.37.0
 
 #
@@ -1921,9 +1940,15 @@ ifeq ($(KBUILD_TARGET),solaris)
   # We cannot compile additions on Solaris 10, due kernel interface deps
   VBOX_WITHOUT_ADDITIONS := 1
   VBOX_WITH_ADDITIONS =
+ else
+  ## @todo r=bird: Why eval, and why export? Actually, since this isn't used anywhere, why not
+  # VBOX_WITH_SOLARIS_OSS := $(if-expr $(shell uname -v | cut -f2 -d'_')) >= 115,1,)
+  $(eval export VBOX_SOLARIS_SNV_VERSION := $(shell uname -v | cut -f2 -d'_'))
+
+  # OSS audio support for Solaris
+#VBOX_WITH_SOLARIS_OSS := $(if-expr $(VBOX_SOLARIS_SNV_VERSION) >= 115,1,)
  endif
 endif
-
 
 #
 # Template for building GC things.
@@ -2021,7 +2046,7 @@ ifeq ($(VBOX_LDR_FMT32),elf)
  TEMPLATE_VBOXGCEXE_LDFLAGS.dbgopt = -g
  TEMPLATE_VBOXGCEXE_LDFLAGS.strict = -g
  TEMPLATE_VBOXGCEXE_LDFLAGS.release = -g
- if1of ($(KBUILD_TARGET),freebsd)
+ if1of ($(KBUILD_TARGET).$(KBUILD_TARGET_ARCH), freebsd.amd64)
   # The FreeBSD port of gcc isn't picking up -m32 where it should. the .o order below isn't
   # quite right (target source comes first), if it stops working we'll have to write a linker tool.
   TEMPLATE_VBOXGCEXE_DEFS.$(KBUILD_TARGET)    = $(TEMPLATE_VBOXGC_DEFS.$(KBUILD_TARGET))    IPRT_DONT_USE_SYSTEM_STDINT_H
@@ -2072,8 +2097,8 @@ endif # pe
 
 ifeq ($(VBOX_LDR_FMT),elf)
 TEMPLATE_VBOXR0_TOOL                = $(VBOX_GCC_TOOL)
-TEMPLATE_VBOXR0_CFLAGS              = -nostdinc -g -pipe $(VBOX_GCC_PEDANTIC) $(VBOX_GCC_Wno-variadic-macros) -Wmissing-prototypes -Wstrict-prototypes $(VBOX_GCC_OPT) $(VBOX_GCC_FP) -fno-strict-aliasing $(VBOX_GCC_fno-stack-protector) $(VBOX_GCC_fvisibility-hidden)
-TEMPLATE_VBOXR0_CXXFLAGS            = -nostdinc -g -pipe $(VBOX_GCC_PEDANTIC) $(VBOX_GCC_Wno-variadic-macros) -fno-rtti -fno-exceptions $(VBOX_GCC_OPT) $(VBOX_GCC_FP) -fno-strict-aliasing $(VBOX_GCC_fno-stack-protector) $(VBOX_GCC_fvisibility-inlines-hidden) $(VBOX_GCC_fvisibility-hidden)
+TEMPLATE_VBOXR0_CFLAGS              = -nostdinc -g -pipe $(VBOX_GCC_PEDANTIC) $(VBOX_GCC_Wno-variadic-macros) -Wmissing-prototypes -Wstrict-prototypes $(VBOX_GCC_R0_OPT) $(VBOX_GCC_R0_FP) -fno-strict-aliasing $(VBOX_GCC_fno-stack-protector) $(VBOX_GCC_fvisibility-hidden)
+TEMPLATE_VBOXR0_CXXFLAGS            = -nostdinc -g -pipe $(VBOX_GCC_PEDANTIC) $(VBOX_GCC_Wno-variadic-macros) -fno-rtti -fno-exceptions $(VBOX_GCC_R0_OPT) $(VBOX_GCC_R0_FP) -fno-strict-aliasing $(VBOX_GCC_fno-stack-protector) $(VBOX_GCC_fvisibility-inlines-hidden) $(VBOX_GCC_fvisibility-hidden)
 TEMPLATE_VBOXR0_CFLAGS.amd64        = -m64 -mno-red-zone -mcmodel=kernel -mno-sse -mno-mmx -mno-sse2 -mno-3dnow -fno-asynchronous-unwind-tables -ffreestanding
 TEMPLATE_VBOXR0_CXXFLAGS.amd64      = -m64 -mno-red-zone -mcmodel=kernel -mno-sse -mno-mmx -mno-sse2 -mno-3dnow -fno-asynchronous-unwind-tables
 ifeq ($(KBUILD_TARGET),solaris)
@@ -2094,12 +2119,12 @@ ifeq ($(VBOX_LDR_FMT),macho)
 TEMPLATE_VBOXR0_TOOL                = GXX4MACHO
 TEMPLATE_VBOXR0_DEFS               += $(VBOX_DARWIN_DEF_SDK_DEFS)
 TEMPLATE_VBOXR0_CXXFLAGS            = $(VBOX_DARWIN_DEF_SDK_CXXFLAGS) -nostdinc -g -pipe $(VBOX_GCC_PEDANTIC) $(VBOX_GCC_Wno-variadic-macros) \
-	-fno-common -msoft-float -static -fno-rtti -fno-exceptions $(VBOX_GCC_OPT) $(VBOX_GCC_FP) -fno-strict-aliasing \
+	-fno-common -msoft-float -static -fno-rtti -fno-exceptions -O2 $(VBOX_GCC_R0_OPT) $(VBOX_GCC_R0_FP) -fno-strict-aliasing \
 	-mno-sse -mno-mmx -mno-sse2 -mno-3dnow -fno-stack-protector
 TEMPLATE_VBOXR0_CXXFLAGS.amd64      = -m64 -mno-red-zone -mno-sse3 -mno-sse4 -mno-sse4.1 -mno-sse4.2  -mno-sse4a -fno-unwind-tables
 TEMPLATE_VBOXR0_CXXFLAGS.x86        = -m32
 TEMPLATE_VBOXR0_CFLAGS              = $(VBOX_DARWIN_DEF_SDK_CFLAGS)   -nostdinc -g -pipe $(VBOX_GCC_PEDANTIC) $(VBOX_GCC_Wno-variadic-macros) \
-	-fno-common -msoft-float -static -Wmissing-prototypes -Wstrict-prototypes $(VBOX_GCC_OPT) $(VBOX_GCC_FP) -fno-strict-aliasing \
+	-fno-common -msoft-float -static -Wmissing-prototypes -Wstrict-prototypes $(VBOX_GCC_R0_OPT) $(VBOX_GCC_R0_FP) -fno-strict-aliasing \
 	-mno-sse -mno-mmx -mno-sse2 -mno-3dnow -fno-stack-protector
 TEMPLATE_VBOXR0_CFLAGS.amd64        = -m64 -mno-red-zone -mno-sse3 -mno-sse4 -mno-sse4.1 -mno-sse4.2  -mno-sse4a -fno-unwind-tables
 TEMPLATE_VBOXR0_CFLAGS.x86          = -m32
@@ -2111,8 +2136,8 @@ endif
 
 ifeq ($(VBOX_LDR_FMT),lx)
 TEMPLATE_VBOXR0_TOOL                = GXX3OMF
-TEMPLATE_VBOXR0_CFLAGS              = -nostdinc -g -pipe $(VBOX_GCC_PEDANTIC) $(VBOX_GCC_Wno-variadic-macros) -Wmissing-prototypes -Wstrict-prototypes $(VBOX_GCC_OPT) $(VBOX_GCC_FP) -fno-strict-aliasing
-TEMPLATE_VBOXR0_CXXFLAGS            = -nostdinc -g -pipe $(VBOX_GCC_PEDANTIC) $(VBOX_GCC_Wno-variadic-macros) -fno-rtti -fno-exceptions $(VBOX_GCC_OPT) $(VBOX_GCC_FP) -fno-strict-aliasing
+TEMPLATE_VBOXR0_CFLAGS              = -nostdinc -g -pipe $(VBOX_GCC_PEDANTIC) $(VBOX_GCC_Wno-variadic-macros) -Wmissing-prototypes -Wstrict-prototypes $(VBOX_GCC_R0_OPT) $(VBOX_GCC_R0_FP) -fno-strict-aliasing
+TEMPLATE_VBOXR0_CXXFLAGS            = -nostdinc -g -pipe $(VBOX_GCC_PEDANTIC) $(VBOX_GCC_Wno-variadic-macros) -fno-rtti -fno-exceptions $(VBOX_GCC_R0_OPT) $(VBOX_GCC_R0_FP) -fno-strict-aliasing
 TEMPLATE_VBOXR0_LDFLAGS             = -nostdlib -Zdll
 TEMPLATE_VBOXR0_LIBS                = \
 	$(VBOX_GCC_LIBGCC) \
@@ -2158,7 +2183,7 @@ TEMPLATE_VBOXR0DRV_DEFS                = __KERNEL__ MODULE IN_RING0 IN_RT_R0
 TEMPLATE_VBOXR0DRV_INCS                = $(VBOX_LINUX_INCS)
 TEMPLATE_VBOXR0DRV_CFLAGS              = -nostdinc -iwithprefix include \
 	$(VBOX_GCC_WARN) -Wstrict-prototypes $(VBOX_GCC_Wno-pointer-sign) -Wno-sign-compare \
-	$(VBOX_GCC_fno-stack-protector) $(VBOX_GCC_OPT) $(VBOX_GCC_FP) -fno-strict-aliasing -fno-common
+	$(VBOX_GCC_fno-stack-protector) $(VBOX_GCC_R0_OPT) $(VBOX_GCC_R0_FP) -fno-strict-aliasing -fno-common
 TEMPLATE_VBOXR0DRV_CFLAGS.x86          = -mpreferred-stack-boundary=2 -msoft-float
 TEMPLATE_VBOXR0DRV_CFLAGS.amd64        = -m64 -mno-red-zone -mcmodel=kernel -mno-sse -mno-mmx -mno-sse2 -mno-3dnow \
 	-fno-reorder-blocks -ffreestanding -fno-asynchronous-unwind-tables -funit-at-a-time \
@@ -2178,8 +2203,8 @@ endif
 
 ifeq ($(KBUILD_TARGET),os2)
 TEMPLATE_VBOXR0DRV_TOOL                = GXX3OMF
-TEMPLATE_VBOXR0DRV_CXXFLAGS            = -g -pipe $(VBOX_GCC_PEDANTIC) $(VBOX_GCC_Wno-variadic-macros) $(VBOX_GCC_OPT) $(VBOX_GCC_FP) -fno-strict-aliasing -fno-rtti -fno-exceptions
-TEMPLATE_VBOXR0DRV_CFLAGS              = -g -pipe $(VBOX_GCC_PEDANTIC) $(VBOX_GCC_Wno-variadic-macros) -Wmissing-prototypes -Wstrict-prototypes -Wmissing-declarations $(VBOX_GCC_OPT) $(VBOX_GCC_FP) -fno-strict-aliasing
+TEMPLATE_VBOXR0DRV_CXXFLAGS            = -g -pipe $(VBOX_GCC_PEDANTIC) $(VBOX_GCC_Wno-variadic-macros) $(VBOX_GCC_R0_OPT) $(VBOX_GCC_R0_FP) -fno-strict-aliasing -fno-rtti -fno-exceptions
+TEMPLATE_VBOXR0DRV_CFLAGS              = -g -pipe $(VBOX_GCC_PEDANTIC) $(VBOX_GCC_Wno-variadic-macros) -Wmissing-prototypes -Wstrict-prototypes -Wmissing-declarations $(VBOX_GCC_R0_OPT) $(VBOX_GCC_R0_FP) -fno-strict-aliasing
 TEMPLATE_VBOXR0DRV_LIBS                = $(VBOX_GCC_LIBGCC)
 # wlink thinks physdevice doesn't need fixups and should have a stack - stupid!
 TEMPLATE_VBOXR0DRV_LDFLAGS             = -Zlinker Option -Zlinker internalrelocs, -Zlinker togglerelocs
@@ -2192,21 +2217,17 @@ TEMPLATE_VBOXR0DRV_INCS               += $(VBOX_PATH_MACOSX_SDK)/System/Library/
 TEMPLATE_VBOXR0DRV_CXXFLAGS            = $(VBOX_DARWIN_DEF_SDK_CXXFLAGS) \
 	-g -pipe $(VBOX_GCC_WARN) -Wno-long-long -fno-common -nostdinc -fno-builtin -finline \
 	-fno-keep-inline-functions -fno-exceptions -msoft-float \
-	-fapple-kext -fno-rtti -fcheck-new -force_cpusubtype_ALL
+	-fapple-kext -fno-rtti -fcheck-new -force_cpusubtype_ALL \
+	$(VBOX_GCC_R0_OPT) $(VBOX_GCC_R0_FP) -fno-strict-aliasing -fasm-blocks
 TEMPLATE_VBOXR0DRV_CXXFLAGS.amd64      = -m64 -mkernel -mno-red-zone -gdwarf-2
 TEMPLATE_VBOXR0DRV_CXXFLAGS.x86        = -m32 -static
-TEMPLATE_VBOXR0DRV_CXXFLAGS.release    = $(VBOX_GCC_OPT) $(VBOX_GCC_FP) -fno-strict-aliasing -fasm-blocks
-TEMPLATE_VBOXR0DRV_CXXFLAGS.profile    = $(TEMPLATE_VBOXR0DRV_CXXFLAGS.release)
-TEMPLATE_VBOXR0DRV_CXXFLAGS.kprofile   = $(TEMPLATE_VBOXR0DRV_CXXFLAGS.release)
 TEMPLATE_VBOXR0DRV_CFLAGS              = $(VBOX_DARWIN_DEF_SDK_CFLAGS) \
 	-g -pipe $(VBOX_GCC_WARN) -Wno-long-long -fno-common -nostdinc -fno-builtin -finline \
 	-fno-keep-inline-functions -fno-exceptions -msoft-float \
-	-Wmissing-prototypes -Wstrict-prototypes -Wmissing-declarations -force_cpusubtype_ALL
+	-Wmissing-prototypes -Wstrict-prototypes -Wmissing-declarations -force_cpusubtype_ALL \
+	$(VBOX_GCC_R0_OPT) $(VBOX_GCC_R0_FP) -fno-strict-aliasing -fasm-blocks
 TEMPLATE_VBOXR0DRV_CFLAGS.amd64        = -m64 -mkernel -mno-red-zone -gdwarf-2
 TEMPLATE_VBOXR0DRV_CFLAGS.x86          = -m32 -static
-TEMPLATE_VBOXR0DRV_CFLAGS.release      = $(TEMPLATE_VBOXR0DRV_CXXFLAGS.release)
-TEMPLATE_VBOXR0DRV_CFLAGS.profile      = $(TEMPLATE_VBOXR0DRV_CXXFLAGS.profile)
-TEMPLATE_VBOXR0DRV_CFLAGS.kprofile     = $(TEMPLATE_VBOXR0DRV_CXXFLAGS.kprofile)
 TEMPLATE_VBOXR0DRV_LDFLAGS             = $(VBOX_DARWIN_DEF_SDK_LDFLAGS) -static -nostdlib -r -Wl,-Y,1455 -keep_private_extern
 TEMPLATE_VBOXR0DRV_LDFLAGS.amd64       = -m64 -Xlinker -kext
 TEMPLATE_VBOXR0DRV_LDFLAGS.x86         = -m32
@@ -2290,7 +2311,7 @@ TEMPLATE_VBOXR0DRV_CFLAGS              =  \
 	$(VBOX_GCC_WARN) -Wpointer-arith -Winline $(VBOX_GCC_Wno-pointer-sign) \
 	-Wstrict-prototypes -Wmissing-prototypes -Wstrict-prototypes -Wnested-externs \
 	-O2 -fformat-extensions -ffreestanding -fno-strict-aliasing -fno-common -finline-limit=8000 \
-	$(VBOX_GCC_fno-stack-protector) $(VBOX_GCC_OPT) $(VBOX_GCC_FP) \
+	$(VBOX_GCC_fno-stack-protector) $(VBOX_GCC_R0_OPT) $(VBOX_GCC_R0_FP) \
 	-nostdinc -std=c99
 TEMPLATE_VBOXR0DRV_CFLAGS.x86          = -m32 -mno-align-long-strings -mpreferred-stack-boundary=2 -mno-mmx -mno-3dnow -mno-sse -mno-sse2
 TEMPLATE_VBOXR0DRV_CFLAGS.amd64        = -m64 --param inline-unit-growth=100 --param large-function-growth=1000 \
@@ -2299,7 +2320,7 @@ TEMPLATE_VBOXR0DRV_CFLAGS.amd64        = -m64 --param inline-unit-growth=100 --p
 TEMPLATE_VBOXR0DRV_CXXFLAGS            = -fno-exceptions -fno-rtti \
 	$(VBOX_GCC_WARN) -Wpointer-arith -Winline \
 	-O2 -fno-format-extensions -fno-strict-aliasing -fno-common -finline-limit=8000 \
-	$(VBOX_GCC_fno-stack-protector) $(VBOX_GCC_OPT) $(VBOX_GCC_FP) \
+	$(VBOX_GCC_fno-stack-protector) $(VBOX_GCC_R0_OPT) $(VBOX_GCC_R0_FP) \
 	-nostdinc
 TEMPLATE_VBOXR0DRV_CXXFLAGS.x86        = $(TEMPLATE_VBOXR0DRV_CFLAGS.x86)
 TEMPLATE_VBOXR0DRV_CXXFLAGS.amd64      = $(TEMPLATE_VBOXR0DRV_CFLAGS.amd64)
@@ -2325,7 +2346,7 @@ define TOOL_FREEBSDKMODLD_LINK_SYSMOD_CMDS
 		| xargs -J% objcopy % $(out)
 
 ## Strip debug info (comment out if debugging or something).
-#	objcopy --strip-debug $(out)
+	objcopy --strip-debug $(out)
 endef
  else # x86
 TOOL_FREEBSDKMODLD_LINK_SYSMOD_OUTPUT = $(outbase).kld
@@ -3401,6 +3422,7 @@ if1of ($(KBUILD_TARGET), freebsd netbsd openbsd)
  TEMPLATE_VBOXGUESTR3EXE_LIBS     = $(TEMPLATE_VBOXR3EXE_LIBS) iconv
 endif
 
+
 #
 # Template for building R3 (dynamic) libraries for the guest additions.
 #
@@ -3561,6 +3583,7 @@ TEMPLATE_VBOXCROGLR3HOSTDLL_DEFS.win       = _WIN32_WINNT=0x0500 WINDOWS=1
 TEMPLATE_VBOXCROGLR3HOSTDLL_DEFS.linux     = Linux=1 _GNU_SOURCE
 TEMPLATE_VBOXCROGLR3HOSTDLL_DEFS.solaris   = SunOS=1 _GNU_SOURCE #GLEXT_64_TYPES_DEFINED
 TEMPLATE_VBOXCROGLR3HOSTDLL_DEFS.darwin    = DARWIN=1 GL_GLEXT_LEGACY _GNU_SOURCE
+TEMPLATE_VBOXCROGLR3HOSTDLL_DEFS.freebsd   = FreeBSD=1 _GNU_SOURCE
 TEMPLATE_VBOXCROGLR3HOSTDLL_INCS           = $(VBOX_PATH_CROGL_INCLUDE) $(VBOX_PATH_CROGL_GENFILES)
 TEMPLATE_VBOXCROGLR3HOSTDLL_SDKS.darwin    = DARWIN-OPENGL
 TEMPLATE_VBOXCROGLR3HOSTDLL_LDFLAGS.darwin = \
@@ -3592,6 +3615,7 @@ TEMPLATE_VBOXCROGLR3GUESTDLL_DEFS.win       = _WIN32_WINNT=0x0500 WINDOWS=1
 TEMPLATE_VBOXCROGLR3GUESTDLL_DEFS.linux     = Linux=1 _GNU_SOURCE
 TEMPLATE_VBOXCROGLR3GUESTDLL_DEFS.solaris   = SunOS=1 _GNU_SOURCE #GLEXT_64_TYPES_DEFINED
 TEMPLATE_VBOXCROGLR3GUESTDLL_DEFS.darwin    = DARWIN=1 GL_GLEXT_LEGACY _GNU_SOURCE
+TEMPLATE_VBOXCROGLR3GUESTDLL_DEFS.freebsd   = FreeBSD=1 _GNU_SOURCE
 TEMPLATE_VBOXCROGLR3GUESTDLL_INCS           = $(VBOX_PATH_CROGL_INCLUDE) $(VBOX_PATH_CROGL_GENFILES)
 TEMPLATE_VBOXCROGLR3GUESTDLL_SDKS.darwin    = DARWIN-OPENGL
 TEMPLATE_VBOXCROGLR3GUESTDLL_LDFLAGS.darwin = \

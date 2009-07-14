@@ -1,4 +1,4 @@
-/** $Id$ */
+/* $Id$ */
 /** @file
  * VBoxSF - OS/2 Shared Folders, Initialization.
  */
@@ -35,7 +35,6 @@
 #define LOG_GROUP LOG_GROUP_DEFAULT
 #include "VBoxSFInternal.h"
 
-#include <VBox/VBoxGuest.h>
 #include <VBox/VBoxGuestLib.h>
 #include <VBox/log.h>
 #include <iprt/assert.h>
@@ -45,14 +44,14 @@
 /*******************************************************************************
 *   Global Variables                                                           *
 *******************************************************************************/
-__BEGIN_DECLS
+RT_C_DECLS_BEGIN
 /* from VBoxSFA.asm */
 extern RTFAR16 g_fpfnDevHlp;
 extern VBOXGUESTOS2IDCCONNECT g_VBoxGuestIDC;
 extern uint32_t g_u32Info;
 /* from sys0.asm and the linker/end.lib. */
 extern char _text, _etext, _data, _end;
-__END_DECLS
+RT_C_DECLS_END
 
 
 

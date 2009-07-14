@@ -42,6 +42,7 @@
 #endif
 
 #include <iprt/dir.h>
+#include <iprt/file.h>
 #include <iprt/path.h>
 #include <iprt/alloc.h>
 #include <iprt/log.h>
@@ -699,9 +700,15 @@ RTDECL(int) RTDirOpenFiltered(PRTDIR *ppDir, const char *pszPath, RTDIRFILTER en
     /*
      * Find the last component, i.e. where the filter criteria starts and the dir name ends.
      */
-    const char *pszFilter = enmFilter != RTDIRFILTER_NONE
-        ? RTPathFilename(pszPath)
-        : NULL;
+    const char *pszFilter;
+    if (enmFilter == RTDIRFILTER_NONE)
+        pszFilter = NULL;
+    else
+    {
+        pszFilter = RTPathFilename(pszPath);
+        if (!pszFilter) /* trailing slash => directory to read => no filter. */
+            enmFilter = RTDIRFILTER_NONE;
+    }
 
     /*
      * Call worker common with RTDirOpen which will verify the path, allocate
@@ -711,6 +718,69 @@ RTDECL(int) RTDirOpenFiltered(PRTDIR *ppDir, const char *pszPath, RTDIRFILTER en
 
     LogFlow(("RTDirOpenFiltered(%p:{%p}, %p:{%s}, %d): return %Rrc\n",
              ppDir, *ppDir, pszPath, pszPath, enmFilter, rc));
+    return rc;
+}
+
+
+RTDECL(int) RTDirRemoveRecursive(const char *pszPath)
+{
+    int rc;
+
+    if (!RTDirExists(pszPath))
+        return VINF_SUCCESS;
+
+    char szAbsPath[RTPATH_MAX];
+    /** @todo use RTPathReal here instead? */
+    rc = RTPathAbs(pszPath, szAbsPath, sizeof(szAbsPath));
+    if (RT_FAILURE(rc))
+        return rc;
+
+    PRTDIR pDir = NULL;
+    rc = RTDirOpen(&pDir, szAbsPath);
+    if (RT_SUCCESS(rc))
+    {
+        RTDIRENTRY dirEntry;
+        size_t cbDirEntry = sizeof(dirEntry);
+
+        while ((rc = RTDirRead(pDir, &dirEntry, NULL /* Passing an argument won't work here yet. */)) == VINF_SUCCESS)
+        {
+            char* pszEntry = NULL;
+            rc = RTStrAPrintf(&pszEntry, "%s/%s", szAbsPath, dirEntry.szName);
+            if(    RT_SUCCESS(rc)
+                && strcmp(dirEntry.szName, ".")
+                && strcmp(dirEntry.szName, ".."))
+            {
+                switch (dirEntry.enmType)
+                {
+                    case RTDIRENTRYTYPE_FILE:
+
+                        rc = RTFileDelete(pszEntry);
+                        break;
+
+                    case RTDIRENTRYTYPE_DIRECTORY:
+
+                        rc = RTDirRemoveRecursive(pszEntry);
+                        break;
+
+                    default:
+                        /** @todo not implemented yet. */
+                        break;
+                }
+
+                RTStrFree(pszEntry);
+            }
+
+            if (RT_FAILURE(rc))
+               break;
+        }
+        if (rc == VERR_NO_MORE_FILES)
+            rc = VINF_SUCCESS;
+
+        RTDirClose(pDir);
+        rc = RTDirRemove(szAbsPath);
+    }
+
+    LogFlow(("RTDirRemoveRecursive(%p:{%s}): returns %Rrc\n", pszPath, pszPath, rc));
     return rc;
 }
 

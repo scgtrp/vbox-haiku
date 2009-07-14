@@ -33,6 +33,7 @@
 *   Header Files                                                               *
 *******************************************************************************/
 #include "the-linux-kernel.h"
+#include "internal/iprt.h"
 #include <iprt/semaphore.h>
 #include <iprt/alloc.h>
 #include <iprt/assert.h>
@@ -66,12 +67,14 @@ RTDECL(int)  RTSemEventCreate(PRTSEMEVENT pEventSem)
     if (pEventInt)
     {
         pEventInt->u32Magic = RTSEMEVENT_MAGIC;
+        pEventInt->fState   = 0;
         init_waitqueue_head(&pEventInt->Head);
         *pEventSem = pEventInt;
         return VINF_SUCCESS;
     }
     return VERR_NO_MEMORY;
 }
+RT_EXPORT_SYMBOL(RTSemEventCreate);
 
 
 RTDECL(int)  RTSemEventDestroy(RTSEMEVENT EventSem)
@@ -91,13 +94,14 @@ RTDECL(int)  RTSemEventDestroy(RTSEMEVENT EventSem)
     /*
      * Invalidate it and signal the object just in case.
      */
-    ASMAtomicIncU32(&pEventInt->u32Magic);
-    ASMAtomicXchgU32(&pEventInt->fState, 0);
+    ASMAtomicWriteU32(&pEventInt->u32Magic, ~RTSEMEVENT_MAGIC);
+    ASMAtomicWriteU32(&pEventInt->fState, 0);
     Assert(!waitqueue_active(&pEventInt->Head));
     wake_up_all(&pEventInt->Head);
     RTMemFree(pEventInt);
     return VINF_SUCCESS;
 }
+RT_EXPORT_SYMBOL(RTSemEventDestroy);
 
 
 RTDECL(int)  RTSemEventSignal(RTSEMEVENT EventSem)
@@ -118,11 +122,12 @@ RTDECL(int)  RTSemEventSignal(RTSEMEVENT EventSem)
     /*
      * Signal the event object.
      */
-    ASMAtomicXchgU32(&pEventInt->fState, 1);
+    ASMAtomicWriteU32(&pEventInt->fState, 1);
     wake_up(&pEventInt->Head);
 
     return VINF_SUCCESS;
 }
+RT_EXPORT_SYMBOL(RTSemEventSignal);
 
 
 /**
@@ -146,7 +151,7 @@ static int rtSemEventWait(PRTSEMEVENTINTERNAL pEventInt, unsigned cMillies, bool
 #endif
     for (;;)
     {
-        /* make everything thru schedule() atomic scheduling wise. */
+        /* make everything thru schedule_timeout() atomic scheduling wise. */
         prepare_to_wait(&pEventInt->Head, &Wait, fInterruptible ? TASK_INTERRUPTIBLE : TASK_UNINTERRUPTIBLE);
 
         /* check the condition. */
@@ -202,6 +207,7 @@ RTDECL(int) RTSemEventWait(RTSEMEVENT EventSem, unsigned cMillies)
         return VINF_SUCCESS;
     return rtSemEventWait(pEventInt, cMillies, false /* fInterruptible */);
 }
+RT_EXPORT_SYMBOL(RTSemEventWait);
 
 
 RTDECL(int) RTSemEventWaitNoResume(RTSEMEVENT EventSem, unsigned cMillies)
@@ -220,4 +226,5 @@ RTDECL(int) RTSemEventWaitNoResume(RTSEMEVENT EventSem, unsigned cMillies)
         return VINF_SUCCESS;
     return rtSemEventWait(pEventInt, cMillies, true /* fInterruptible */);
 }
+RT_EXPORT_SYMBOL(RTSemEventWaitNoResume);
 

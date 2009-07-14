@@ -24,16 +24,20 @@
 #include <iprt/assert.h>
 
 #ifdef VBOX_WITH_HGSMI
+#include <iprt/thread.h>
+
 #include <VBox/HGSMI/HGSMI.h>
+#include <VBox/HGSMI/HGSMIChSetup.h>
+#include "VBoxHGSMI.h"
 #endif /* VBOX_WITH_HGSMI */
 
-__BEGIN_DECLS
+RT_C_DECLS_BEGIN
 #include "dderror.h"
 #include "devioctl.h"
 #include "miniport.h"
 #include "ntddvdeo.h"
 #include "video.h"
-__END_DECLS
+RT_C_DECLS_END
 
 
 #define VBE_DISPI_IOPORT_INDEX          0x01CE
@@ -87,17 +91,17 @@ typedef struct _DEVICE_EXTENSION
    union {
        /* Information that is only relevant to the primary device or is the same for all devices. */
        struct {
-           
+
            void *pvReqFlush;                   /* Pointer to preallocated generic request structure for
                                                 * VMMDevReq_VideoAccelFlush. Allocated when VBVA status
                                                 * is changed. Deallocated on HwReset.
                                                 */
 
-           
+
            ULONG ulVbvaEnabled;                /* Indicates that VBVA mode is enabled. */
-           
+
            BOOLEAN bVBoxVideoSupported;        /* TRUE if VBoxVideo extensions, including DualView, are supported by the host. */
-           
+
            int cDisplays;                      /* Number of displays. */
 
            ULONG cbVRAM;                       /* The VRAM size. */
@@ -106,31 +110,39 @@ typedef struct _DEVICE_EXTENSION
                                                 * It is at offset:
                                                 *   cbAdapterMemorySize - VBOX_VIDEO_ADAPTER_INFORMATION_SIZE - cbMiniportHeap
                                                 */
-           PVOID pvMiniportHeap;               /* The pointer to the miniport heap VRAM. 
+           PVOID pvMiniportHeap;               /* The pointer to the miniport heap VRAM.
                                                 * This is mapped by miniport separately.
                                                 */
+#ifdef VBOX_WITH_HGSMI
+           volatile HGSMIHOSTFLAGS * pHostFlags; /* HGSMI host flags */
+#endif
 
            PVOID pvAdapterInformation;         /* The pointer to the last 4K of VRAM.
                                                 * This is mapped by miniport separately.
                                                 */
-           
+
            ULONG ulMaxFrameBufferSize;         /* The size of the VRAM allocated for the a single framebuffer. */
-           
+
 #ifndef VBOX_WITH_HGSMI
            ULONG ulDisplayInformationSize;     /* The size of the Display information, which is at offset:
                                                 * ulFrameBufferOffset + ulMaxFrameBufferSize.
                                                 */
 #endif /* !VBOX_WITH_HGSMI */
-           
+
 #ifdef VBOX_WITH_HGSMI
            BOOLEAN bHGSMI;                     /* Whether HGSMI is enabled. */
 
            HGSMIAREA areaHostHeap;             /* Host heap VRAM area. */
 
+           HGSMICHANNELINFO channels;
+
            HGSMIHEAP hgsmiAdapterHeap;
+
+           volatile bool bPollingStop;
+           RTTHREAD PollingThread;
 #endif /* VBOX_WITH_HGSMI */
        } primary;
-   
+
        /* Secondary device information. */
        struct {
            BOOLEAN bEnabled;                   /* Device enabled flag */
@@ -145,9 +157,9 @@ typedef struct _DEVICE_EXTENSION
 extern "C"
 {
 
-__BEGIN_DECLS
+RT_C_DECLS_BEGIN
 ULONG DriverEntry(IN PVOID Context1, IN PVOID Context2);
-__END_DECLS
+RT_C_DECLS_END
 
 VP_STATUS VBoxVideoFindAdapter(
    IN PVOID HwDeviceExtension,
@@ -232,7 +244,7 @@ int VBoxMapAdapterMemory (PDEVICE_EXTENSION PrimaryExtension,
 
 void VBoxUnmapAdapterMemory (PDEVICE_EXTENSION PrimaryExtension,
                              void **ppv);
-                             
+
 void VBoxComputeFrameBufferSizes (PDEVICE_EXTENSION PrimaryExtension);
 
 #ifdef VBOX_WITH_HGSMI
@@ -241,6 +253,17 @@ BOOLEAN VBoxHGSMIIsSupported (void);
 VOID VBoxSetupDisplaysHGSMI (PDEVICE_EXTENSION PrimaryExtension,
                              PVIDEO_PORT_CONFIG_INFO pConfigInfo,
                              ULONG AdapterMemorySize);
+BOOLEAN vboxUpdatePointerShape (PDEVICE_EXTENSION PrimaryExtension,
+                                PVIDEO_POINTER_ATTRIBUTES pointerAttr,
+                                uint32_t cbLength);
+
+DECLCALLBACK(void) hgsmiHostCmdComplete (HVBOXVIDEOHGSMI hHGSMI, struct _VBVAHOSTCMD * pCmd);
+DECLCALLBACK(int) hgsmiHostCmdRequest (HVBOXVIDEOHGSMI hHGSMI, uint8_t u8Channel, struct _VBVAHOSTCMD ** ppCmd);
+
+
+int vboxVBVAChannelDisplayEnable(PDEVICE_EXTENSION PrimaryExtension,
+        int iDisplay, /* negative would mean this is a miniport handler */
+        uint8_t u8Channel);
 #endif /* VBOX_WITH_HGSMI */
 } /* extern "C" */
 

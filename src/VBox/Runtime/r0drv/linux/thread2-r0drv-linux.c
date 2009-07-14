@@ -28,10 +28,12 @@
  * additional information or have any questions.
  */
 
+
 /*******************************************************************************
 *   Header Files                                                               *
 *******************************************************************************/
 #include "the-linux-kernel.h"
+#include "internal/iprt.h"
 
 #include <iprt/assert.h>
 #include <iprt/thread.h>
@@ -47,9 +49,4 @@ RTDECL(RTTHREAD) RTThreadSelf(void)
 */
 
 
-RTDECL(bool) RTThreadPreemptIsEnabled(RTTHREAD hThread)
-{
-    Assert(hThread == NIL_RTTHREAD);
-    return !in_atomic() && !irqs_disabled();
-}
 

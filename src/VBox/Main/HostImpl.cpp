@@ -22,6 +22,10 @@
 #define __STDC_LIMIT_MACROS
 #define __STDC_CONSTANT_MACROS
 
+#if defined(RT_OS_WINDOWS) && defined(VBOX_WITH_NETFLT)
+# include <VBox/WinNetConfig.h>
+#endif /* #if defined(RT_OS_WINDOWS) && defined(VBOX_WITH_NETFLT) */
+
 #ifdef RT_OS_LINUX
 // # include <sys/types.h>
 // # include <sys/stat.h>
@@ -82,6 +86,11 @@ extern "C" char *getfullrawname(char *);
 
 #endif /* RT_OS_WINDOWS */
 
+#ifdef RT_OS_FREEBSD
+# ifdef VBOX_USE_LIBHAL
+#  include "vbox-libhal.h"
+# endif
+#endif
 
 #include "HostImpl.h"
 #include "HostDVDDriveImpl.h"
@@ -101,6 +110,9 @@ extern "C" char *getfullrawname(char *);
 # include "darwin/iokit.h"
 #endif
 
+#ifdef VBOX_WITH_CROGL
+extern bool is3DAccelerationSupported();
+#endif /* VBOX_WITH_CROGL */
 
 #include <iprt/asm.h>
 #include <iprt/string.h>
@@ -109,6 +121,7 @@ extern "C" char *getfullrawname(char *);
 #include <iprt/param.h>
 #include <iprt/env.h>
 #include <iprt/mem.h>
+#include <iprt/system.h>
 #ifdef RT_OS_SOLARIS
 # include <iprt/path.h>
 # include <iprt/ctype.h>
@@ -121,10 +134,6 @@ extern "C" char *getfullrawname(char *);
 #include <VBox/x86.h>
 #include <VBox/err.h>
 #include <VBox/settings.h>
-
-#if defined(RT_OS_WINDOWS) && defined(VBOX_WITH_NETFLT)
-# include <VBox/WinNetConfig.h>
-#endif /* #if defined(RT_OS_WINDOWS) && defined(VBOX_WITH_NETFLT) */
 
 #include <stdio.h>
 
@@ -243,6 +252,13 @@ HRESULT Host::init (VirtualBox *aParent)
         }
     }
 
+    /* Test for 3D hardware acceleration support */
+    f3DAccelerationSupported = false;
+
+#ifdef VBOX_WITH_CROGL
+    f3DAccelerationSupported = is3DAccelerationSupported();
+#endif /* VBOX_WITH_CROGL */
+
     setReady(true);
     return S_OK;
 }
@@ -298,109 +314,118 @@ STDMETHODIMP Host::COMGETTER(DVDDrives) (ComSafeArrayOut (IHostDVDDrive *, aDriv
     CHECK_READY();
     std::list <ComObjPtr <HostDVDDrive> > list;
     HRESULT rc = S_OK;
-
-#if defined(RT_OS_WINDOWS)
-    int sz = GetLogicalDriveStrings(0, NULL);
-    TCHAR *hostDrives = new TCHAR[sz+1];
-    GetLogicalDriveStrings(sz, hostDrives);
-    wchar_t driveName[3] = { '?', ':', '\0' };
-    TCHAR *p = hostDrives;
-    do
+    try
     {
-        if (GetDriveType(p) == DRIVE_CDROM)
+#if defined(RT_OS_WINDOWS)
+        int sz = GetLogicalDriveStrings(0, NULL);
+        TCHAR *hostDrives = new TCHAR[sz+1];
+        GetLogicalDriveStrings(sz, hostDrives);
+        wchar_t driveName[3] = { '?', ':', '\0' };
+        TCHAR *p = hostDrives;
+        do
         {
-            driveName[0] = *p;
-            ComObjPtr <HostDVDDrive> hostDVDDriveObj;
-            hostDVDDriveObj.createObject();
-            hostDVDDriveObj->init (Bstr (driveName));
-            list.push_back (hostDVDDriveObj);
+            if (GetDriveType(p) == DRIVE_CDROM)
+            {
+                driveName[0] = *p;
+                ComObjPtr <HostDVDDrive> hostDVDDriveObj;
+                hostDVDDriveObj.createObject();
+                hostDVDDriveObj->init (Bstr (driveName));
+                list.push_back (hostDVDDriveObj);
+            }
+            p += _tcslen(p) + 1;
         }
-        p += _tcslen(p) + 1;
-    }
-    while (*p);
-    delete[] hostDrives;
+        while (*p);
+        delete[] hostDrives;
 
 #elif defined(RT_OS_SOLARIS)
 # ifdef VBOX_USE_LIBHAL
-    if (!getDVDInfoFromHal(list))
+        if (!getDVDInfoFromHal(list))
 # endif
-    // Not all Solaris versions ship with libhal.
-    // So use a fallback approach similar to Linux.
-    {
-        if (RTEnvGet("VBOX_CDROM"))
+        // Not all Solaris versions ship with libhal.
+        // So use a fallback approach similar to Linux.
         {
-            char *cdromEnv = strdup(RTEnvGet("VBOX_CDROM"));
-            char *cdromDrive;
-            cdromDrive = strtok(cdromEnv, ":"); /** @todo use strtok_r. */
-            while (cdromDrive)
+            if (RTEnvGet("VBOX_CDROM"))
             {
-                if (validateDevice(cdromDrive, true))
+                char *cdromEnv = strdup(RTEnvGet("VBOX_CDROM"));
+                char *cdromDrive;
+                cdromDrive = strtok(cdromEnv, ":"); /** @todo use strtok_r. */
+                while (cdromDrive)
+                {
+                    if (validateDevice(cdromDrive, true))
+                    {
+                        ComObjPtr <HostDVDDrive> hostDVDDriveObj;
+                        hostDVDDriveObj.createObject();
+                        hostDVDDriveObj->init (Bstr (cdromDrive));
+                        list.push_back (hostDVDDriveObj);
+                    }
+                    cdromDrive = strtok(NULL, ":");
+                }
+                free(cdromEnv);
+            }
+            else
+            {
+                // this might work on Solaris version older than Nevada.
+                if (validateDevice("/cdrom/cdrom0", true))
                 {
                     ComObjPtr <HostDVDDrive> hostDVDDriveObj;
                     hostDVDDriveObj.createObject();
-                    hostDVDDriveObj->init (Bstr (cdromDrive));
+                    hostDVDDriveObj->init (Bstr ("cdrom/cdrom0"));
                     list.push_back (hostDVDDriveObj);
                 }
-                cdromDrive = strtok(NULL, ":");
-            }
-            free(cdromEnv);
-        }
-        else
-        {
-            // this might work on Solaris version older than Nevada.
-            if (validateDevice("/cdrom/cdrom0", true))
-            {
-                ComObjPtr <HostDVDDrive> hostDVDDriveObj;
-                hostDVDDriveObj.createObject();
-                hostDVDDriveObj->init (Bstr ("cdrom/cdrom0"));
-                list.push_back (hostDVDDriveObj);
-            }
 
-            // check the mounted drives
-            parseMountTable(MNTTAB, list);
+                // check the mounted drives
+                parseMountTable(MNTTAB, list);
+            }
         }
-    }
 
 #elif defined(RT_OS_LINUX)
-    if (RT_SUCCESS (mHostDrives.updateDVDs()))
-        for (DriveInfoList::const_iterator it = mHostDrives.DVDBegin();
-             SUCCEEDED (rc) && it != mHostDrives.DVDEnd(); ++it)
+        if (RT_SUCCESS (mHostDrives.updateDVDs()))
+            for (DriveInfoList::const_iterator it = mHostDrives.DVDBegin();
+                SUCCEEDED (rc) && it != mHostDrives.DVDEnd(); ++it)
+            {
+                ComObjPtr<HostDVDDrive> hostDVDDriveObj;
+                Bstr device(it->mDevice);
+                Bstr udi(it->mUdi);
+                Bstr description(it->mDescription);
+                if (SUCCEEDED (rc))
+                    rc = hostDVDDriveObj.createObject();
+                if (SUCCEEDED (rc))
+                    rc = hostDVDDriveObj->init (device, udi, description);
+                if (SUCCEEDED (rc))
+                    list.push_back(hostDVDDriveObj);
+            }
+#elif defined(RT_OS_DARWIN)
+        PDARWINDVD cur = DarwinGetDVDDrives();
+        while (cur)
         {
             ComObjPtr<HostDVDDrive> hostDVDDriveObj;
-            Bstr device (it->mDevice.c_str());
-            Bstr udi (it->mUdi.empty() ? NULL : it->mUdi.c_str());
-            Bstr description (it->mDescription.empty() ? NULL : it->mDescription.c_str());
-            if (device.isNull() || (!it->mUdi.empty() && udi.isNull()) ||
-                (!it->mDescription.empty() && description.isNull()))
-                rc = E_OUTOFMEMORY;
-            if (SUCCEEDED (rc))
-                rc = hostDVDDriveObj.createObject();
-            if (SUCCEEDED (rc))
-                rc = hostDVDDriveObj->init (device, udi, description);
-            if (SUCCEEDED (rc))
-                list.push_back(hostDVDDriveObj);
+            hostDVDDriveObj.createObject();
+            hostDVDDriveObj->init(Bstr(cur->szName));
+            list.push_back(hostDVDDriveObj);
+
+            /* next */
+            void *freeMe = cur;
+            cur = cur->pNext;
+            RTMemFree(freeMe);
         }
-#elif defined(RT_OS_DARWIN)
-    PDARWINDVD cur = DarwinGetDVDDrives();
-    while (cur)
-    {
-        ComObjPtr<HostDVDDrive> hostDVDDriveObj;
-        hostDVDDriveObj.createObject();
-        hostDVDDriveObj->init(Bstr(cur->szName));
-        list.push_back(hostDVDDriveObj);
-
-        /* next */
-        void *freeMe = cur;
-        cur = cur->pNext;
-        RTMemFree(freeMe);
-    }
-
+#elif defined(RT_OS_FREEBSD)
+# ifdef VBOX_USE_LIBHAL
+        if (!getDVDInfoFromHal(list))
+# endif
+        {
+            /** @todo: Scan for accessible /dev/cd* devices. */
+        }
 #else
     /* PORTME */
 #endif
 
-    SafeIfaceArray <IHostDVDDrive> array (list);
-    array.detachTo(ComSafeArrayOutArg(aDrives));
+        SafeIfaceArray <IHostDVDDrive> array (list);
+        array.detachTo(ComSafeArrayOutArg(aDrives));
+    }
+    catch(std::bad_alloc &e)
+    {
+        rc = E_OUTOFMEMORY;
+    }
     return rc;
 }
 
@@ -419,214 +444,58 @@ STDMETHODIMP Host::COMGETTER(FloppyDrives) (ComSafeArrayOut (IHostFloppyDrive *,
     std::list <ComObjPtr <HostFloppyDrive> > list;
     HRESULT rc = S_OK;
 
-#ifdef RT_OS_WINDOWS
-    int sz = GetLogicalDriveStrings(0, NULL);
-    TCHAR *hostDrives = new TCHAR[sz+1];
-    GetLogicalDriveStrings(sz, hostDrives);
-    wchar_t driveName[3] = { '?', ':', '\0' };
-    TCHAR *p = hostDrives;
-    do
+    try
     {
-        if (GetDriveType(p) == DRIVE_REMOVABLE)
+#ifdef RT_OS_WINDOWS
+        int sz = GetLogicalDriveStrings(0, NULL);
+        TCHAR *hostDrives = new TCHAR[sz+1];
+        GetLogicalDriveStrings(sz, hostDrives);
+        wchar_t driveName[3] = { '?', ':', '\0' };
+        TCHAR *p = hostDrives;
+        do
         {
-            driveName[0] = *p;
-            ComObjPtr <HostFloppyDrive> hostFloppyDriveObj;
-            hostFloppyDriveObj.createObject();
-            hostFloppyDriveObj->init (Bstr (driveName));
-            list.push_back (hostFloppyDriveObj);
+            if (GetDriveType(p) == DRIVE_REMOVABLE)
+            {
+                driveName[0] = *p;
+                ComObjPtr <HostFloppyDrive> hostFloppyDriveObj;
+                hostFloppyDriveObj.createObject();
+                hostFloppyDriveObj->init (Bstr (driveName));
+                list.push_back (hostFloppyDriveObj);
+            }
+            p += _tcslen(p) + 1;
         }
-        p += _tcslen(p) + 1;
-    }
-    while (*p);
-    delete[] hostDrives;
+        while (*p);
+        delete[] hostDrives;
 #elif defined(RT_OS_LINUX)
-    if (RT_SUCCESS (mHostDrives.updateFloppies()))
-        for (DriveInfoList::const_iterator it = mHostDrives.FloppyBegin();
-             SUCCEEDED (rc) && it != mHostDrives.FloppyEnd(); ++it)
-        {
-            ComObjPtr<HostFloppyDrive> hostFloppyDriveObj;
-            Bstr device (it->mDevice.c_str());
-            Bstr udi (it->mUdi.empty() ? NULL : it->mUdi.c_str());
-            Bstr description (it->mDescription.empty() ? NULL : it->mDescription.c_str());
-            if (device.isNull() || (!it->mUdi.empty() && udi.isNull()) ||
-                (!it->mDescription.empty() && description.isNull()))
-                rc = E_OUTOFMEMORY;
-            if (SUCCEEDED (rc))
-                rc = hostFloppyDriveObj.createObject();
-            if (SUCCEEDED (rc))
-                rc = hostFloppyDriveObj->init (device, udi, description);
-            if (SUCCEEDED (rc))
-                list.push_back(hostFloppyDriveObj);
-        }
+        if (RT_SUCCESS (mHostDrives.updateFloppies()))
+            for (DriveInfoList::const_iterator it = mHostDrives.FloppyBegin();
+                SUCCEEDED (rc) && it != mHostDrives.FloppyEnd(); ++it)
+            {
+                ComObjPtr<HostFloppyDrive> hostFloppyDriveObj;
+                Bstr device(it->mDevice);
+                Bstr udi(it->mUdi);
+                Bstr description(it->mDescription);
+                if (SUCCEEDED (rc))
+                    rc = hostFloppyDriveObj.createObject();
+                if (SUCCEEDED (rc))
+                    rc = hostFloppyDriveObj->init (device, udi, description);
+                if (SUCCEEDED (rc))
+                    list.push_back(hostFloppyDriveObj);
+            }
 #else
     /* PORTME */
 #endif
 
-    SafeIfaceArray<IHostFloppyDrive> collection (list);
-    collection.detachTo(ComSafeArrayOutArg (aDrives));
+        SafeIfaceArray<IHostFloppyDrive> collection (list);
+        collection.detachTo(ComSafeArrayOutArg (aDrives));
+    }
+    catch(std::bad_alloc &e)
+    {
+        rc = E_OUTOFMEMORY;
+    }
     return rc;
 }
 
-#ifdef RT_OS_SOLARIS
-static void vboxSolarisAddHostIface(char *pszIface, int Instance, PCRTMAC pMac, void *pvHostNetworkInterfaceList)
-{
-    std::list<ComObjPtr <HostNetworkInterface> > *pList = (std::list<ComObjPtr <HostNetworkInterface> > *)pvHostNetworkInterfaceList;
-    Assert(pList);
-
-    typedef std::map <std::string, std::string> NICMap;
-    typedef std::pair <std::string, std::string> NICPair;
-    static NICMap SolarisNICMap;
-    if (SolarisNICMap.empty())
-    {
-        SolarisNICMap.insert(NICPair("afe", "ADMtek Centaur/Comet Fast Ethernet"));
-        SolarisNICMap.insert(NICPair("aggr", "Link Aggregation Interface"));
-        SolarisNICMap.insert(NICPair("bge", "Broadcom BCM57xx Gigabit Ethernet"));
-        SolarisNICMap.insert(NICPair("ce", "Cassini Gigabit Ethernet"));
-        SolarisNICMap.insert(NICPair("chxge", "Chelsio Ethernet"));
-        SolarisNICMap.insert(NICPair("dmfe", "Davicom Fast Ethernet"));
-        SolarisNICMap.insert(NICPair("dnet", "DEC 21040/41 21140 Ethernet"));
-        SolarisNICMap.insert(NICPair("e1000", "Intel PRO/1000 Gigabit Ethernet"));
-        SolarisNICMap.insert(NICPair("e1000g", "Intel PRO/1000 Gigabit Ethernet"));
-        SolarisNICMap.insert(NICPair("elx", "3COM EtherLink III Ethernet"));
-        SolarisNICMap.insert(NICPair("elxl", "3COM Ethernet"));
-        SolarisNICMap.insert(NICPair("eri", "eri Fast Ethernet"));
-        SolarisNICMap.insert(NICPair("ge", "GEM Gigabit Ethernet"));
-        SolarisNICMap.insert(NICPair("hme", "SUNW,hme Fast-Ethernet"));
-        SolarisNICMap.insert(NICPair("ipge", "PCI-E Gigabit Ethernet"));
-        SolarisNICMap.insert(NICPair("iprb", "Intel 82557/58/59 Ethernet"));
-        SolarisNICMap.insert(NICPair("mxfe", "Macronix 98715 Fast Ethernet"));
-        SolarisNICMap.insert(NICPair("nge", "Nvidia Gigabit Ethernet"));
-        SolarisNICMap.insert(NICPair("pcelx", "3COM EtherLink III PCMCIA Ethernet"));
-        SolarisNICMap.insert(NICPair("pcn", "AMD PCnet Ethernet"));
-        SolarisNICMap.insert(NICPair("qfe", "SUNW,qfe Quad Fast-Ethernet"));
-        SolarisNICMap.insert(NICPair("rge", "Realtek Gigabit Ethernet"));
-        SolarisNICMap.insert(NICPair("rtls", "Realtek 8139 Fast Ethernet"));
-        SolarisNICMap.insert(NICPair("skge", "SksKonnect Gigabit Ethernet"));
-        SolarisNICMap.insert(NICPair("spwr", "SMC EtherPower II 10/100 (9432) Ethernet"));
-        SolarisNICMap.insert(NICPair("vnic", "Virtual Network Interface Ethernet"));
-        SolarisNICMap.insert(NICPair("xge", "Neterior Xframe Gigabit Ethernet"));
-        SolarisNICMap.insert(NICPair("xge", "Neterior Xframe 10Gigabit Ethernet"));
-    }
-
-    /*
-     * Try picking up description from our NIC map.
-     */
-    char szNICInstance[128];
-    RTStrPrintf(szNICInstance, sizeof(szNICInstance), "%s%d", pszIface, Instance);
-    char szNICDesc[256];
-    std::string Description = SolarisNICMap[pszIface];
-    if (Description != "")
-        RTStrPrintf(szNICDesc, sizeof(szNICDesc), "%s - %s", szNICInstance, Description.c_str());
-    else
-        RTStrPrintf(szNICDesc, sizeof(szNICDesc), "%s - Ethernet", szNICInstance);
-
-    /*
-     * Construct UUID with interface name and the MAC address if available.
-     */
-    RTUUID Uuid;
-    RTUuidClear(&Uuid);
-    memcpy(&Uuid, szNICInstance, RT_MIN(strlen(szNICInstance), sizeof(Uuid)));
-    Uuid.Gen.u8ClockSeqHiAndReserved = (Uuid.Gen.u8ClockSeqHiAndReserved & 0x3f) | 0x80;
-    Uuid.Gen.u16TimeHiAndVersion = (Uuid.Gen.u16TimeHiAndVersion & 0x0fff) | 0x4000;
-    if (pMac)
-    {
-        Uuid.Gen.au8Node[0] = pMac->au8[0];
-        Uuid.Gen.au8Node[1] = pMac->au8[1];
-        Uuid.Gen.au8Node[2] = pMac->au8[2];
-        Uuid.Gen.au8Node[3] = pMac->au8[3];
-        Uuid.Gen.au8Node[4] = pMac->au8[4];
-        Uuid.Gen.au8Node[5] = pMac->au8[5];
-    }
-
-    ComObjPtr<HostNetworkInterface> IfObj;
-    IfObj.createObject();
-    if (SUCCEEDED(IfObj->init(Bstr(szNICDesc), Guid(Uuid), HostNetworkInterfaceType_Bridged)))
-        pList->push_back(IfObj);
-}
-
-static boolean_t vboxSolarisAddLinkHostIface(const char *pszIface, void *pvHostNetworkInterfaceList)
-{
-    /*
-     * Clip off the zone instance number from the interface name (if any).
-     */
-    char szIfaceName[128];
-    strcpy(szIfaceName, pszIface);
-    char *pszColon = (char *)memchr(szIfaceName, ':', sizeof(szIfaceName));
-    if (pszColon)
-        *pszColon = '\0';
-
-    /*
-     * Get the instance number from the interface name, then clip it off.
-     */
-    int cbInstance = 0;
-    int cbIface = strlen(szIfaceName);
-    const char *pszEnd = pszIface + cbIface - 1;
-    for (int i = 0; i < cbIface - 1; i++)
-    {
-        if (!RT_C_IS_DIGIT(*pszEnd))
-            break;
-        cbInstance++;
-        pszEnd--;
-    }
-
-    int Instance = atoi(pszEnd + 1);
-    strncpy(szIfaceName, pszIface, cbIface - cbInstance);
-    szIfaceName[cbIface - cbInstance] = '\0';
-
-    /*
-     * Add the interface.
-     */
-    vboxSolarisAddHostIface(szIfaceName, Instance, NULL, pvHostNetworkInterfaceList);
-
-    /*
-     * Continue walking...
-     */
-    return _B_FALSE;
-}
-
-static bool vboxSolarisSortNICList(const ComObjPtr <HostNetworkInterface> Iface1, const ComObjPtr <HostNetworkInterface> Iface2)
-{
-    Bstr Iface1Str;
-    (*Iface1).COMGETTER(Name) (Iface1Str.asOutParam());
-
-    Bstr Iface2Str;
-    (*Iface2).COMGETTER(Name) (Iface2Str.asOutParam());
-
-    return Iface1Str < Iface2Str;
-}
-
-static bool vboxSolarisSameNIC(const ComObjPtr <HostNetworkInterface> Iface1, const ComObjPtr <HostNetworkInterface> Iface2)
-{
-    Bstr Iface1Str;
-    (*Iface1).COMGETTER(Name) (Iface1Str.asOutParam());
-
-    Bstr Iface2Str;
-    (*Iface2).COMGETTER(Name) (Iface2Str.asOutParam());
-
-    return (Iface1Str == Iface2Str);
-}
-
-# ifdef VBOX_SOLARIS_NSL_RESOLVED
-static int vboxSolarisAddPhysHostIface(di_node_t Node, di_minor_t Minor, void *pvHostNetworkInterfaceList)
-{
-    /*
-     * Skip aggregations.
-     */
-    if (!strcmp(di_driver_name(Node), "aggr"))
-        return DI_WALK_CONTINUE;
-
-    /*
-     * Skip softmacs.
-     */
-    if (!strcmp(di_driver_name(Node), "softmac"))
-        return DI_WALK_CONTINUE;
-
-    vboxSolarisAddHostIface(di_driver_name(Node), di_instance(Node), NULL, pvHostNetworkInterfaceList);
-    return DI_WALK_CONTINUE;
-}
-# endif /* VBOX_SOLARIS_NSL_RESOLVED */
-
-#endif
 
 #if defined(RT_OS_WINDOWS) && defined(VBOX_WITH_NETFLT)
 # define VBOX_APP_NAME L"VirtualBox"
@@ -975,6 +844,10 @@ STDMETHODIMP Host::COMGETTER(USBDevices)(ComSafeArrayOut (IHostUSBDevice *, aUSB
     /* Note: The GUI depends on this method returning E_NOTIMPL with no
      * extended error info to indicate that USB is simply not available
      * (w/o treating it as a failure), for example, as in OSE. */
+    NOREF(aUSBDevices);
+# ifndef RT_OS_WINDOWS
+    NOREF(aUSBDevicesSize);
+# endif
     ReturnComNotImplemented();
 #endif
 }
@@ -998,6 +871,10 @@ STDMETHODIMP Host::COMGETTER(USBDeviceFilters) (ComSafeArrayOut (IHostUSBDeviceF
     /* Note: The GUI depends on this method returning E_NOTIMPL with no
      * extended error info to indicate that USB is simply not available
      * (w/o treating it as a failure), for example, as in OSE. */
+    NOREF(aUSBDeviceFilters);
+# ifndef RT_OS_WINDOWS
+    NOREF(aUSBDeviceFiltersSize);
+# endif
     ReturnComNotImplemented();
 #endif
 }
@@ -1052,7 +929,7 @@ STDMETHODIMP Host::GetProcessorSpeed(ULONG aCpuId, ULONG *aSpeed)
  *
  * @returns COM status code
  * @param   cpu id to get info for.
- * @param   description address of result variable, NULL if known or aCpuId is invalid.
+ * @param   description address of result variable, empty string if not known or aCpuId is invalid.
  */
 STDMETHODIMP Host::GetProcessorDescription(ULONG /* aCpuId */, BSTR *aDescription)
 {
@@ -1151,8 +1028,13 @@ STDMETHODIMP Host::COMGETTER(OperatingSystem)(BSTR *aOs)
     CheckComArgOutPointerValid(aOs);
     AutoWriteLock alock (this);
     CHECK_READY();
-    /** @todo */
-    ReturnComNotImplemented();
+
+    char szOSName[80];
+    int vrc = RTSystemQueryOSInfo(RTSYSOSINFO_PRODUCT, szOSName, sizeof(szOSName));
+    if (RT_FAILURE(vrc))
+        return E_FAIL; /** @todo error reporting? */
+    Bstr (szOSName).cloneTo (aOs);
+    return S_OK;
 }
 
 /**
@@ -1166,8 +1048,30 @@ STDMETHODIMP Host::COMGETTER(OSVersion)(BSTR *aVersion)
     CheckComArgOutPointerValid(aVersion);
     AutoWriteLock alock (this);
     CHECK_READY();
-    /** @todo */
-    ReturnComNotImplemented();
+
+    /* Get the OS release. Reserve some buffer space for the service pack. */
+    char szOSRelease[128];
+    int vrc = RTSystemQueryOSInfo(RTSYSOSINFO_RELEASE, szOSRelease, sizeof(szOSRelease) - 32);
+    if (RT_FAILURE(vrc))
+        return E_FAIL; /** @todo error reporting? */
+
+    /* Append the service pack if present. */
+    char szOSServicePack[80];
+    vrc = RTSystemQueryOSInfo(RTSYSOSINFO_SERVICE_PACK, szOSServicePack, sizeof(szOSServicePack));
+    if (RT_FAILURE(vrc))
+    {
+        if (vrc != VERR_NOT_SUPPORTED)
+            return E_FAIL; /** @todo error reporting? */
+        szOSServicePack[0] = '\0';
+    }
+    if (szOSServicePack[0] != '\0')
+    {
+        char *psz = strchr(szOSRelease, '\0');
+        RTStrPrintf(psz, &szOSRelease[sizeof(szOSRelease)] - psz, "sp%s", szOSServicePack);
+    }
+
+    Bstr (szOSRelease).cloneTo (aVersion);
+    return S_OK;
 }
 
 /**
@@ -1186,11 +1090,20 @@ STDMETHODIMP Host::COMGETTER(UTCTime)(LONG64 *aUTCTime)
     return S_OK;
 }
 
+STDMETHODIMP Host::COMGETTER(Acceleration3DAvailable)(BOOL *aSupported)
+{
+    CheckComArgOutPointerValid(aSupported);
+
+    AutoWriteLock alock(this);
+    CHECK_READY();
+
+    *aSupported = f3DAccelerationSupported;
+
+    return S_OK;
+}
+
 // IHost methods
 ////////////////////////////////////////////////////////////////////////////////
-
-#ifdef RT_OS_WINDOWS
-
 STDMETHODIMP
 Host::CreateHostOnlyNetworkInterface (IHostNetworkInterface **aHostNetworkInterface,
                                   IProgress **aProgress)
@@ -1211,7 +1124,7 @@ Host::CreateHostOnlyNetworkInterface (IHostNetworkInterface **aHostNetworkInterf
 }
 
 STDMETHODIMP
-Host::RemoveHostOnlyNetworkInterface (IN_GUID aId,
+Host::RemoveHostOnlyNetworkInterface (IN_BSTR aId,
                                   IHostNetworkInterface **aHostNetworkInterface,
                                   IProgress **aProgress)
 {
@@ -1230,7 +1143,7 @@ Host::RemoveHostOnlyNetworkInterface (IN_GUID aId,
                 Guid (aId).raw());
     }
 
-    int r = NetIfRemoveHostOnlyNetworkInterface (mParent, aId, aHostNetworkInterface, aProgress);
+    int r = NetIfRemoveHostOnlyNetworkInterface (mParent, Guid(aId), aHostNetworkInterface, aProgress);
     if(RT_SUCCESS(r))
     {
         return S_OK;
@@ -1238,8 +1151,6 @@ Host::RemoveHostOnlyNetworkInterface (IN_GUID aId,
 
     return r == VERR_NOT_IMPLEMENTED ? E_NOTIMPL : E_FAIL;
 }
-
-#endif /* RT_OS_WINDOWS */
 
 STDMETHODIMP Host::CreateUSBDeviceFilter (IN_BSTR aName, IHostUSBDeviceFilter **aFilter)
 {
@@ -1261,6 +1172,8 @@ STDMETHODIMP Host::CreateUSBDeviceFilter (IN_BSTR aName, IHostUSBDeviceFilter **
     /* Note: The GUI depends on this method returning E_NOTIMPL with no
      * extended error info to indicate that USB is simply not available
      * (w/o treating it as a failure), for example, as in OSE. */
+    NOREF(aName);
+    NOREF(aFilter);
     ReturnComNotImplemented();
 #endif
 }
@@ -1308,6 +1221,8 @@ STDMETHODIMP Host::InsertUSBDeviceFilter (ULONG aPosition, IHostUSBDeviceFilter 
     /* Note: The GUI depends on this method returning E_NOTIMPL with no
      * extended error info to indicate that USB is simply not available
      * (w/o treating it as a failure), for example, as in OSE. */
+    NOREF(aPosition);
+    NOREF(aFilter);
     ReturnComNotImplemented();
 #endif
 }
@@ -1362,6 +1277,8 @@ STDMETHODIMP Host::RemoveUSBDeviceFilter (ULONG aPosition, IHostUSBDeviceFilter 
     /* Note: The GUI depends on this method returning E_NOTIMPL with no
      * extended error info to indicate that USB is simply not available
      * (w/o treating it as a failure), for example, as in OSE. */
+    NOREF(aPosition);
+    NOREF(aFilter);
     ReturnComNotImplemented();
 #endif
 }
@@ -1573,8 +1490,8 @@ void Host::getUSBFilters(Host::USBDeviceFilterList *aGlobalFilters, VirtualBox::
 // private methods
 ////////////////////////////////////////////////////////////////////////////////
 
-#if defined(RT_OS_SOLARIS) && defined(VBOX_USE_LIBHAL)
-/* Solaris hosts, loading libhal at runtime */
+#if (defined(RT_OS_SOLARIS) || defined(RT_OS_FREEBSD)) && defined(VBOX_USE_LIBHAL)
+/* Solaris and FreeBSD hosts, loading libhal at runtime */
 
 /**
  * Helper function to query the hal subsystem for information about DVD drives attached to the
@@ -1619,6 +1536,25 @@ bool Host::getDVDInfoFromHal(std::list <ComObjPtr <HostDVDDrive> > &list)
                             gLibHalFreeString(devNode);
                             devNode = tmp;
 #endif
+
+#ifdef RT_OS_FREEBSD
+                            /*
+                             * Don't show devices handled by the 'acd' driver.
+                             * The ioctls don't work with it.
+                             */
+                            char *driverName = gLibHalDeviceGetPropertyString(halContext,
+                                                       halDevices[i], "freebsd.driver", &dbusError);
+                            if (driverName)
+                            {
+                                if (RTStrCmp(driverName, "acd") == 0)
+                                {
+                                    gLibHalFreeString(devNode);
+                                    devNode = NULL;
+                                }
+                                gLibHalFreeString(driverName);
+                            }
+#endif
+
                             if (devNode != 0)
                             {
 //                                if (validateDevice(devNode, true))
@@ -2310,7 +2246,7 @@ STDMETHODIMP Host::FindHostNetworkInterfaceByName(IN_BSTR name, IHostNetworkInte
 #endif
 }
 
-STDMETHODIMP Host::FindHostNetworkInterfaceById(IN_GUID id, IHostNetworkInterface **networkInterface)
+STDMETHODIMP Host::FindHostNetworkInterfaceById(IN_BSTR id, IHostNetworkInterface **networkInterface)
 {
 #ifndef VBOX_WITH_HOSTNETIF_API
     return E_NOTIMPL;
@@ -2332,9 +2268,9 @@ STDMETHODIMP Host::FindHostNetworkInterfaceById(IN_GUID id, IHostNetworkInterfac
     std::list <ComObjPtr <HostNetworkInterface> >::iterator it;
     for (it = list.begin(); it != list.end(); ++it)
     {
-        Guid g;
+        Bstr g;
         (*it)->COMGETTER(Id) (g.asOutParam());
-        if (g == Guid(id))
+        if (g == id)
             found = *it;
     }
 
@@ -2406,11 +2342,13 @@ STDMETHODIMP Host::FindUSBDeviceByAddress (IN_BSTR aAddress, IHostUSBDevice **aD
         aAddress);
 
 #else   /* !VBOX_WITH_USB */
+    NOREF(aAddress);
+    NOREF(aDevice);
     return E_NOTIMPL;
 #endif  /* !VBOX_WITH_USB */
 }
 
-STDMETHODIMP Host::FindUSBDeviceById (IN_GUID aId, IHostUSBDevice **aDevice)
+STDMETHODIMP Host::FindUSBDeviceById (IN_BSTR aId, IHostUSBDevice **aDevice)
 {
 #ifdef VBOX_WITH_USB
     CheckComArgExpr(aId, Guid (aId).isEmpty() == false);
@@ -2424,7 +2362,7 @@ STDMETHODIMP Host::FindUSBDeviceById (IN_GUID aId, IHostUSBDevice **aDevice)
 
     for (size_t i = 0; i < devsvec.size(); ++i)
     {
-        Guid id;
+        Bstr id;
         rc = devsvec[i]->COMGETTER(Id) (id.asOutParam());
         CheckComRCReturnRC (rc);
         if (id == aId)
@@ -2438,6 +2376,8 @@ STDMETHODIMP Host::FindUSBDeviceById (IN_GUID aId, IHostUSBDevice **aDevice)
         Guid (aId).raw());
 
 #else   /* !VBOX_WITH_USB */
+    NOREF(aId);
+    NOREF(aDevice);
     return E_NOTIMPL;
 #endif  /* !VBOX_WITH_USB */
 }

@@ -44,14 +44,11 @@ class ATL_NO_VTABLE Session :
     public VirtualBoxBaseNEXT,
     public VirtualBoxSupportErrorInfoImpl <Session, ISession>,
     public VirtualBoxSupportTranslation <Session>,
+    VBOX_SCRIPTABLE_IMPL(ISession),
+    VBOX_SCRIPTABLE_IMPL(IInternalSessionControl)
 #ifdef RT_OS_WINDOWS
-    public IDispatchImpl<ISession, &IID_ISession, &LIBID_VirtualBox,
-                         kTypeLibraryMajorVersion, kTypeLibraryMinorVersion>,
-    public CComCoClass<Session, &CLSID_Session>,
-#else
-    public ISession,
+    , public CComCoClass<Session, &CLSID_Session>
 #endif
-    public IInternalSessionControl
 {
 public:
 
@@ -63,7 +60,8 @@ public:
     DECLARE_PROTECT_FINAL_CONSTRUCT()
 
     BEGIN_COM_MAP(Session)
-        COM_INTERFACE_ENTRY(IDispatch)
+        COM_INTERFACE_ENTRY2(IDispatch, ISession)
+        COM_INTERFACE_ENTRY2(IDispatch, IInternalSessionControl)        
         COM_INTERFACE_ENTRY(IInternalSessionControl)
         COM_INTERFACE_ENTRY(ISupportErrorInfo)
         COM_INTERFACE_ENTRY(ISession)
@@ -104,7 +102,7 @@ public:
     STDMETHOD(OnUSBControllerChange)();
     STDMETHOD(OnSharedFolderChange) (BOOL aGlobal);
     STDMETHOD(OnUSBDeviceAttach) (IUSBDevice *aDevice, IVirtualBoxErrorInfo *aError, ULONG aMaskedIfs);
-    STDMETHOD(OnUSBDeviceDetach) (IN_GUID aId, IVirtualBoxErrorInfo *aError);
+    STDMETHOD(OnUSBDeviceDetach) (IN_BSTR aId, IVirtualBoxErrorInfo *aError);
     STDMETHOD(OnShowWindow) (BOOL aCheck, BOOL *aCanShow, ULONG64 *aWinId);
     STDMETHOD(AccessGuestProperty) (IN_BSTR aName, IN_BSTR aValue, IN_BSTR aFlags,
                                     BOOL aIsSetter, BSTR *aRetValue, ULONG64 *aRetTimestamp, BSTR *aRetFlags);

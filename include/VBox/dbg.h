@@ -1,5 +1,5 @@
 /** @file
- * Debugger Interfaces.
+ * Debugger Interfaces. (VBoxDbg)
  *
  * This header covers all external interfaces of the Debugger module.
  * However, it does not cover the DBGF interface since that part of the
@@ -40,7 +40,7 @@
 
 #include <iprt/stdarg.h>
 
-__BEGIN_DECLS
+RT_C_DECLS_BEGIN
 
 /** @def VBOX_WITH_DEBUGGER
  * The build is with debugger module. Test if this is defined before registering
@@ -730,6 +730,6 @@ DBGDECL(int)    DBGCTcpCreate(PVM pVM, void **ppvUser);
 DBGDECL(int)    DBGCTcpTerminate(PVM pVM, void *pvData);
 
 
-__END_DECLS
+RT_C_DECLS_END
 
 #endif

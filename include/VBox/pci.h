@@ -1,5 +1,5 @@
 /** @file
- * PCI - The PCI Controller And Devices.
+ * PCI - The PCI Controller And Devices. (DEV)
  */
 
 /*
@@ -275,6 +275,17 @@ DECLINLINE(void) PCIDevSetCommand(PPCIDEVICE pPciDev, uint16_t u16Command)
     u16Command = RT_H2LE_U16(u16Command);
     pPciDev->config[VBOX_PCI_COMMAND]     = u16Command & 0xff;
     pPciDev->config[VBOX_PCI_COMMAND + 1] = u16Command >> 8;
+}
+
+
+/**
+ * Gets the command config register.
+ * @returns The command register value.
+ * @param   pPciDev         The PCI device.
+ */
+DECLINLINE(uint16_t) PCIDevGetCommand(PPCIDEVICE pPciDev)
+{
+    return RT_LE2H_U16(RT_MAKE_U16(pPciDev->config[VBOX_PCI_COMMAND], pPciDev->config[VBOX_PCI_COMMAND + 1]));
 }
 
 

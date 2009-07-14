@@ -141,8 +141,10 @@
 *   Header Files                                                               *
 *******************************************************************************/
 #define LOG_GROUP RTLOGGROUP_STRING
-#include <iprt/log.h>
 #include <iprt/string.h>
+#include "internal/iprt.h"
+
+#include <iprt/log.h>
 #include <iprt/assert.h>
 #include <iprt/string.h>
 #include <iprt/stdarg.h>
@@ -413,7 +415,7 @@ size_t rtstrFormatRt(PFNRTSTROUTPUT pfnOutput, void *pvArgOutput, const char **p
 
                     case RTSF_FP16:
                     {
-                        fFlags &= ~(RTSTR_F_VALSIGNED | RTSTR_F_BIT_MASK | RTSTR_F_WIDTH | RTSTR_F_PRECISION);
+                        fFlags &= ~(RTSTR_F_VALSIGNED | RTSTR_F_BIT_MASK | RTSTR_F_WIDTH | RTSTR_F_PRECISION | RTSTR_F_THOUSAND_SEP);
                         cch = RTStrFormatNumber(&szBuf[0], u.fp16.sel, 16, 4, -1, fFlags | RTSTR_F_16BIT);
                         Assert(cch == 4);
                         szBuf[4] = ':';
@@ -424,7 +426,7 @@ size_t rtstrFormatRt(PFNRTSTROUTPUT pfnOutput, void *pvArgOutput, const char **p
                     }
                     case RTSF_FP32:
                     {
-                        fFlags &= ~(RTSTR_F_VALSIGNED | RTSTR_F_BIT_MASK | RTSTR_F_WIDTH | RTSTR_F_PRECISION);
+                        fFlags &= ~(RTSTR_F_VALSIGNED | RTSTR_F_BIT_MASK | RTSTR_F_WIDTH | RTSTR_F_PRECISION | RTSTR_F_THOUSAND_SEP);
                         cch = RTStrFormatNumber(&szBuf[0], u.fp32.sel, 16, 4, -1, fFlags | RTSTR_F_16BIT);
                         Assert(cch == 4);
                         szBuf[4] = ':';
@@ -435,7 +437,7 @@ size_t rtstrFormatRt(PFNRTSTROUTPUT pfnOutput, void *pvArgOutput, const char **p
                     }
                     case RTSF_FP64:
                     {
-                        fFlags &= ~(RTSTR_F_VALSIGNED | RTSTR_F_BIT_MASK | RTSTR_F_WIDTH | RTSTR_F_PRECISION);
+                        fFlags &= ~(RTSTR_F_VALSIGNED | RTSTR_F_BIT_MASK | RTSTR_F_WIDTH | RTSTR_F_PRECISION | RTSTR_F_THOUSAND_SEP);
                         cch = RTStrFormatNumber(&szBuf[0], u.fp64.sel, 16, 4, -1, fFlags | RTSTR_F_16BIT);
                         Assert(cch == 4);
                         szBuf[4] = ':';
@@ -828,7 +830,7 @@ size_t rtstrFormatRt(PFNRTSTROUTPUT pfnOutput, void *pvArgOutput, const char **p
                 switch (s_aTypes[i].enmType)
                 {
                     case RTST_TIMESPEC:
-                        return RTStrFormat(pfnOutput, pvArgOutput, NULL, NULL, "%lld ns", RTTimeSpecGetNano(u.pTimeSpec));
+                        return RTStrFormat(pfnOutput, pvArgOutput, NULL, NULL, "%'lld ns", RTTimeSpecGetNano(u.pTimeSpec));
 
                     default:
                         AssertMsgFailed(("Invalid/unhandled enmType=%d\n", s_aTypes[i].enmType));

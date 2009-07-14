@@ -34,7 +34,7 @@ class ATL_NO_VTABLE VRDPServer :
     public VirtualBoxBaseNEXT,
     public VirtualBoxSupportErrorInfoImpl <VRDPServer, IVRDPServer>,
     public VirtualBoxSupportTranslation <VRDPServer>,
-    public IVRDPServer
+    VBOX_SCRIPTABLE_IMPL(IVRDPServer)
 {
 public:
 
@@ -68,8 +68,9 @@ public:
     DECLARE_PROTECT_FINAL_CONSTRUCT()
 
     BEGIN_COM_MAP(VRDPServer)
-        COM_INTERFACE_ENTRY(ISupportErrorInfo)
-        COM_INTERFACE_ENTRY(IVRDPServer)
+        COM_INTERFACE_ENTRY  (ISupportErrorInfo)
+        COM_INTERFACE_ENTRY  (IVRDPServer)
+        COM_INTERFACE_ENTRY2 (IDispatch, IVRDPServer)
     END_COM_MAP()
 
     NS_DECL_ISUPPORTS

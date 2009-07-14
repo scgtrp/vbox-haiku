@@ -27,27 +27,6 @@
 #include "VBoxNewHDWzd.h"
 #include "VBoxMediaManagerDlg.h"
 
-/**
- * Calculates a suitable page step size for the given max value.
- * The returned size is so that there will be no more than 32 pages.
- * The minimum returned page size is 4.
- */
-static int calcPageStep (int aMax)
-{
-    /* Reasonable max. number of page steps is 32 */
-    uint page = ((uint) aMax + 31) / 32;
-    /* Make it a power of 2 */
-    uint p = page, p2 = 0x1;
-    while ((p >>= 1))
-        p2 <<= 1;
-    if (page != p2)
-        p2 <<= 1;
-    if (p2 < 4)
-        p2 = 4;
-    return (int) p2;
-}
-
-
 VBoxNewVMWzd::VBoxNewVMWzd (QWidget *aParent)
     : QIWithRetranslateUI<QIAbstractWizard> (aParent)
 {
@@ -66,15 +45,8 @@ VBoxNewVMWzd::VBoxNewVMWzd (QWidget *aParent)
     connect (mOSTypeSelector, SIGNAL (osTypeChanged()), this, SLOT (onOSTypeChanged()));
 
     /* Memory page */
-    CSystemProperties sysProps = vboxGlobal().virtualBox().GetSystemProperties();
-    const uint MinRAM = sysProps.GetMinGuestRAM();
-    const uint MaxRAM = sysProps.GetMaxGuestRAM();
-    mSlRAM->setPageStep (calcPageStep (MaxRAM));
-    mSlRAM->setSingleStep (mSlRAM->pageStep() / 4);
-    mSlRAM->setTickInterval (mSlRAM->pageStep());
-    mSlRAM->setRange ((MinRAM / mSlRAM->pageStep()) * mSlRAM->pageStep(), MaxRAM);
     mLeRAM->setFixedWidthByText ("99999");
-    mLeRAM->setValidator (new QIntValidator (MinRAM, MaxRAM, this));
+    mLeRAM->setValidator (new QIntValidator (mSlRAM->minRAM(), mSlRAM->maxRAM(), this));
 
     mWvalMemory = new QIWidgetValidator (mPageMemory, this);
     connect (mWvalMemory, SIGNAL (validityChanged (const QIWidgetValidator*)),
@@ -156,14 +128,10 @@ void VBoxNewVMWzd::retranslateUi()
         tr ("The recommended size of the boot hard disk is <b>%1</b> MB.")
             .arg (type.GetRecommendedHDD()));
 
-    CSystemProperties sysProps = vboxGlobal().virtualBox().GetSystemProperties();
-    const uint MinRAM = sysProps.GetMinGuestRAM();
-    const uint MaxRAM = sysProps.GetMaxGuestRAM();
-
     mTxRAMMin->setText (QString ("<qt>%1&nbsp;%2</qt>")
-                        .arg (MinRAM).arg (tr ("MB", "megabytes")));
+                        .arg (mSlRAM->minRAM()).arg (tr ("MB", "megabytes")));
     mTxRAMMax->setText (QString ("<qt>%1&nbsp;%2</qt>")
-                        .arg (MaxRAM).arg (tr ("MB", "megabytes")));
+                        .arg (mSlRAM->maxRAM()).arg (tr ("MB", "megabytes")));
 
     QWidget *page = mPageStack->currentWidget();
 
@@ -203,7 +171,7 @@ void VBoxNewVMWzd::showMediaManager()
 
     if (dlg.exec() == QDialog::Accepted)
     {
-        QUuid newId = dlg.selectedId();
+        QString newId = dlg.selectedId();
         if (mHDCombo->id() != newId)
         {
             ensureNewHardDiskDeleted();
@@ -235,7 +203,7 @@ void VBoxNewVMWzd::hdTypeChanged()
     mTbVmm->setEnabled (mExistRadio->isChecked());
     if (mExistRadio->isChecked())
         mHDCombo->setFocus();
-    
+
     mWvalHDD->revalidate();
 }
 
@@ -245,19 +213,16 @@ void VBoxNewVMWzd::revalidate (QIWidgetValidator *aWval)
     bool valid = aWval->isOtherValid();
 
     /* Do individual validations for pages */
-    ulong memorySize = vboxGlobal().virtualBox().GetHost().GetMemorySize();
-    ulong summarySize = (ulong)(mSlRAM->value()) +
-                        (ulong)(VBoxGlobal::requiredVideoMemory() / _1M);
     if (aWval->widget() == mPageMemory)
     {
         valid = true;
-        if (summarySize > 0.75 * memorySize)
+        if (mSlRAM->value() > (int)mSlRAM->maxRAMAlw())
             valid = false;
     }
     else if (aWval->widget() == mPageHDD)
     {
         valid = true;
-        if (    (mGbHDA->isChecked()) 
+        if (    (mGbHDA->isChecked())
             &&  (mHDCombo->id().isNull())
             &&  (mExistRadio->isChecked()))
         {
@@ -354,7 +319,7 @@ bool VBoxNewVMWzd::constructMachine()
     /* Create a machine with the default settings file location */
     if (mMachine.isNull())
     {
-        mMachine = vbox.CreateMachine (mLeName->text(), typeId, QString::null, QUuid());
+        mMachine = vbox.CreateMachine (mLeName->text(), typeId, QString::null, QString::null);
         if (!vbox.isOk())
         {
             vboxProblem().cannotCreateMachine (vbox, this);
@@ -398,7 +363,7 @@ bool VBoxNewVMWzd::constructMachine()
     if (mGbHDA->isChecked())
     {
         bool success = false;
-        QUuid machineId = mMachine.GetId();
+        QString machineId = mMachine.GetId();
         CSession session = vboxGlobal().openSession (machineId);
         if (!session.isNull())
         {
@@ -439,7 +404,7 @@ void VBoxNewVMWzd::ensureNewHardDiskDeleted()
     if (!mHardDisk.isNull())
     {
         /* Remember ID as it may be lost after the deletion */
-        QUuid id = mHardDisk.GetId();
+        QString id = mHardDisk.GetId();
 
         bool success = false;
 

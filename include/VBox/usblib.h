@@ -1,6 +1,5 @@
 /** @file
- * USBLIB - USB Support Library.
- * This module implements the basic low-level OS interfaces.
+ * USBLib - Library for wrapping up the VBoxUSB functionality. (DEV,HDrv,Main)
  */
 
 /*
@@ -47,7 +46,7 @@
 #endif
 /** @todo merge the usblib-win.h interface into the darwin and linux ports where suitable. */
 
-__BEGIN_DECLS
+RT_C_DECLS_BEGIN
 /** @defgroup grp_USBLib    USBLib - USB Support Library
  * This module implements the basic low-level OS interfaces and common USB code.
  * @{
@@ -118,7 +117,7 @@ USBLIB_DECL(uint64_t) USBLibHashSerial(const char *pszSerial);
 #endif /* IN_RING3 */
 
 /** @} */
-__END_DECLS
+RT_C_DECLS_END
 
 #endif
 

@@ -8,7 +8,7 @@
  */
 
 /*
- * Copyright (C) 2006-2007 Sun Microsystems, Inc.
+ * Copyright (C) 2006-2009 Sun Microsystems, Inc.
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -32,7 +32,7 @@
 #include <VBox/com/string.h>
 #include <VBox/com/Guid.h>
 #include <VBox/com/ErrorInfo.h>
-#include <VBox/com/errorprint2.h>
+#include <VBox/com/errorprint.h>
 
 #include <VBox/com/VirtualBox.h>
 
@@ -413,7 +413,7 @@ static int CmdLoadSyms(int argc, char **argv, ComPtr<IVirtualBox> aVirtualBox, C
      */
     ComPtr<IMachine> machine;
     /* assume it's a UUID */
-    rc = aVirtualBox->GetMachine(Guid(argv[0]), machine.asOutParam());
+    rc = aVirtualBox->GetMachine(Bstr(argv[0]), machine.asOutParam());
     if (FAILED(rc) || !machine)
     {
         /* must be a name */
@@ -869,6 +869,9 @@ static int CmdCreateRawVMDK(int argc, char **argv, ComPtr<IVirtualBox> aVirtualB
     if (!pszPartitions && pszMBRFilename)
         return errorSyntax(USAGE_CREATERAWVMDK, "The parameter -mbr is only valid when the parameter -partitions is also present");
 
+#ifdef RT_OS_DARWIN
+    fRelative = true;
+#endif /* RT_OS_DARWIN */
     RTFILE RawFile;
     int vrc = RTFileOpen(&RawFile, rawdisk.raw(), RTFILE_O_OPEN | RTFILE_O_READ | RTFILE_O_DENY_WRITE);
     if (RT_FAILURE(vrc))
@@ -1118,6 +1121,20 @@ static int CmdCreateRawVMDK(int argc, char **argv, ComPtr<IVirtualBox> aVirtualB
                     RawDescriptor.pPartitions[i].pszRawDevice = pszRawName;
                     RawDescriptor.pPartitions[i].uPartitionStartOffset = 0;
                     RawDescriptor.pPartitions[i].uPartitionStart = partitions.aPartitions[i].uStart * 512;
+#elif defined(RT_OS_DARWIN)
+                    /* Refer to the correct partition and use offset 0. */
+                    char *pszRawName;
+                    vrc = RTStrAPrintf(&pszRawName, "%ss%u", rawdisk.raw(),
+                                       partitions.aPartitions[i].uIndex);
+                    if (RT_FAILURE(vrc))
+                    {
+                        RTPrintf("Error creating reference to individual partition %u, rc=%Rrc\n",
+                                 partitions.aPartitions[i].uIndex, vrc);
+                        goto out;
+                    }
+                    RawDescriptor.pPartitions[i].pszRawDevice = pszRawName;
+                    RawDescriptor.pPartitions[i].uPartitionStartOffset = 0;
+                    RawDescriptor.pPartitions[i].uPartitionStart = partitions.aPartitions[i].uStart * 512;
 #else
                     /** @todo not implemented yet for Windows host. Treat just
                      * like not specified (this code is actually never reached). */
@@ -1157,7 +1174,10 @@ static int CmdCreateRawVMDK(int argc, char **argv, ComPtr<IVirtualBox> aVirtualB
             else
                 RawDescriptor.pPartitions[i].cbPartition =  partitions.aPartitions[i].uSize * 512;
             RawDescriptor.pPartitions[i].uPartitionDataStart = partitions.aPartitions[i].uPartDataStart * 512;
-            RawDescriptor.pPartitions[i].cbPartitionData = partitions.aPartitions[i].cPartDataSectors * 512;
+            /** @todo the clipping below isn't 100% accurate, as it should
+             * actually clip to the track size. However that's easier said
+             * than done as figuring out the track size is heuristics. */
+            RawDescriptor.pPartitions[i].cbPartitionData = RT_MIN(partitions.aPartitions[i].cPartDataSectors, 63) * 512;
             if (RawDescriptor.pPartitions[i].cbPartitionData)
             {
                 Assert (RawDescriptor.pPartitions[i].cbPartitionData -
@@ -1261,7 +1281,7 @@ static int CmdCreateRawVMDK(int argc, char **argv, ComPtr<IVirtualBox> aVirtualB
     if (fRegister)
     {
         ComPtr<IHardDisk> hardDisk;
-        CHECK_ERROR(aVirtualBox, OpenHardDisk(filename, AccessMode_ReadWrite, hardDisk.asOutParam()));
+        CHECK_ERROR(aVirtualBox, OpenHardDisk(filename, AccessMode_ReadWrite, false, Bstr(""), false, Bstr(""), hardDisk.asOutParam()));
     }
 
     return SUCCEEDED(rc) ? 0 : 1;
@@ -1637,7 +1657,7 @@ int CmdModUninstall(void)
 {
     int rc;
 
-    rc = SUPUninstall();
+    rc = SUPR3Uninstall();
     if (RT_SUCCESS(rc))
         return 0;
     if (rc == VERR_NOT_IMPLEMENTED)
@@ -1654,7 +1674,7 @@ int CmdModInstall(void)
 {
     int rc;
 
-    rc = SUPInstall();
+    rc = SUPR3Install();
     if (RT_SUCCESS(rc))
         return 0;
     if (rc == VERR_NOT_IMPLEMENTED)

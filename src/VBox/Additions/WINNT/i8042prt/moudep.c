@@ -541,7 +541,7 @@ Return Value:
 
                     if (RT_SUCCESS(rc) && RT_SUCCESS(req->header.rc))
                     {
-                        if (req->mouseFeatures & VBOXGUEST_MOUSE_HOST_CAN_ABSOLUTE)
+                        if (req->mouseFeatures & VMMDEV_MOUSE_HOST_CAN_ABSOLUTE)
                         {
                             // make it an absolute move
                             deviceExtension->MouseExtension.CurrentInput.Flags = MOUSE_MOVE_ABSOLUTE;
@@ -607,7 +607,7 @@ Return Value:
 
                     if (RT_SUCCESS(rc) && RT_SUCCESS(req->header.rc))
                     {
-                        if (req->mouseFeatures & VBOXGUEST_MOUSE_HOST_CAN_ABSOLUTE)
+                        if (req->mouseFeatures & VMMDEV_MOUSE_HOST_CAN_ABSOLUTE)
                         {
                             // make it an absolute move
                             deviceExtension->MouseExtension.CurrentInput.Flags = MOUSE_MOVE_ABSOLUTE;
@@ -1915,7 +1915,7 @@ Remarks:
 
         //
         // If the read timed out, stall and retry.
-        // If some other error occured handle it outside the loop
+        // If some other error occurred handle it outside the loop
         //
 
         if(status == STATUS_IO_TIMEOUT) {

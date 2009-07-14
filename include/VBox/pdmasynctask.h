@@ -1,5 +1,5 @@
 /** @file
- * PDM - Pluggable Device Manager, Async Task.
+ * PDM - Pluggable Device Manager, Async Task. (VMM)
  */
 
 /*
@@ -32,7 +32,7 @@
 
 #include <VBox/types.h>
 
-__BEGIN_DECLS
+RT_C_DECLS_BEGIN
 
 
 /** @defgroup grp_pdm_async_task    The PDM Async Task API
@@ -59,7 +59,7 @@ typedef PPDMASYNCTASK *PPPDMASYNCTASK;
 /** @} */
 
 
-__END_DECLS
+RT_C_DECLS_END
 
 #endif
 

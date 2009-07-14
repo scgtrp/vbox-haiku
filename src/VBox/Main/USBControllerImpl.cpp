@@ -374,6 +374,10 @@ STDMETHODIMP USBController::COMGETTER(DeviceFilters) (ComSafeArrayOut(IUSBDevice
 
     return S_OK;
 #else
+    NOREF(aDevicesFilters);
+# ifndef RT_OS_WINDOWS
+    NOREF(aDevicesFiltersSize);
+# endif
     ReturnComNotImplemented();
 #endif
 }
@@ -407,6 +411,8 @@ STDMETHODIMP USBController::CreateDeviceFilter (IN_BSTR aName,
 
     return S_OK;
 #else
+    NOREF(aName);
+    NOREF(aFilter);
     ReturnComNotImplemented();
 #endif
 }
@@ -467,6 +473,8 @@ STDMETHODIMP USBController::InsertDeviceFilter (ULONG aPosition,
 
 #else /* VBOX_WITH_USB */
 
+    NOREF(aPosition);
+    NOREF(aFilter);
     ReturnComNotImplemented();
 
 #endif /* VBOX_WITH_USB */
@@ -532,6 +540,8 @@ STDMETHODIMP USBController::RemoveDeviceFilter (ULONG aPosition,
 
 #else /* VBOX_WITH_USB */
 
+    NOREF(aPosition);
+    NOREF(aFilter);
     ReturnComNotImplemented();
 
 #endif /* VBOX_WITH_USB */
@@ -1193,7 +1203,6 @@ bool USBController::hasMatchingFilter (IUSBDevice *aUSBDevice, ULONG *aMaskedIfs
     USHORT productId = 0;
     rc = aUSBDevice->COMGETTER(ProductId) (&productId);
     ComAssertComRCRet (rc, false);
-    ComAssertRet (productId, false);
     vrc = USBFilterSetNumExact (&dev, USBFILTERIDX_PRODUCT_ID, productId, true); AssertRC(vrc);
 
     USHORT revision;

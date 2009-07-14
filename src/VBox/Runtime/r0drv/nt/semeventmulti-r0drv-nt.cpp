@@ -144,15 +144,17 @@ static int rtSemEventMultiWait(RTSEMEVENTMULTI EventMultiSem, unsigned cMillies,
 
     /*
      * Wait for it.
+     * We're assuming interruptible waits should happen at UserMode level.
      */
-    NTSTATUS rcNt;
+    NTSTATUS        rcNt;
+    KPROCESSOR_MODE WaitMode   = fInterruptible ? UserMode : KernelMode;
     if (cMillies == RT_INDEFINITE_WAIT)
-        rcNt = KeWaitForSingleObject(&pThis->Event, Executive, KernelMode, fInterruptible, NULL);
+        rcNt = KeWaitForSingleObject(&pThis->Event, Executive, WaitMode, fInterruptible, NULL);
     else
     {
         LARGE_INTEGER Timeout;
         Timeout.QuadPart = -(int64_t)cMillies * 10000;
-        rcNt = KeWaitForSingleObject(&pThis->Event, Executive, KernelMode, fInterruptible, &Timeout);
+        rcNt = KeWaitForSingleObject(&pThis->Event, Executive, WaitMode, fInterruptible, &Timeout);
     }
     switch (rcNt)
     {

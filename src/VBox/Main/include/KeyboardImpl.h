@@ -50,7 +50,7 @@ class ATL_NO_VTABLE Keyboard :
     public VirtualBoxBaseNEXT,
     public VirtualBoxSupportErrorInfoImpl <Keyboard, IKeyboard>,
     public VirtualBoxSupportTranslation <Keyboard>,
-    public IKeyboard
+    VBOX_SCRIPTABLE_IMPL(IKeyboard)
 {
 
 public:
@@ -64,6 +64,7 @@ public:
     BEGIN_COM_MAP(Keyboard)
         COM_INTERFACE_ENTRY(ISupportErrorInfo)
         COM_INTERFACE_ENTRY(IKeyboard)
+        COM_INTERFACE_ENTRY(IDispatch)
     END_COM_MAP()
 
     NS_DECL_ISUPPORTS

@@ -164,14 +164,14 @@ void Snapshot::discard()
 // ISnapshot methods
 ////////////////////////////////////////////////////////////////////////////////
 
-STDMETHODIMP Snapshot::COMGETTER(Id) (OUT_GUID aId)
+STDMETHODIMP Snapshot::COMGETTER(Id) (BSTR *aId)
 {
     CheckComArgOutPointerValid(aId);
 
     AutoWriteLock alock (this);
     CHECK_READY();
 
-    mData.mId.cloneTo (aId);
+    mData.mId.toUtf16().cloneTo (aId);
     return S_OK;
 }
 
@@ -411,7 +411,9 @@ void Snapshot::updateSavedStatePaths (const char *aOldPath, const char *aNewPath
     LogFlowThisFunc (("Snap[%ls].statePath={%s}\n", mData.mName.raw(), path.raw()));
 
     /* state file may be NULL (for offline snapshots) */
-    if (path && RTPathStartsWith (path, aOldPath))
+    if (    path.length()
+         && RTPathStartsWith(path, aOldPath)
+       )
     {
         path = Utf8StrFmt ("%s%s", aNewPath, path.raw() + strlen (aOldPath));
         mData.mMachine->mSSData->mStateFilePath = path;
