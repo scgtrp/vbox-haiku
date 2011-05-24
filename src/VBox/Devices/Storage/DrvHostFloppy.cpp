@@ -33,6 +33,12 @@
 
 #elif defined(RT_OS_L4)
 
+#elif defined(RT_OS_HAIKU)
+# include <errno.h>
+# include <stdio.h>
+# include <unistd.h>
+# include <Drivers.h>
+
 #else /* !RT_OS_WINDOWS nor RT_OS_LINUX nor RT_OS_L4 */
 # error "Unsupported Platform."
 #endif /* !RT_OS_WINDOWS nor RT_OS_LINUX nor RT_OS_L4 */

@@ -168,7 +168,7 @@ RT_C_DECLS_END
 #  if defined(RT_OS_LINUX) && __GNUC__ < 3
 typedef uint8_t bool;
 #  else
-#   if defined(RT_OS_DARWIN) && defined(_STDBOOL_H)
+#   if (defined(RT_OS_DARWIN) || defined(RT_OS_HAIKU)) && defined(_STDBOOL_H)
 #    undef bool
 #   endif
 typedef _Bool bool;

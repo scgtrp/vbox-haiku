@@ -54,7 +54,9 @@
 # include <unistd.h>
 # include <sys/stat.h>
 # include <sys/time.h>
-# include <sys/fcntl.h>
+# ifndef RT_OS_HAIKU
+#  include <sys/fcntl.h>
+# endif
 # include <stdio.h>
 # include <pwd.h>
 # ifdef RT_OS_DARWIN

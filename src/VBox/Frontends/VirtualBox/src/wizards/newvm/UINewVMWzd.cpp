@@ -127,6 +127,10 @@ static const osTypePattern gs_OSTypePattern[] =
     { QRegExp("Net", Qt::CaseInsensitive), "Netware" },
     { QRegExp("Rocki", Qt::CaseInsensitive), "JRockitVE" },
     { QRegExp("Ot", Qt::CaseInsensitive), "Other" },
+    { QRegExp("BeOS", Qt::CaseInsensitive), "BeOS" },
+    { QRegExp("Be.*R5", Qt::CaseInsensitive), "BeOS" },
+    { QRegExp("Haiku", Qt::CaseInsensitive), "Haiku" },
+    { QRegExp("Hai.*R1", Qt::CaseInsensitive), "Haiku" },
 };
 
 UINewVMWzd::UINewVMWzd(QWidget *pParent) : QIWizard(pParent)

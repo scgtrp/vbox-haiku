@@ -27,6 +27,7 @@
 #ifndef ___CLIPBOARD_HELPER_H
 #define ___CLIPBOARD_HELPER_H
 
+#include <iprt/cdefs.h>
 #include <iprt/string.h>
 
 /** Constants needed for string conversions done by the Linux/Mac clipboard code. */
@@ -90,6 +91,68 @@ int vboxClipboardUtf16GetLinSize(PRTUTF16 pwszSrc, size_t cwSrc, size_t *pcwDest
  * @param   cwDest        The size of the buffer for the destination text in 16 bit words
  */
 int vboxClipboardUtf16WinToLin(PRTUTF16 pwszSrc, size_t cwSrc, PRTUTF16 pu16Dest, size_t cwDest);
+
+#pragma pack(1)
+/** @todo rename those to avoid clashing with MS official names */
+/**
+ * Bitmap File Header.
+ * Always Little Endian.
+ */
+typedef struct BITMAPFILEHEADER
+{
+    uint16_t    u16Type;
+    uint32_t    u32Size;
+    uint16_t    u16Reserved1;
+    uint16_t    u16Reserved2;
+    uint32_t    u32OffBits;
+} BITMAPFILEHEADER;
+/** Pointer to a BITMAPFILEHEADER structure. */
+typedef BITMAPFILEHEADER *PBITMAPFILEHEADER;
+
+typedef struct BITMAPINFOHEADER
+{
+    uint32_t    u32Size;
+    uint32_t    u32Width;
+    uint32_t    u32Height;
+    uint16_t    u16Planes;
+    uint16_t    u16BitCount;
+    uint32_t    u32Compression;
+    uint32_t    u32SizeImage;
+    uint32_t    u32XBitsPerMeter;
+    uint32_t    u32YBitsPerMeter;
+    uint32_t    u32ClrUsed;
+    uint32_t    u32ClrImportant;
+} BITMAPINFOHEADER;
+/** Pointer to a BITMAPFILEHEADER structure. */
+typedef BITMAPINFOHEADER *PBITMAPINFOHEADER;
+#pragma pack()
+
+#define BITMAPHEADERMAGIC (RT_H2LE_U16_C(0x4d42))
+
+/**
+ * Convert CF_DIB data to full BMP data by prepending the BM header.
+ *
+ * @returns VBox status code
+ *
+ * @param   pSrc          DIB data to convert
+ * @param   cbSrc         Size of the DIB data to convert in bytes
+ * @param   ppDest        Pointer to the buffer for the destination data
+ * @param   pcbDest       Pointer to the size of the buffer for the destination data in bytes
+ */
+int vboxClipboardDibToBmp(const void *pSrc, size_t cbSrc, void **ppDest, size_t *pcbDest);
+
+/**
+ * Get the address and size of CF_DIB data in a full BMP data in the input buffer.
+ * Does not do allocation.
+ *
+ * @returns VBox status code
+ *
+ * @param   pSrc          DIB data to convert
+ * @param   cbSrc         Size of the DIB data to convert in bytes
+ * @param   ppDest        Pointer to the buffer for the destination data
+ * @param   pcbDest       Pointer to the size of the buffer for the destination data in bytes
+ */
+int vboxClipboardBmpGetDib(const void *pSrc, size_t cbSrc, const void **ppDest, size_t *pcbDest);
 
 #endif
 

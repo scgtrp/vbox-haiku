@@ -48,7 +48,7 @@
 # define pthread_yield() pthread_yield_np()
 #endif
 
-#ifdef RT_OS_SOLARIS
+#if defined(RT_OS_SOLARIS) || defined(RT_OS_HAIKU)
 # include <sched.h>
 # define pthread_yield() sched_yield()
 #endif
@@ -395,7 +395,7 @@ DECL_FORCE_INLINE(int) rtSemEventWait(RTSEMEVENT hEventSem, RTMSINTERVAL cMillie
          * Get current time and calc end of wait time.
          */
         struct timespec     ts = {0,0};
-#ifdef RT_OS_DARWIN
+#if defined(RT_OS_DARWIN) || defined(RT_OS_HAIKU)
         struct timeval      tv = {0,0};
         gettimeofday(&tv, NULL);
         ts.tv_sec = tv.tv_sec;

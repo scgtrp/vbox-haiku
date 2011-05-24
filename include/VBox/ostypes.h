@@ -112,6 +112,8 @@ typedef enum VBOXOSTYPE
     VBOXOSTYPE_MacOS            = 0xB0000,
     VBOXOSTYPE_MacOS_x64        = 0xB0100,
     VBOXOSTYPE_JRockitVE        = 0xC0000,
+    VBOXOSTYPE_BeOS             = 0xD0000,
+    VBOXOSTYPE_Haiku            = 0xD1000,
 /** The bit number which indicates 64-bit or 32-bit. */
 #define VBOXOSTYPE_x64_BIT       8
     /** The mask which indicates 64-bit. */

@@ -21,7 +21,8 @@
  */
 #if defined(HOST_SOLARIS) && (( HOST_SOLARIS <= 9 ) || ((HOST_SOLARIS >= 10) \
                                                         && (__GNUC__ < 4))) \
-    || (defined(__OpenBSD__) && (OpenBSD < 200811))
+    || (defined(__OpenBSD__) && (OpenBSD < 200811)) \
+    || defined(__HAIKU__)
 /*
  * C99 7.12.3 classification macros
  * and
@@ -30,7 +31,7 @@
  * ... do not work on Solaris 10 using GNU CC 3.4.x.
  * Try to workaround the missing / broken C99 math macros.
  */
-#if defined(__OpenBSD__)
+#if defined(__OpenBSD__) || defined(__HAIKU__)
 #define unordered(x, y) (isnan(x) || isnan(y))
 #endif
 

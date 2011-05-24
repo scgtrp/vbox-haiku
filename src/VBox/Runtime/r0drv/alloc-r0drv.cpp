@@ -153,7 +153,7 @@ RTDECL(void *)  RTMemAllocZTag(size_t cb, const char *pszTag) RT_NO_THROW
 RT_EXPORT_SYMBOL(RTMemAllocZTag);
 
 
-RTDECL(void *) RTMemAllocVarTag(size_t cbUnaligned, const char *pszTag)
+RTDECL(void *) RTMemAllocVarTag(size_t cbUnaligned, const char *pszTag) RT_NO_THROW
 {
     size_t cbAligned;
     if (cbUnaligned >= 16)
@@ -165,7 +165,7 @@ RTDECL(void *) RTMemAllocVarTag(size_t cbUnaligned, const char *pszTag)
 RT_EXPORT_SYMBOL(RTMemAllocVarTag);
 
 
-RTDECL(void *) RTMemAllocZVarTag(size_t cbUnaligned, const char *pszTag)
+RTDECL(void *) RTMemAllocZVarTag(size_t cbUnaligned, const char *pszTag) RT_NO_THROW
 {
     size_t cbAligned;
     if (cbUnaligned >= 16)

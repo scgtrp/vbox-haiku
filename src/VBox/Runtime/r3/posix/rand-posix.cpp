@@ -32,7 +32,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/ioctl.h>
-#include <sys/fcntl.h>
+// XXX: does not exist in POSIX #include <sys/fcntl.h>
 #include <fcntl.h>
 #ifdef _MSC_VER
 # include <io.h>

@@ -2,6 +2,7 @@
  <qresource prefix="/">
     <file alias="os_archlinux.png">images/os_archlinux.png</file>
     <file alias="os_archlinux_64.png">images/os_archlinux_64.png</file>
+    <file alias="os_beos.png">images/os_beos.png</file>
     <file alias="os_debian.png">images/os_debian.png</file>
     <file alias="os_debian_64.png">images/os_debian_64.png</file>
     <file alias="os_dos.png">images/os_dos.png</file>
@@ -11,6 +12,7 @@
     <file alias="os_freebsd_64.png">images/os_freebsd_64.png</file>
     <file alias="os_gentoo.png">images/os_gentoo.png</file>
     <file alias="os_gentoo_64.png">images/os_gentoo_64.png</file>
+    <file alias="os_haiku.png">images/os_haiku.png</file>
     <file alias="os_jrockitve.png">images/os_jrockitve.png</file>
     <file alias="os_l4.png">images/os_l4.png</file>
     <file alias="os_linux_other.png">images/os_linux_other.png</file>

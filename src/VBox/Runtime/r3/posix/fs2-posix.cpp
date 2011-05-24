@@ -33,6 +33,10 @@
 #include <sys/param.h>
 #ifndef DEV_BSIZE
 # include <sys/stat.h>
+# ifndef S_BLKSIZE
+#  warning Using 512 as default for S_BLKSIZE
+#  define S_BLKSIZE 512
+# endif
 # define DEV_BSIZE S_BLKSIZE /** @todo bird: add DEV_BSIZE to sys/param.h on OS/2. */
 #endif
 

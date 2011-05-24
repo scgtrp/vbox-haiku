@@ -1,0 +1,4 @@
+*.o
+kBuild/*
+out/*
+input_server

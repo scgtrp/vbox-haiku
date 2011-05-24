@@ -19,19 +19,21 @@ SUB_DEPTH = ../../../../..
 include	$(KBUILD_PATH)/subheader.kmk
 
 
-if1of ($(KBUILD_TARGET), freebsd $(if $(defined VBOX_WITH_ADDITION_DRIVERS),linux,) os2 solaris win)
+if1of ($(KBUILD_TARGET), freebsd haiku $(if $(defined VBOX_WITH_ADDITION_DRIVERS),linux,) os2 solaris win)
  #
  # VBoxGuest - The Guest Additions Driver.
  #
  SYSMODS += VBoxGuest
  VBoxGuest_TEMPLATE      = VBOXGUESTR0
  VBoxGuest_NAME.freebsd  = vboxguest
+ VBoxGuest_NAME.haiku    = vboxguest
  VBoxGuest_NAME.linux    = vboxguest
  VBoxGuest_NAME.solaris  = vboxguest
  VBoxGuest_NOINST.linux  = true
  ifdef VBOX_SIGN_ADDITIONS # See Additions/WINNT/Makefile.kmk?
   VBoxGuest_NOINST.win   = true
  endif
+ VBoxGuest_DEFS.haiku    = VBOX_SVN_REV=$(VBOX_SVN_REV) _KERNEL_MODE=1
  VBoxGuest_DEFS.linux    = KBUILD_MODNAME=KBUILD_STR\(vboxguest\) KBUILD_BASENAME=KBUILD_STR\(vboxguest\) DEBUG_HASH=2 DEBUG_HASH2=3 EXPORT_SYMTAB
  VBoxGuest_DEFS.solaris  = VBOX_SVN_REV=$(VBOX_SVN_REV)
  VBoxGuest_DEFS.win      = # VBOX_WITH_VRDP_SESSION_HANDLING
@@ -47,6 +49,7 @@ if1of ($(KBUILD_TARGET), freebsd $(if $(defined VBOX_WITH_ADDITION_DRIVERS),linu
  VBoxGuest_DEPS.solaris += $(VBOX_SVN_REV_KMK)
  VBoxGuest_DEPS.linux   += $(VBOX_SVN_REV_HEADER)
  VBoxGuest_DEPS.freebsd += $(VBOX_SVN_REV_HEADER)
+ VBoxGuest_DEPS.haiku   += $(VBOX_SVN_REV_HEADER)
  VBoxGuest_DEFS          = VBGL_VBOXGUEST VBOX_WITH_HGCM
  VBoxGuest_INCS          = .
  VBoxGuest_INCS.freebsd  = $(PATH_VBoxGuest) $(PATH_INS)/gen-sys-hdrs
@@ -66,7 +69,7 @@ if1of ($(KBUILD_TARGET), freebsd $(if $(defined VBOX_WITH_ADDITION_DRIVERS),linu
     VBoxGuest.cpp_SDKS   = WINDDKWLH
    endif
   endif # win
-  ifn1of ($(KBUILD_TARGET), linux freebsd solaris)
+  ifn1of ($(KBUILD_TARGET), linux freebsd solaris haiku)
    VBoxGuest_SOURCES    = VBoxGuest-$(KBUILD_TARGET).cpp
   else
    VBoxGuest_SOURCES    = VBoxGuest-$(KBUILD_TARGET).c

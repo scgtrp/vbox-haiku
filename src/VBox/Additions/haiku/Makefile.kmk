@@ -1,0 +1,35 @@
+# $Id: Makefile.kmk 35841 2011-02-03 15:59:03Z vboxsync $
+## @file
+# Makefile for the Haiku guest additions base directory.
+#
+
+#
+# Copyright (C) 2006-2010 Oracle Corporation
+#
+# This file is part of VirtualBox Open Source Edition (OSE), as
+# available from http://www.virtualbox.org. This file is free software;
+# you can redistribute it and/or modify it under the terms of the GNU
+# General Public License (GPL) as published by the Free Software
+# Foundation, in version 2 as it comes in the "COPYING" file of the
+# VirtualBox OSE distribution. VirtualBox OSE is distributed in the
+# hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
+#
+
+SUB_DEPTH = ../../../..
+include	$(KBUILD_PATH)/subheader.kmk
+
+ifneq ($(KBUILD_HOST),haiku)
+$(error "The Haiku guest additions installer can only be built on Haiku!")
+endif
+
+#
+# Include sub-makefiles.
+#
+#include $(PATH_SUB_CURRENT)/sharedfolders/Makefile.kmk
+#include $(PATH_SUB_CURRENT)/drm/Makefile.kmk
+include $(PATH_SUB_CURRENT)/VBoxGuest/Makefile.kmk
+include $(PATH_SUB_CURRENT)/VBoxMouse/Makefile.kmk
+#include $(PATH_SUB_CURRENT)/VBoxTray/Makefile.kmk
+
+include $(KBUILD_PATH)/subfooter.kmk
+

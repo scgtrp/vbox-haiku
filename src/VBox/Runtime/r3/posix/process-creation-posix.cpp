@@ -74,6 +74,7 @@
 #include <iprt/mem.h>
 #include "internal/process.h"
 
+#define _Exit _exit // XXX: temporary
 
 /**
  * Check the credentials and return the gid/uid of user.

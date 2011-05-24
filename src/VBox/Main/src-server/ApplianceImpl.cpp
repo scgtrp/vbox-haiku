@@ -137,6 +137,8 @@ g_osTypes[] =
     //      SchemaDefs_OSTypeId_OpenBSD_64
     //      SchemaDefs_OSTypeId_NetBSD
     //      SchemaDefs_OSTypeId_NetBSD_64
+    //      SchemaDefs_OSTypeId_BeOS
+    //      SchemaDefs_OSTypeId_Haiku
 
 };
 
@@ -175,7 +177,9 @@ static const osTypePattern g_osTypesPattern[] =
     {"Windows Me",    SchemaDefs_OSTypeId_WindowsMe},
     {"Windows 3.",    SchemaDefs_OSTypeId_Windows31},
     {"DOS",           SchemaDefs_OSTypeId_DOS},
-    {"OS2",           SchemaDefs_OSTypeId_OS2}
+    {"OS2",           SchemaDefs_OSTypeId_OS2},
+    {"BeOS",          SchemaDefs_OSTypeId_BeOS},
+    {"Haiku",         SchemaDefs_OSTypeId_Haiku}
 };
 
 /* These are the 64-Bit ones. They are sorted by priority. */

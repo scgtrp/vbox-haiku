@@ -33,7 +33,7 @@
 #include <errno.h>
 #include <sys/types.h>
 #include <sys/ioctl.h>
-#include <sys/fcntl.h>
+//#include <sys/fcntl.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/time.h>

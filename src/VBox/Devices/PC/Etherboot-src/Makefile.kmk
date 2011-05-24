@@ -149,6 +149,11 @@ EB_CFLAGS+=     -DVERSION_MAJOR=$(VERSION_MAJOR) \
                 -DARCH=$(ARCH) \
 		$(VBOX_GCC_Wno-pointer-sign) -Wno-unused
 
+ifeq ($(KBUILD_TARGET),haiku)
+EB_CFLAGS+=     -fno-pic
+EB_LDFLAGS+=    -no-pie
+endif
+
 IDENT=          '$(@F) $(VERSION) (GPL) etherboot.org'
 
 # Rebuild everything whenever the Makefile etc. is changed. Must be LAST in the dependency list!

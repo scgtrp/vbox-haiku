@@ -18,7 +18,7 @@
 #include <windows.h>
 
 #include <iprt/string.h>
-#include <VBox/Log.h>
+#include <VBox/log.h>
 #include <VBox/VBoxGuestLib.h>
 
 #include <VBoxGuestInternal.h>

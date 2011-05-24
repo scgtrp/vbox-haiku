@@ -31,6 +31,12 @@ typedef int socklen_t;
 # undef mbstat
 typedef int socklen_t;
 #endif
+#ifdef RT_OS_HAIKU
+/* prevent "two or more data types in declaration specifiers" error
+ * in /boot/develop/headers/posix/stdio_pre.h
+ */
+# include <stdio.h>
+#endif
 
 #define CONFIG_QEMU
 
@@ -387,8 +393,12 @@ int sscanf(const char *s, const char *format, ...);
 
 # define ip_next(ip) (void *)((uint8_t *)(ip) + ((ip)->ip_hl << 2))
 # define udp_next(udp) (void *)((uint8_t *)&((struct udphdr *)(udp))[1])
-# define bcopy(src, dst, len) memcpy((dst), (src), (len))
-# define bcmp(a1, a2, len) memcmp((a1), (a2), (len))
+# ifndef bcopy
+#  define bcopy(src, dst, len) memcpy((dst), (src), (len))
+# endif
+# ifndef bcmp
+#  define bcmp(a1, a2, len) memcmp((a1), (a2), (len))
+# endif
 # define NO_FW_PUNCH
 
 # ifdef alias_addr

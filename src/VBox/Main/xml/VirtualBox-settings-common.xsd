@@ -204,6 +204,8 @@
     <xsd:enumeration value="MacOS"/>
     <xsd:enumeration value="MacOS_64"/>
     <xsd:enumeration value="JRockitVE"/>
+    <xsd:enumeration value="BeOS"/>
+    <xsd:enumeration value="Haiku"/>
   </xsd:restriction>
 </xsd:simpleType>
 

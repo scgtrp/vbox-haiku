@@ -71,6 +71,12 @@ typedef struct RTSPINLOCKTMP
     RTCCUINTREG     uFlags;
 #  define RTSPINLOCKTMP_INITIALIZER { 0 }
 
+# elif defined(RT_OS_HAIKU)
+#warning FIXME
+    /** The saved [R|E]FLAGS. (dummy) */
+    RTCCUINTREG     uFlags;
+#  define RTSPINLOCKTMP_INITIALIZER { 0 }
+
 # else
 #  error "PORTME\n"
     /** The saved [R|E]FLAGS. */

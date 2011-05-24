@@ -69,6 +69,9 @@
 #include "internal/thread.h"
 #include "internal/time.h"
 
+#ifndef SA_SIGINFO
+#define SA_SIGINFO 0
+#endif
 
 /*******************************************************************************
 *   Global Variables                                                           *

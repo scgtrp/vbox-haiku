@@ -305,6 +305,14 @@ const Global::OSType Global::sOSTypes[SchemaDefs::OSTypeId_COUNT] =
         VBOXOSTYPE_JRockitVE,     VBOXOSHINT_HWVIRTEX | VBOXOSHINT_IOAPIC | VBOXOSHINT_PAE,
         1024, 4,  8 * _1G64, NetworkAdapterType_I82545EM, 0, StorageControllerType_PIIX4, StorageBus_IDE,
         StorageControllerType_BusLogic, StorageBus_SCSI, ChipsetType_PIIX3, AudioControllerType_AC97  },
+    { "Other",   "Other",             SchemaDefs_OSTypeId_BeOS,             "BeOS",
+      VBOXOSTYPE_BeOS,             VBOXOSHINT_NONE,
+       256,   4,  4 * _1K, NetworkAdapterType_I82540EM, 0, StorageControllerType_PIIX4, StorageBus_IDE,
+        StorageControllerType_PIIX4, StorageBus_IDE, ChipsetType_PIIX3, AudioControllerType_AC97 },
+    { "Other",   "Other",             SchemaDefs_OSTypeId_Haiku,             "Haiku",
+      VBOXOSTYPE_Haiku,             VBOXOSHINT_NONE,
+       256,   4,  4 * _1K, NetworkAdapterType_I82540EM, 0, StorageControllerType_PIIX4, StorageBus_IDE,
+        StorageControllerType_PIIX4, StorageBus_IDE, ChipsetType_PIIX3, AudioControllerType_AC97 },
 };
 
 /**

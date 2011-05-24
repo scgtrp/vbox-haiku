@@ -107,6 +107,13 @@ NTSTATUS __stdcall NtQueryVolumeInformationFile(
 # include <cam/scsi/scsi_pass.h>
 # include <VBox/scsi.h>
 # include <iprt/log.h>
+#elif defined(RT_OS_HAIKU)
+# include <errno.h>
+# include <stdio.h>
+# include <unistd.h>
+# include <Drivers.h>
+# include <VBox/scsi.h>
+# include <iprt/log.h>
 #else
 # error "Unsupported Platform."
 #endif
@@ -1161,6 +1168,22 @@ static int drvHostBaseGetMediaSize(PDRVHOSTBASE pThis, uint64_t *pcb)
         *pcb = (uint64_t)Buf.cBlocks * Buf.cbBlock;
     }
     return rc;
+
+#elif defined(RT_OS_HAIKU)
+    /*
+     * B_GET_DEVICE_SIZE only returns size_t (32bit) size in bytes.
+     * We calculate from B_GET_GEOMETRY instead.
+     */
+    device_geometry DeviceGeometry;
+    if (ioctl(pThis->FileDevice, B_GET_GEOMETRY, &DeviceGeometry) == 0)
+    {
+        *pcb = DeviceGeometry.bytes_per_sector
+        	* DeviceGeometry.sectors_per_track
+        	* (uint64_t)DeviceGeometry.cylinder_count
+        	* DeviceGeometry.head_count;
+        return VINF_SUCCESS;
+    }
+    return RTFileSeek(pThis->FileDevice, 0, RTFILE_SEEK_END, pcb);
 
 #elif defined(RT_OS_SOLARIS)
     /*

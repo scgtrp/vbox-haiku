@@ -1,0 +1,87 @@
+# $Id: Makefile.kmk 35385 2010-12-30 16:35:31Z vboxsync $
+## @file
+# Sub-Makefile for VBoxGuestApp.
+#
+
+#
+# Copyright (C) 2006-2010 Oracle Corporation
+#
+# This file is part of VirtualBox Open Source Edition (OSE), as
+# available from http://www.virtualbox.org. This file is free software;
+# you can redistribute it and/or modify it under the terms of the GNU
+# General Public License (GPL) as published by the Free Software
+# Foundation, in version 2 as it comes in the "COPYING" file of the
+# VirtualBox OSE distribution. VirtualBox OSE is distributed in the
+# hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
+#
+
+SUB_DEPTH = ../../../../..
+include	$(KBUILD_PATH)/subheader.kmk
+
+# @todo split the tray code,
+# single bin will cause problems loading gcc4 binary from a gcc2-built Deskbar!
+
+PROGRAMS += VBoxApp
+VBoxApp_TEMPLATE = VBOXGUESTR3EXE
+VBoxApp_DEFS     = VBOX_WITH_HGCM LOG_TO_BACKDOOR
+VBoxApp_DEFS    += LOG_ENABLED
+VBoxApp_INCS     = ../include
+VBoxApp_SOURCES  = \
+	VBoxClipboard.cpp \
+	VBoxGuestApplication.cpp \
+	VBoxGuestDeskbarView.cpp
+
+VBoxApp_SOURCES += \
+  	$(PATH_ROOT)/src/VBox/GuestHost/SharedClipboard/clipboard-helper.cpp
+
+VBoxApp_LIBS     = \
+	be translation \
+	$(VBOX_LIB_IPRT_GUEST_R3) \
+	$(VBOX_LIB_VBGL_R3)
+
+VBoxApp_RSRCS   += $(VBoxApp_0_OUTDIR)/VBoxApp.rsrc
+VBoxApp_DEPS    += $(VBoxApp_0_OUTDIR)/VBoxApp.rsrc
+VBoxApp_CLEAN   += $(VBoxApp_0_OUTDIR)/VBoxApp.rsrc
+
+# VBoxGuestApplication.cpp uses VBOX_SVN_REV.
+VBoxGuestApplication.cpp_DEFS += VBOX_SVN_REV=$(VBOX_SVN_REV)
+VBoxGuestApplication.cpp_DEPS = $(VBOX_SVN_REV_KMK)
+VBoxGuestDeskbarView.cpp_DEFS += VBOX_SVN_REV=$(VBOX_SVN_REV)
+VBoxGuestDeskbarView.cpp_DEPS = $(VBOX_SVN_REV_KMK)
+
+## The icon location is configurable.
+VBoxApp.rdef_INCS = $(VBoxApp_0_OUTDIR)
+VBoxApp.rdef_DEFS += VBOX_SVN_REV=$(VBOX_SVN_REV) \
+	VBOX_HAIKU_DESKBAR_ICON_PNG=\"$(VBOX_BRAND_GUI_VBOX_16PX_PNG)\"
+VBoxApp.rdef_DEPS = $(VBOX_SVN_REV_KMK)
+
+VBoxApp.rsrc_DEPS = VBoxApp.rdef
+VBoxApp.rsrc_CLEAN = VBoxApp.rdef
+
+
+
+#XXX: cleanup!
+#XXX: handle deps correctly
+#XXX: -I / is due to a bug in rc with absolute paths
+## Resource file.
+$$(VBoxApp_0_OUTDIR)/VBoxApp.rsrc: $$(VBoxApp_DEFPATH)/VBoxApp.rdef $$(VBoxApp_DEFPATH)/Makefile.kmk | $$(dir $$@)
+	$(call MSG_TOOL,$(VBOX_HAIKU_RCTOOL),HaikuResources,$<,$@)
+	$(QUIET)cat $< | gcc -E -I $(dir $<) -I $(dir $<)/../include $(foreach name, $(INCS), -I $(name)) $(foreach dname, $(VBoxApp.rdef_DEFS), -D$(dname)) - | grep -v '^#' | $(VBOX_HAIKU_RCTOOL) -I / -I $(dir $<) -I $(dir $<)/../include -o "$@" -
+
+
+#	rc -I $(VBoxApp_DEFPATH)/../include -o $@ $<
+#	$(RM) -f $@
+#	$(APPEND) $@ 'IDI_VIRTUALBOX ICON DISCARDABLE "$(subst /,\\,$(VBOX_WINDOWS_ADDITIONS_ICON_FILE))"'
+
+## The icon location is configurable.
+#VBoxApp.rc_INCS = $(VBoxApp_0_OUTDIR)
+#VBoxApp.rc_DEPS = $(VBoxApp_0_OUTDIR)/VBoxApp-icon.rc
+#VBoxApp.rc_CLEAN = $(VBoxApp_0_OUTDIR)/VBoxApp-icon.rc
+
+## Icon include file.
+#$$(VBoxApp_0_OUTDIR)/VBoxApp-icon.rc: $(VBOX_WINDOWS_ADDITIONS_ICON_FILE) $$(VBoxApp_DEFPATH)/Makefile.kmk | $$(dir $$@)
+#	$(RM) -f $@
+#	$(APPEND) $@ 'IDI_VIRTUALBOX ICON DISCARDABLE "$(subst /,\\,$(VBOX_WINDOWS_ADDITIONS_ICON_FILE))"'
+
+include	$(KBUILD_PATH)/subfooter.kmk
+

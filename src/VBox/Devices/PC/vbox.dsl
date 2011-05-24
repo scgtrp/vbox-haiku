@@ -848,7 +848,10 @@ DefinitionBlock ("DSDT.aml", "DSDT", 1, "VBOX  ", "VBOXBIOS", 2)
                 Device (SMC)
                 {
                     Name (_HID, EisaId ("APP0001"))
-                    Name (_CID, "smc-napa")
+                    //XXX:Name (_CID, "smc-napa")
+                    //ASL Optimizing Compiler version 20101013-32 [Nov 27 2010]
+                    //String must be entirely alphanumeric
+                    Name (_CID, "smcnapa")
 
                     Method (_STA, 0, NotSerialized)
                     {

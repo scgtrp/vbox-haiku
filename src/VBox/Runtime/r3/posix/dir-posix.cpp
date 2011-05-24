@@ -33,7 +33,7 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/stat.h>
-#include <sys/fcntl.h>
+// XXX: #include <sys/fcntl.h>
 #include <fcntl.h>
 #include <dirent.h>
 #include <stdio.h>
@@ -53,7 +53,7 @@
 #include "internal/fs.h"
 #include "internal/path.h"
 
-#if !defined(RT_OS_SOLARIS)
+#if !defined(RT_OS_SOLARIS) && !defined(RT_OS_HAIKU)
 # define HAVE_DIRENT_D_TYPE 1
 #endif
 

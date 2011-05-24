@@ -521,6 +521,11 @@ typedef struct RTTHREADPREEMPTSTATE
     /** The Old PIL. Don't touch! */
     uint32_t        uOldPil;
 #   define RTTHREADPREEMPTSTATE_INITIALIZER { NIL_RTCPUID, UINT32_MAX }
+#  elif defined(RT_OS_HAIKU)
+    /** The cpu_state. Don't touch! */
+    //XXX: really a cpu_status (ulong) !
+    uint32_t        uOldCpuState;
+#   define RTTHREADPREEMPTSTATE_INITIALIZER { NIL_RTCPUID, 0 }
 #  else
     /** Reserved, MBZ. */
     uint32_t        u32Reserved;

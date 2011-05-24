@@ -28,7 +28,7 @@
 #include <iprt/string.h>
 
 #include <VBox/version.h>
-#include <VBox/Log.h>
+#include <VBox/log.h>
 #include <VBox/VBoxGuest.h> /** @todo use the VbglR3 interface! */
 #include <VBox/VBoxGuestLib.h>
 #include <VBoxDisplay.h>

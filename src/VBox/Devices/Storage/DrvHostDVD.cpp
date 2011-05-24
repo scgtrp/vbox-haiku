@@ -97,6 +97,15 @@
 # include <cam/cam_ccb.h>
 # define USE_MEDIA_POLLING
 
+#elif defined(RT_OS_HAIKU)
+# include <errno.h>
+# include <stdio.h>
+# include <unistd.h>
+# include <Drivers.h>
+# include <VBox/scsi.h>
+# include <iprt/log.h>
+# define USE_MEDIA_POLLING
+
 #else
 # error "Unsupported Platform."
 #endif
@@ -355,6 +364,22 @@ DECLCALLBACK(int) drvHostDvdPoll(PDRVHOSTBASE pThis)
         /** @todo check this media change stuff on Darwin. */
     }
 
+#elif defined(RT_OS_HAIKU)
+    bool fMediaPresent = false;
+    bool fMediaChanged = false;
+    status_t DeviceState;
+
+    int rc2 = ioctl(pThis->FileDevice, B_GET_MEDIA_STATUS, &DeviceState, sizeof(DeviceState));
+    if (rc2 == 0)
+    {
+        fMediaPresent = (DeviceState == B_NO_ERROR);
+        if (DeviceState == B_DEV_MEDIA_CHANGED)
+        {
+            fMediaPresent = true;
+            fMediaChanged = true;
+        }
+    }
+
 #elif defined(RT_OS_LINUX)
     bool fMediaPresent = ioctl(pThis->FileDevice, CDROM_DRIVE_STATUS, CDSL_CURRENT) == CDS_DISC_OK;
 
@@ -394,7 +419,7 @@ DECLCALLBACK(int) drvHostDvdPoll(PDRVHOSTBASE pThis)
         /*
          * Poll for media change.
          */
-#if defined(RT_OS_DARWIN) || defined(RT_OS_SOLARIS) || defined(RT_OS_FREEBSD)
+#if defined(RT_OS_DARWIN) || defined(RT_OS_SOLARIS) || defined(RT_OS_FREEBSD) || defined(RT_OS_HAIKU)
         /* taken care of above. */
 #elif defined(RT_OS_LINUX)
         bool fMediaChanged = ioctl(pThis->FileDevice, CDROM_MEDIA_CHANGED, CDSL_CURRENT) == 1;
@@ -435,6 +460,10 @@ static int drvHostDvdSendCmd(PPDMIBLOCK pInterface, const uint8_t *pbCmd,
     if (rc == VERR_UNRESOLVED_ERROR)
         /* sense information set */
         rc = VERR_DEV_IO_ERROR;
+
+#elif defined(RT_OS_HAIKU)
+    /* Not really ported to Haiku yet. */
+    rc = VERR_INTERNAL_ERROR;
 
 #elif defined(RT_OS_L4)
     /* Not really ported to L4 yet. */

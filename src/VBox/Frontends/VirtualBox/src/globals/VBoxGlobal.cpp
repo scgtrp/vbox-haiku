@@ -4944,6 +4944,8 @@ void VBoxGlobal::init()
         {"MacOS",           ":/os_macosx.png"},
         {"MacOS_64",        ":/os_macosx_64.png"},
         {"JRockitVE",       ":/os_jrockitve.png"},
+        {"BeOS",            ":/os_beos.png"},
+        {"Haiku",           ":/os_haiku.png"},
     };
     for (uint n = 0; n < SIZEOF_ARRAY (kOSTypeIcons); ++ n)
     {

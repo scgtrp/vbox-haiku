@@ -72,6 +72,10 @@
 # ifdef RT_OS_DARWIN
 #  include <mach-o/dyld.h>
 # endif
+# ifdef RT_OS_HAIKU
+#  include <image.h>
+#  define _Exit _exit /* XXX this is temporary */
+# endif
 
 #endif
 
@@ -315,7 +319,7 @@ static void supR3HardenedGetFullExePath(void)
      * link in the proc file system that tells who was exec'ed. The bad thing about this
      * is that we have to use readlink, one of the weirder UNIX APIs.
      *
-     * Darwin, OS/2 and Windows all have proper APIs for getting the program file name.
+     * Darwin, Haiku, OS/2 and Windows all have proper APIs for getting the program file name.
      */
 #if defined(RT_OS_LINUX) || defined(RT_OS_FREEBSD) || defined(RT_OS_SOLARIS)
 # ifdef RT_OS_LINUX
@@ -356,6 +360,18 @@ static void supR3HardenedGetFullExePath(void)
     if (!cchImageName || cchImageName >= sizeof(g_szSupLibHardenedExePath))
         supR3HardenedFatal("supR3HardenedExecDir: _dyld_get_image_name(0) failed, cchImageName=%d\n", cchImageName);
     memcpy(g_szSupLibHardenedExePath, pszImageName, cchImageName + 1);
+
+#elif defined(RT_OS_HAIKU)
+    image_info ImageInfo;
+    int32 Cookie = 0;
+    if (get_next_image_info(0, &Cookie, &ImageInfo) != B_OK)
+        supR3HardenedFatal("supR3HardenedExecDir: get_next_image_info(0) failed\n");
+
+    size_t cchImageName = strnlen(ImageInfo.name, MAXPATHLEN);
+    if (!cchImageName || cchImageName >= sizeof(g_szSupLibHardenedExePath))
+        supR3HardenedFatal("supR3HardenedExecDir: get_next_image_info(0) failed, cchImageName=%d\n", cchImageName);
+    memcpy(g_szSupLibHardenedExePath, ImageInfo.name, cchImageName);
+    g_szSupLibHardenedExePath[cchImageName] = '\0';
 
 #elif defined(RT_OS_WINDOWS)
     HMODULE hExe = GetModuleHandle(NULL);
@@ -751,7 +767,7 @@ static void supR3HardenedMainDropPrivileges(void)
     egid = getegid();
     rgid = sgid = getgid();
 
-# elif defined(RT_OS_SOLARIS)
+# elif defined(RT_OS_SOLARIS) || defined(RT_OS_HAIKU)
     /* Solaris doesn't have setresuid, but the setreuid interface is BSD
        compatible and will set the saved uid to euid when we pass it a ruid
        that isn't -1 (which we do). */

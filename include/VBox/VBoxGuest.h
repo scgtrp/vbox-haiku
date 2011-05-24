@@ -61,6 +61,9 @@
 /** Device name. */
 # define VBOXGUEST_DEVICE_NAME_DOS      L"\\DosDevices\\VBoxGuest"
 
+#elif defined(RT_OS_HAIKU)
+# define VBOXGUEST_DEVICE_NAME          "/dev/misc/vboxguest"
+
 #else /* (PORTME) */
 # define VBOXGUEST_DEVICE_NAME          "/dev/vboxguest"
 # if defined(RT_OS_LINUX)
@@ -181,6 +184,13 @@ typedef const VBGLBIGREQ *PCVBGLBIGREQ;
 # define VBOXGUEST_IOCTL_CODE_(Function, Size)      _IOWR('V', (Function), VBGLBIGREQ)
 # define VBOXGUEST_IOCTL_CODE_FAST_(Function)       _IO(  'V', (Function))
 # define VBOXGUEST_IOCTL_STRIP_SIZE(Code)           IOCBASECMD(Code)
+
+#elif defined(RT_OS_HAIKU)
+  /* No automatic buffering, size not encoded. */
+//XXX: FIXME: do something better
+# define VBOXGUEST_IOCTL_CODE_(Function, Size)      (0x56420000 | (Function))
+# define VBOXGUEST_IOCTL_CODE_FAST_(Function)       (0x56420000 | (Function))
+# define VBOXGUEST_IOCTL_STRIP_SIZE(Code)           (Code)
 
 #else
 /* PORTME */

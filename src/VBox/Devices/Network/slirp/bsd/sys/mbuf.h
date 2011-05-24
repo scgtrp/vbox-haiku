@@ -65,7 +65,9 @@ DECLNORETURN(static void) panic (char *fmt, ...)
 #  define __inline
 # endif
 
-# define bzero(a1, len) memset((a1), 0, (len))
+# ifndef bzero
+#  define bzero(a1, len) memset((a1), 0, (len))
+# endif
 
 /* (vvl) some definitions from sys/param.h */
 /*
