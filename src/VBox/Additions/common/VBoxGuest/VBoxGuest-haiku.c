@@ -15,6 +15,7 @@
  * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
  */
 
+#define IN_VBOXGUEST
 #define LOG_GROUP LOG_GROUP_SUP_DRV
 //#undef LOG_DISABLED
 //#define LOG_ENABLED
@@ -28,67 +29,19 @@
 #include <KernelExport.h>
 #include <PCI.h>
 
+#include "VBoxGuest-haiku.h"
 #include "VBoxGuestInternal.h"
 #include <VBox/log.h>
 #include <iprt/assert.h>
 #include <iprt/initterm.h>
 #include <iprt/process.h>
 #include <iprt/mem.h>
+#include <iprt/memobj.h>
 #include <iprt/asm.h>
+#include <iprt/timer.h>
 
 /** The module name. */
-#define DRIVER_NAME    "vboxguest"
-
-/** The published device name. */
-#define DEVICE_NAME    "misc/vboxguest"
-
-struct VBoxGuestDeviceState
-{
-    /** Resource ID of the I/O port */
-    int                iIOPortResId;
-    /** Pointer to the I/O port resource. */
-//    struct resource   *pIOPortRes;
-    /** Start address of the IO Port. */
-    uint16_t           uIOPortBase;
-    /** Resource ID of the MMIO area */
-    area_id            iVMMDevMemAreaId;
-    /** Pointer to the MMIO resource. */
-//    struct resource   *pVMMDevMemRes;
-    /** Handle of the MMIO resource. */
-//    bus_space_handle_t VMMDevMemHandle;
-    /** Size of the memory area. */
-    size_t         VMMDevMemSize;
-    /** Mapping of the register space */
-    void              *pMMIOBase;
-    /** IRQ number */
-    int                iIrqResId;
-    /** IRQ resource handle. */
-//    struct resource   *pIrqRes;
-    /** Pointer to the IRQ handler. */
-//    void              *pfnIrqHandler;
-    /** VMMDev version */
-    uint32_t           u32Version;
-
-    /** The (only) select data we wait on. */
-    //XXX: should leave in pSession ?
-    uint8_t						selectEvent;
-    uint32_t                    selectRef;
-    void                    	*selectSync;
-};
-
-static struct VBoxGuestDeviceState sState;
-
-/*
- * Character device file handlers.
- */
-static status_t VBoxGuestHaikuOpen(const char *name, uint32 flags, void **cookie);
-static status_t VBoxGuestHaikuClose(void *cookie);
-static status_t VBoxGuestHaikuFree(void *cookie);
-static status_t VBoxGuestHaikuIOCtl(void *cookie, uint32 op, void *data, size_t len);
-static status_t VBoxGuestHaikuSelect (void *cookie, uint8 event, uint32 ref, selectsync *sync);
-static status_t VBoxGuestHaikuDeselect (void *cookie, uint8 event, selectsync *sync);
-static status_t VBoxGuestHaikuWrite (void *cookie, off_t position, const void *data, size_t *numBytes);
-static status_t VBoxGuestHaikuRead (void *cookie, off_t position, void *data, size_t *numBytes);
+#define MODULE_NAME    "generic/vboxguest"
 
 /*
  * IRQ related functions.
@@ -104,35 +57,96 @@ DECLVBGL(int)    VBoxGuestHaikuServiceCall(void *pvSession, unsigned uCmd, void 
 DECLVBGL(void *) VBoxGuestHaikuServiceOpen(uint32_t *pu32Version);
 DECLVBGL(int)    VBoxGuestHaikuServiceClose(void *pvSession);
 
-/*
- * Device node entry points.
- */
-static device_hooks    g_VBoxGuestHaikuDeviceHooks =
-{
-    VBoxGuestHaikuOpen,
-    VBoxGuestHaikuClose,
-    VBoxGuestHaikuFree,
-    VBoxGuestHaikuIOCtl,
-    VBoxGuestHaikuRead,
-    VBoxGuestHaikuWrite,
-    VBoxGuestHaikuSelect,
-    VBoxGuestHaikuDeselect,
-};
+static status_t std_ops(int32 op, ...);
 
 int32	api_version = B_CUR_DRIVER_API_VERSION;
 
-/** Device extention & session data association structure. */
-static VBOXGUESTDEVEXT      g_DevExt;
 /** List of cloned device. Managed by the kernel. */
 //static struct clonedevs    *g_pVBoxGuestHaikuClones;
 /** The dev_clone event handler tag. */
 //static eventhandler_tag     g_VBoxGuestHaikuEHTag;
-/** Reference counter */
-static volatile uint32_t      cUsers;
 /** selinfo structure used for polling. */
 //static struct selinfo       g_SelInfo;
 /** PCI Bus Manager Module */
 static pci_module_info *gPCI;
+
+static struct vboxguest_module_info g_VBoxGuest = {
+	{
+		MODULE_NAME,
+		0,
+		std_ops
+	},
+	{0},
+	{0},
+	0,
+	RTLogBackdoorPrintf,
+	RTLogBackdoorPrintfV,
+	RTLogSetDefaultInstanceThread,
+	RTMemAllocExTag,
+	RTMemContAlloc,
+	RTMemContFree,
+	RTMemFreeEx,
+	RTMpIsCpuPossible,
+	RTMpNotificationDeregister,
+	RTMpNotificationRegister,
+	RTMpOnAll,
+	RTMpOnOthers,
+	RTMpOnSpecific,
+	RTPowerNotificationDeregister,
+	RTPowerNotificationRegister,
+	RTPowerSignalEvent,
+	RTR0AssertPanicSystem,
+	RTR0Init,
+	RTR0MemObjAddress,
+	RTR0MemObjAddressR3,
+	RTR0MemObjAllocContTag,
+	RTR0MemObjAllocLowTag,
+	RTR0MemObjAllocPageTag,
+	RTR0MemObjAllocPhysExTag,
+	RTR0MemObjAllocPhysNCTag,
+	RTR0MemObjAllocPhysTag,
+	RTR0MemObjEnterPhysTag,
+	RTR0MemObjFree,
+	RTR0MemObjGetPagePhysAddr,
+	RTR0MemObjIsMapping,
+	RTR0MemObjLockKernelTag,
+	RTR0MemObjLockUserTag,
+	RTR0MemObjMapKernelExTag,
+	RTR0MemObjMapKernelTag,
+	RTR0MemObjMapUserTag,
+	RTR0MemObjProtect,
+	RTR0MemObjReserveKernelTag,
+	RTR0MemObjReserveUserTag,
+	RTR0MemObjSize,
+	RTR0ProcHandleSelf,
+	RTR0Term,
+	RTR0TermForced,
+	RTSemEventGetResolution,
+	RTSemEventMultiGetResolution,
+	RTSemEventMultiWaitEx,
+	RTSemEventMultiWaitExDebug,
+	RTSemEventWaitEx,
+	RTSemEventWaitExDebug,
+	RTThreadIsInInterrupt,
+	RTThreadPreemptDisable,
+	RTThreadPreemptIsEnabled,
+	RTThreadPreemptIsPending,
+	RTThreadPreemptIsPendingTrusty,
+	RTThreadPreemptIsPossible,
+	RTThreadPreemptRestore,
+	RTTimerGetSystemGranularity,
+	RTTimerReleaseSystemGranularity,
+	RTTimerRequestSystemGranularity,
+	RTSpinlockAcquireNoInts,
+	RTSpinlockReleaseNoInts,
+	RTMemTmpAllocTag,
+	RTMemTmpFree,
+	RTLogRelDefaultInstance,
+	RTErrConvertToErrno,
+	VBoxGuestCommonIOCtl,
+	VBoxGuestCreateUserSession,
+	VBoxGuestCloseSession,
+};
 
 #if 0
 /**
@@ -190,294 +204,6 @@ static void VBoxGuestHaikuClone(void *pvArg, struct ucred *pCred, char *pszName,
 }
 #endif
 
-/**
- * File open handler
- *
- */
-static status_t VBoxGuestHaikuOpen(const char *name, uint32 flags, void **cookie)
-{
-    int                 rc;
-    PVBOXGUESTSESSION   pSession;
-
-    LogFlow((DRIVER_NAME ":VBoxGuestHaikuOpen\n"));
-
-    /*
-     * Create a new session.
-     */
-    rc = VBoxGuestCreateUserSession(&g_DevExt, &pSession);
-    if (RT_SUCCESS(rc))
-    {
-        Log((DRIVER_NAME ":VBoxGuestHaikuOpen success: g_DevExt=%p pSession=%p rc=%d pid=%d\n", &g_DevExt, pSession, rc, (int)RTProcSelf()));
-        ASMAtomicIncU32(&cUsers);
-        *cookie = pSession;
-        return 0;
-    }
-
-    LogRel((DRIVER_NAME ":VBoxGuestHaikuOpen: failed. rc=%d\n", rc));
-    return RTErrConvertToErrno(rc);
-}
-
-/**
- * File close handler
- *
- */
-static status_t VBoxGuestHaikuClose(void *cookie)
-{
-    PVBOXGUESTSESSION pSession = (PVBOXGUESTSESSION)cookie;
-	RTSPINLOCKTMP tmp;
-    Log(("VBoxGuestHaikuClose: pSession=%p\n", pSession));
-
-	RTSpinlockAcquireNoInts(g_DevExt.SessionSpinlock, &tmp);
-	
-	//XXX: we don't know if it belongs to this session !
-    if (sState.selectSync) {
-    	//dprintf(DRIVER_NAME "close: unblocking select %p %x\n", sState.selectSync, sState.selectEvent);
-		notify_select_event(sState.selectSync, sState.selectEvent);
-		sState.selectEvent = (uint8_t)0;
-		sState.selectRef = (uint32_t)0;
-		sState.selectSync = (void *)NULL;
-	}
-	
-	RTSpinlockReleaseNoInts(g_DevExt.SessionSpinlock, &tmp);
-
-    return 0;
-}
-
-/**
- * File free handler
- *
- */
-static status_t VBoxGuestHaikuFree(void *cookie)
-{
-    PVBOXGUESTSESSION pSession = (PVBOXGUESTSESSION)cookie;
-    Log(("VBoxGuestHaikuFree: pSession=%p\n", pSession));
-
-    /*
-     * Close the session if it's still hanging on to the device...
-     */
-    if (VALID_PTR(pSession))
-    {
-        VBoxGuestCloseSession(&g_DevExt, pSession);
-        ASMAtomicDecU32(&cUsers);
-    }
-    else
-        Log(("VBoxGuestHaikuFree: si_drv1=%p!\n", pSession));
-    return 0;
-}
-
-/**
- * IOCTL handler
- *
- */
-static status_t VBoxGuestHaikuIOCtl(void *cookie, uint32 op, void *data, size_t len)
-{
-    PVBOXGUESTSESSION pSession = (PVBOXGUESTSESSION)cookie;
-    //Log(("VBoxGuestHaikuFree: pSession=%p\n", pSession));
-    //LogFlow((DRIVER_NAME ":VBoxGuestHaikuIOCtl(, 0x%08x, %p, %d)\n", op, data, len));
-    Log((DRIVER_NAME ":VBoxGuestHaikuIOCtl(, 0x%08x, %p, %d)\n", op, data, len));
-
-    int rc = 0;
-
-    /*
-     * Validate the input.
-     */
-    if (RT_UNLIKELY(!VALID_PTR(pSession)))
-        return EINVAL;
-
-    /*
-     * Validate the request wrapper.
-     */
-#if 0
-    if (IOCPARM_LEN(ulCmd) != sizeof(VBGLBIGREQ))
-    {
-        Log((DRIVER_NAME ": VBoxGuestHaikuIOCtl: bad request %lu size=%lu expected=%d\n", ulCmd, IOCPARM_LEN(ulCmd), sizeof(VBGLBIGREQ)));
-        return ENOTTY;
-    }
-#endif
-
-    if (RT_UNLIKELY(len > _1M*16))
-    {
-        dprintf(DRIVER_NAME ": VBoxGuestHaikuIOCtl: bad size %#x; pArg=%p Cmd=%lu.\n", len, data, op);
-        return EINVAL;
-    }
-
-    /*
-     * Read the request.
-     */
-    void *pvBuf = NULL;
-    if (RT_LIKELY(len > 0))
-    {
-        pvBuf = RTMemTmpAlloc(len);
-        if (RT_UNLIKELY(!pvBuf))
-        {
-            LogRel((DRIVER_NAME ":VBoxGuestHaikuIOCtl: RTMemTmpAlloc failed to alloc %d bytes.\n", len));
-            return ENOMEM;
-        }
-
-        rc = user_memcpy(pvBuf, data, len);
-        if (RT_UNLIKELY(rc < 0))
-        {
-            RTMemTmpFree(pvBuf);
-            LogRel((DRIVER_NAME ":VBoxGuestHaikuIOCtl: user_memcpy failed; pvBuf=%p data=%p op=%d. rc=%d\n", pvBuf, data, op, rc));
-            return EFAULT;
-        }
-        if (RT_UNLIKELY(!VALID_PTR(pvBuf)))
-        {
-            RTMemTmpFree(pvBuf);
-            LogRel((DRIVER_NAME ":VBoxGuestHaikuIOCtl: pvBuf invalid pointer %p\n", pvBuf));
-            return EINVAL;
-        }
-    }
-    Log((DRIVER_NAME ":VBoxGuestHaikuIOCtl: pSession=%p pid=%d.\n", pSession, (int)RTProcSelf()));
-
-    /*
-     * Process the IOCtl.
-     */
-    size_t cbDataReturned;
-    rc = VBoxGuestCommonIOCtl(op, &g_DevExt, pSession, pvBuf, len, &cbDataReturned);
-    if (RT_SUCCESS(rc))
-    {
-        rc = 0;
-        if (RT_UNLIKELY(cbDataReturned > len))
-        {
-            Log((DRIVER_NAME ":VBoxGuestHaikuIOCtl: too much output data %d expected %d\n", cbDataReturned, len));
-            cbDataReturned = len;
-        }
-        if (cbDataReturned > 0)
-        {
-            rc = user_memcpy(data, pvBuf, cbDataReturned);
-            if (RT_UNLIKELY(rc < 0))
-            {
-                Log((DRIVER_NAME ":VBoxGuestHaikuIOCtl: user_memcpy failed; pvBuf=%p pArg=%p Cmd=%lu. rc=%d\n", pvBuf, data, op, rc));
-                rc = EFAULT;
-            }
-        }
-    }
-    else
-    {
-        Log((DRIVER_NAME ":VBoxGuestHaikuIOCtl: VBoxGuestCommonIOCtl failed. rc=%d\n", rc));
-        rc = EFAULT;
-    }
-    RTMemTmpFree(pvBuf);
-    return rc;
-#if 0
-#endif
-}
-
-static status_t VBoxGuestHaikuSelect (void *cookie, uint8 event, uint32 ref, selectsync *sync)
-{
-    PVBOXGUESTSESSION pSession = (PVBOXGUESTSESSION)cookie;
-	RTSPINLOCKTMP tmp;
-	status_t err = B_OK;
-   	//dprintf(DRIVER_NAME "select(,%d,%p)\n", event, sync);
-
-
-	switch (event) {
-		case B_SELECT_READ:
-		//case B_SELECT_ERROR:
-			break;
-		default:
-			return EINVAL;
-	}
-
-	RTSpinlockAcquireNoInts(g_DevExt.SessionSpinlock, &tmp);
-	
-    uint32_t u32CurSeq = ASMAtomicUoReadU32(&g_DevExt.u32MousePosChangedSeq);
-    if (pSession->u32MousePosChangedSeq != u32CurSeq)
-    {
-    	//dprintf(DRIVER_NAME "select: notifying now: %p %x\n", sync, event);
-        pSession->u32MousePosChangedSeq = u32CurSeq;
-		notify_select_event(sync, event);
-    } else if (sState.selectSync == NULL) {
-    	//dprintf(DRIVER_NAME "select: caching: %p %x\n", sync, event);
-		sState.selectEvent = (uint8_t)event;
-		sState.selectRef = (uint32_t)ref;
-		sState.selectSync = (void *)sync;
-	} else {
-    	//dprintf(DRIVER_NAME "select: dropping: %p %x\n", sync, event);
-		err = B_WOULD_BLOCK;
-	}
-	
-	RTSpinlockReleaseNoInts(g_DevExt.SessionSpinlock, &tmp);
-
-    return err;
-#if 0
-    int fEventsProcessed;
-
-    LogFlow((DRIVER_NAME "::Poll: fEvents=%d\n", fEvents));
-
-    PVBOXGUESTSESSION pSession = (PVBOXGUESTSESSION)pDev->si_drv1;
-    if (RT_UNLIKELY(!VALID_PTR(pSession))) {
-        Log((DRIVER_NAME "::Poll: no state data for %s\n", devtoname(pDev)));
-        return (fEvents & (POLLHUP|POLLIN|POLLRDNORM|POLLOUT|POLLWRNORM));
-    }
-
-    uint32_t u32CurSeq = ASMAtomicUoReadU32(&g_DevExt.u32MousePosChangedSeq);
-    if (pSession->u32MousePosChangedSeq != u32CurSeq)
-    {
-        fEventsProcessed = fEvents & (POLLIN | POLLRDNORM);
-        pSession->u32MousePosChangedSeq = u32CurSeq;
-    }
-    else
-    {
-        fEventsProcessed = 0;
-
-        selrecord(td, &g_SelInfo);
-    }
-
-    return fEventsProcessed;
-#endif
-}
-
-static status_t VBoxGuestHaikuDeselect (void *cookie, uint8 event, selectsync *sync)
-{
-    PVBOXGUESTSESSION pSession = (PVBOXGUESTSESSION)cookie;
-	RTSPINLOCKTMP tmp;
-	status_t err = B_OK;
-   	//dprintf(DRIVER_NAME "deselect(,%d,%p)\n", event, sync);
-
-	RTSpinlockAcquireNoInts(g_DevExt.SessionSpinlock, &tmp);
-	
-	if (sState.selectSync == sync) {
-    	//dprintf(DRIVER_NAME "deselect: dropping: %p %x\n", sState.selectSync, sState.selectEvent);
-		sState.selectEvent = (uint8_t)0;
-		sState.selectRef = (uint32_t)0;
-		sState.selectSync = NULL;
-	} else
-		err = B_OK;
-	
-	RTSpinlockReleaseNoInts(g_DevExt.SessionSpinlock, &tmp);
-    return err;
-}
-
-static status_t VBoxGuestHaikuWrite (void *cookie, off_t position, const void *data, size_t *numBytes)
-{
-    *numBytes = 0;
-    return 0;
-}
-
-static status_t VBoxGuestHaikuRead (void *cookie, off_t position, void *data, size_t *numBytes)
-{
-    PVBOXGUESTSESSION pSession = (PVBOXGUESTSESSION)cookie;
-
-   	//dprintf(DRIVER_NAME "read(,,%d)\n", *numBytes);
-
-    if (*numBytes == 0)
-    	return 0;
-
-    uint32_t u32CurSeq = ASMAtomicUoReadU32(&g_DevExt.u32MousePosChangedSeq);
-    if (pSession->u32MousePosChangedSeq != u32CurSeq) {
-        pSession->u32MousePosChangedSeq = u32CurSeq;
-        //dprintf(DRIVER_NAME "read: giving 1 byte\n");
-        *numBytes = 1;
-        return 0;
-    }
-
-    *numBytes = 0;
-	return 0;
-}
-
-
 static status_t VBoxGuestHaikuDetach(void)
 {
     struct VBoxGuestDeviceState *pState = &sState;
@@ -515,7 +241,7 @@ static status_t VBoxGuestHaikuDetach(void)
  */
 static int32 VBoxGuestHaikuISR(void *pvState)
 {
-    LogFlow((DRIVER_NAME ":VBoxGuestHaikuISR pvState=%p\n", pvState));
+    LogFlow((MODULE_NAME ":VBoxGuestHaikuISR pvState=%p\n", pvState));
 
     bool fOurIRQ = VBoxGuestCommonISR(&g_DevExt);
 
@@ -524,11 +250,11 @@ static int32 VBoxGuestHaikuISR(void *pvState)
 
 void VBoxGuestNativeISRMousePollEvent(PVBOXGUESTDEVEXT pDevExt)
 {
-    LogFlow((DRIVER_NAME "::NativeISRMousePollEvent:\n"));
+    LogFlow((MODULE_NAME "::NativeISRMousePollEvent:\n"));
 
 	RTSPINLOCKTMP tmp;
 	status_t err = B_OK;
-	//dprintf(DRIVER_NAME ": isr mouse\n");
+	//dprintf(MODULE_NAME ": isr mouse\n");
 
     /*
      * Wake up poll waiters.
@@ -538,7 +264,7 @@ void VBoxGuestNativeISRMousePollEvent(PVBOXGUESTDEVEXT pDevExt)
 	RTSpinlockAcquire(g_DevExt.SessionSpinlock, &tmp);
 	
 	if (sState.selectSync) {
-		//dprintf(DRIVER_NAME ": isr mouse: notify\n");
+		//dprintf(MODULE_NAME ": isr mouse: notify\n");
 		notify_select_event(sState.selectSync, sState.selectEvent);
 		sState.selectEvent = (uint8_t)0;
 		sState.selectRef = (uint32_t)0;
@@ -612,7 +338,7 @@ static status_t VBoxGuestHaikuAttach(const pci_info *pDevice)
     rc = RTLogCreate(&pRelLogger, 0|RTLOGFLAGS_PREFIX_THREAD /* fFlags */, "all",
                      "VBOX_RELEASE_LOG", RT_ELEMENTS(s_apszGroups), s_apszGroups,
                      RTLOGDEST_STDOUT | RTLOGDEST_DEBUGGER | RTLOGDEST_USER, NULL);
-dprintf(DRIVER_NAME ": RTLogCreate: %d\n", rc);
+dprintf(MODULE_NAME ": RTLogCreate: %d\n", rc);
     if (RT_SUCCESS(rc))
     {
         //RTLogGroupSettings(pRelLogger, g_szLogGrp);
@@ -622,8 +348,8 @@ dprintf(DRIVER_NAME ": RTLogCreate: %d\n", rc);
         RTLogSetDefaultInstance(pRelLogger);//XXX
     }
 #endif
-	Log((DRIVER_NAME ": plip!\n"));
-	LogAlways((DRIVER_NAME ": plop!\n"));
+	Log((MODULE_NAME ": plip!\n"));
+	LogAlways((MODULE_NAME ": plop!\n"));
 
     /*
      * Allocate I/O port resource.
@@ -664,21 +390,21 @@ dprintf(DRIVER_NAME ": RTLogCreate: %d\n", rc);
                 rc = VBoxGuestHaikuAddIRQ(pState);
                 if (RT_SUCCESS(rc))
                 {
-                    dprintf(DRIVER_NAME ": loaded successfully\n");
+                    dprintf(MODULE_NAME ": loaded successfully\n");
                     return 0;
                 }
                 else
-                    dprintf((DRIVER_NAME ":VBoxGuestInitDevExt failed.\n"));
+                    dprintf((MODULE_NAME ":VBoxGuestInitDevExt failed.\n"));
                 VBoxGuestDeleteDevExt(&g_DevExt);
             }
             else
-                dprintf((DRIVER_NAME ":VBoxGuestHaikuAddIRQ failed.\n"));
+                dprintf((MODULE_NAME ":VBoxGuestHaikuAddIRQ failed.\n"));
         }
         else
-            dprintf((DRIVER_NAME ":MMIO region setup failed.\n"));
+            dprintf((MODULE_NAME ":MMIO region setup failed.\n"));
     }
     else
-        dprintf((DRIVER_NAME ":IOport setup failed.\n"));
+        dprintf((MODULE_NAME ":IOport setup failed.\n"));
 
     RTR0Term();
     return ENXIO;
@@ -692,49 +418,13 @@ static status_t VBoxGuestHaikuProbe(pci_info *pDevice)
     return ENXIO;
 }
 
-/* BeOS-style driver entry points */
-
-status_t init_hardware(void)
+status_t init_module(void)
 {
 	status_t status = B_ENTRY_NOT_FOUND;
 	pci_info info;
 	int ix = 0;
 
-	if (get_module (B_PCI_MODULE_NAME, (module_info **)&gPCI))
-		return ENOSYS;
-
-	while ((*gPCI->get_nth_pci_info)(ix++, &info) == B_OK) {
-		if (VBoxGuestHaikuProbe(&info) == 0) {
-			// we found it
-			dprintf(DRIVER_NAME ": found VirtualBox Guest PCI Device\n");
-			status = B_OK;
-			break;
-		}
-	}
-
-	put_module(B_PCI_MODULE_NAME);
-
-    return B_OK;
-}
-
-const char **publish_devices(void)
-{
-    static const char *names[] = { DEVICE_NAME , NULL };
-    return names;
-}
-
-device_hooks *find_device(const char* name)
-{
-    return &g_VBoxGuestHaikuDeviceHooks;
-}
-
-status_t init_driver(void)
-{
-	status_t status = B_ENTRY_NOT_FOUND;
-	pci_info info;
-	int ix = 0;
-
-	if (get_module (B_PCI_MODULE_NAME, (module_info **)&gPCI))
+	if (get_module(B_PCI_MODULE_NAME, (module_info **)&gPCI))
 		return ENOSYS;
 
 	while ((*gPCI->get_nth_pci_info)(ix++, &info) == B_OK) {
@@ -748,15 +438,33 @@ status_t init_driver(void)
     return status;
 }
 
-void uninit_driver(void)
+void uninit_module(void)
 {
 	VBoxGuestHaikuDetach();
 
 	put_module(B_PCI_MODULE_NAME);
 }
 
+static status_t std_ops(int32 op, ...) {
+	switch(op) {
+	case B_MODULE_INIT:
+		dprintf(MODULE_NAME ": B_MODULE_INIT\n");
+		init_module();
+		break;
+	case B_MODULE_UNINIT:
+		dprintf(MODULE_NAME ": B_MODULE_UNINIT\n");
+		uninit_module();
+		break;
+	default:
+		return B_ERROR;
+	}
+	return B_OK;
+}
 
+_EXPORT module_info *modules[] = {
+	(module_info*) &g_VBoxGuest,
+	NULL
+};
 
 /* Common code that depend on g_DevExt. */
 #include "VBoxGuestIDC-unix.c.h"
-

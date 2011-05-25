@@ -2,3 +2,5 @@
 kBuild/*
 out/*
 input_server
+install.sh
+generate_defs.sh

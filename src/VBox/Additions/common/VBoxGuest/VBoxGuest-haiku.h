@@ -1,0 +1,166 @@
+/* $Id$ */
+/** @file
+ * VBoxGuest - Guest Additions Driver.
+ */
+
+/*
+ * Copyright (C) 2010 Oracle Corporation
+ *
+ * This file is part of VirtualBox Open Source Edition (OSE), as
+ * available from http://www.virtualbox.org. This file is free software;
+ * you can redistribute it and/or modify it under the terms of the GNU
+ * General Public License (GPL) as published by the Free Software
+ * Foundation, in version 2 as it comes in the "COPYING" file of the
+ * VirtualBox OSE distribution. VirtualBox OSE is distributed in the
+ * hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
+ */
+
+#ifndef ___VBoxGuest_haiku_h
+#define ___VBoxGuest_haiku_h
+
+#include "VBoxGuestInternal.h"
+#include <VBox/log.h>
+#include <iprt/assert.h>
+#include <iprt/initterm.h>
+#include <iprt/process.h>
+#include <iprt/mem.h>
+#include <iprt/asm.h>
+#include <iprt/mp.h>
+#include <iprt/power.h>
+#include <iprt/thread.h>
+
+struct VBoxGuestDeviceState
+{
+    /** Resource ID of the I/O port */
+    int                iIOPortResId;
+    /** Pointer to the I/O port resource. */
+//    struct resource   *pIOPortRes;
+    /** Start address of the IO Port. */
+    uint16_t           uIOPortBase;
+    /** Resource ID of the MMIO area */
+    area_id            iVMMDevMemAreaId;
+    /** Pointer to the MMIO resource. */
+//    struct resource   *pVMMDevMemRes;
+    /** Handle of the MMIO resource. */
+//    bus_space_handle_t VMMDevMemHandle;
+    /** Size of the memory area. */
+    size_t         VMMDevMemSize;
+    /** Mapping of the register space */
+    void              *pMMIOBase;
+    /** IRQ number */
+    int                iIrqResId;
+    /** IRQ resource handle. */
+//    struct resource   *pIrqRes;
+    /** Pointer to the IRQ handler. */
+//    void              *pfnIrqHandler;
+    /** VMMDev version */
+    uint32_t           u32Version;
+
+    /** The (only) select data we wait on. */
+    //XXX: should leave in pSession ?
+    uint8_t						selectEvent;
+    uint32_t                    selectRef;
+    void                    	*selectSync;
+};
+
+struct vboxguest_module_info {
+	module_info module;
+	
+	VBOXGUESTDEVEXT devExt;
+	struct VBoxGuestDeviceState _sState;
+	volatile uint32_t _cUsers;
+	
+	size_t (*_RTLogBackdoorPrintf)(const char *pszFormat, ...);
+	size_t (*_RTLogBackdoorPrintfV)(const char *pszFormat, va_list args);
+	int (*_RTLogSetDefaultInstanceThread)(PRTLOGGER pLogger, uintptr_t uKey);
+	int (*_RTMemAllocExTag)(size_t cb, size_t cbAlignment, uint32_t fFlags, const char *pszTag, void **ppv);
+	void * (*_RTMemContAlloc)(PRTCCPHYS pPhys, size_t cb);
+	void (*_RTMemContFree)(void *pv, size_t cb);
+	void (*_RTMemFreeEx)(void *pv, size_t cb);
+	bool (*_RTMpIsCpuPossible)(RTCPUID idCpu);
+	int (*_RTMpNotificationDeregister)(PFNRTMPNOTIFICATION pfnCallback, void *pvUser);
+	int (*_RTMpNotificationRegister)(PFNRTMPNOTIFICATION pfnCallback, void *pvUser);
+	int (*_RTMpOnAll)(PFNRTMPWORKER pfnWorker, void *pvUser1, void *pvUser2);
+	int (*_RTMpOnOthers)(PFNRTMPWORKER pfnWorker, void *pvUser1, void *pvUser2);
+	int (*_RTMpOnSpecific)(RTCPUID idCpu, PFNRTMPWORKER pfnWorker, void *pvUser1, void *pvUser2);
+	int (*_RTPowerNotificationDeregister)(PFNRTPOWERNOTIFICATION pfnCallback, void *pvUser);
+	int (*_RTPowerNotificationRegister)(PFNRTPOWERNOTIFICATION pfnCallback, void *pvUser);
+	int (*_RTPowerSignalEvent)(RTPOWEREVENT enmEvent);
+	void (*_RTR0AssertPanicSystem)(void);
+	int (*_RTR0Init)(unsigned fReserved);
+	void * (*_RTR0MemObjAddress)(RTR0MEMOBJ MemObj);
+	RTR3PTR (*_RTR0MemObjAddressR3)(RTR0MEMOBJ MemObj);
+	int (*_RTR0MemObjAllocContTag)(PRTR0MEMOBJ pMemObj, size_t cb, bool fExecutable, const char *pszTag);
+	int (*_RTR0MemObjAllocLowTag)(PRTR0MEMOBJ pMemObj, size_t cb, bool fExecutable, const char *pszTag);
+	int (*_RTR0MemObjAllocPageTag)(PRTR0MEMOBJ pMemObj, size_t cb, bool fExecutable, const char *pszTag);
+	int (*_RTR0MemObjAllocPhysExTag)(PRTR0MEMOBJ pMemObj, size_t cb, RTHCPHYS PhysHighest, size_t uAlignment, const char *pszTag);
+	int (*_RTR0MemObjAllocPhysNCTag)(PRTR0MEMOBJ pMemObj, size_t cb, RTHCPHYS PhysHighest, const char *pszTag);
+	int (*_RTR0MemObjAllocPhysTag)(PRTR0MEMOBJ pMemObj, size_t cb, RTHCPHYS PhysHighest, const char *pszTag);
+	int (*_RTR0MemObjEnterPhysTag)(PRTR0MEMOBJ pMemObj, RTHCPHYS Phys, size_t cb, uint32_t uCachePolicy, const char *pszTag);
+	int (*_RTR0MemObjFree)(RTR0MEMOBJ MemObj, bool fFreeMappings);
+	RTHCPHYS (*_RTR0MemObjGetPagePhysAddr)(RTR0MEMOBJ MemObj, size_t iPage);
+	bool (*_RTR0MemObjIsMapping)(RTR0MEMOBJ MemObj);
+	int (*_RTR0MemObjLockKernelTag)(PRTR0MEMOBJ pMemObj, void *pv, size_t cb, uint32_t fAccess, const char *pszTag);
+	int (*_RTR0MemObjLockUserTag)(PRTR0MEMOBJ pMemObj, RTR3PTR R3Ptr, size_t cb, uint32_t fAccess,
+		RTR0PROCESS R0Process, const char *pszTag);
+	int (*_RTR0MemObjMapKernelExTag)(PRTR0MEMOBJ pMemObj, RTR0MEMOBJ MemObjToMap, void *pvFixed, size_t uAlignment,
+		unsigned fProt, size_t offSub, size_t cbSub, const char *pszTag);
+	int (*_RTR0MemObjMapKernelTag)(PRTR0MEMOBJ pMemObj, RTR0MEMOBJ MemObjToMap, void *pvFixed,
+		size_t uAlignment, unsigned fProt, const char *pszTag);
+	int (*_RTR0MemObjMapUserTag)(PRTR0MEMOBJ pMemObj, RTR0MEMOBJ MemObjToMap, RTR3PTR R3PtrFixed,
+		size_t uAlignment, unsigned fProt, RTR0PROCESS R0Process, const char *pszTag);
+	int (*_RTR0MemObjProtect)(RTR0MEMOBJ hMemObj, size_t offSub, size_t cbSub, uint32_t fProt);
+	int (*_RTR0MemObjReserveKernelTag)(PRTR0MEMOBJ pMemObj, void *pvFixed, size_t cb, size_t uAlignment, const char *pszTag);
+	int (*_RTR0MemObjReserveUserTag)(PRTR0MEMOBJ pMemObj, RTR3PTR R3PtrFixed, size_t cb, size_t uAlignment,
+		RTR0PROCESS R0Process, const char *pszTag);
+	size_t (*_RTR0MemObjSize)(RTR0MEMOBJ MemObj);
+	RTR0PROCESS (*_RTR0ProcHandleSelf)(void);
+	void (*_RTR0Term)(void);
+	void (*_RTR0TermForced)(void);
+	uint32_t (*_RTSemEventGetResolution)(void);
+	uint32_t (*_RTSemEventMultiGetResolution)(void);
+	int (*_RTSemEventMultiWaitEx)(RTSEMEVENTMULTI hEventMultiSem, uint32_t fFlags, uint64_t uTimeout);
+	int (*_RTSemEventMultiWaitExDebug)(RTSEMEVENTMULTI hEventMultiSem, uint32_t fFlags, uint64_t uTimeout,
+		RTHCUINTPTR uId, RT_SRC_POS_DECL);
+	int (*_RTSemEventWaitEx)(RTSEMEVENT hEventSem, uint32_t fFlags, uint64_t uTimeout);
+	int (*_RTSemEventWaitExDebug)(RTSEMEVENT hEventSem, uint32_t fFlags, uint64_t uTimeout,
+		RTHCUINTPTR uId, RT_SRC_POS_DECL);
+	bool (*_RTThreadIsInInterrupt)(RTTHREAD hThread);
+	void (*_RTThreadPreemptDisable)(PRTTHREADPREEMPTSTATE pState);
+	bool (*_RTThreadPreemptIsEnabled)(RTTHREAD hThread);
+	bool (*_RTThreadPreemptIsPending)(RTTHREAD hThread);
+	bool (*_RTThreadPreemptIsPendingTrusty)(void);
+	bool (*_RTThreadPreemptIsPossible)(void);
+	void (*_RTThreadPreemptRestore)(PRTTHREADPREEMPTSTATE pState);
+	uint32_t (*_RTTimerGetSystemGranularity)(void);
+	int (*_RTTimerReleaseSystemGranularity)(uint32_t u32Granted);
+	int (*_RTTimerRequestSystemGranularity)(uint32_t u32Request, uint32_t *pu32Granted);
+	void (*_RTSpinlockAcquireNoInts)(RTSPINLOCK Spinlock, PRTSPINLOCKTMP pTmp);
+	void (*_RTSpinlockReleaseNoInts)(RTSPINLOCK Spinlock, PRTSPINLOCKTMP pTmp);
+	void * (*_RTMemTmpAllocTag)(size_t cb, const char *pszTag);
+	void (*_RTMemTmpFree)(void *pv);
+	PRTLOGGER (*_RTLogRelDefaultInstance)(void);
+	int (*_RTErrConvertToErrno)(int iErr);
+	int (*_VBoxGuestCommonIOCtl)(unsigned iFunction, PVBOXGUESTDEVEXT pDevExt, PVBOXGUESTSESSION pSession,
+		void *pvData, size_t cbData, size_t *pcbDataReturned);
+	int (*_VBoxGuestCreateUserSession)(PVBOXGUESTDEVEXT pDevExt, PVBOXGUESTSESSION *ppSession);
+	void (*_VBoxGuestCloseSession)(PVBOXGUESTDEVEXT pDevExt, PVBOXGUESTSESSION pSession);
+};
+
+#ifdef IN_VBOXGUEST
+#define g_DevExt (g_VBoxGuest.devExt)
+#define cUsers (g_VBoxGuest._cUsers)
+#define sState (g_VBoxGuest._sState)
+#else
+#define g_DevExt (g_VBoxGuest->devExt)
+#define cUsers (g_VBoxGuest->_cUsers)
+#define sState (g_VBoxGuest->_sState)
+#define RT_MANGLER(f) (g_VBoxGuest->_ ## f)
+
+// technically not part of the runtime, but need to be exported like they are:
+#define VBoxGuestCommonIOCtl RT_MANGLER(VBoxGuestCommonIOCtl)
+#define VBoxGuestCloseSession RT_MANGLER(VBoxGuestCloseSession)
+#define VBoxGuestCreateUserSession RT_MANGLER(VBoxGuestCreateUserSession)
+#endif
+
+#endif

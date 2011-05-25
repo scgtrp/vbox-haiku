@@ -89,6 +89,19 @@ if1of ($(KBUILD_TARGET), freebsd haiku $(if $(defined VBOX_WITH_ADDITION_DRIVERS
   	$(PATH_INS)/gen-sys-hdrs/pci_if.h \
   	$(PATH_INS)/gen-sys-hdrs/bus_if.h \
   	$(PATH_INS)/gen-sys-hdrs/device_if.h
+  
+  ifeq ($(KBUILD_TARGET), haiku)
+   # Haiku drivers cannot export symbols for other drivers, but modules can.
+   # Therefore vboxguest is a module containing the ring 0 guest lib, and vboxdev/vboxsf
+   # use this module to access the guest lib.
+   SYSMODS += VBoxDev
+   VBoxDev_TEMPLATE      = VBOXGUESTR0
+   VBoxDev_NAME        = vboxdev
+   VBoxDev_DEFS        = VBOX_SVN_REV=$(VBOX_SVN_REV) _KERNEL_MODE=1 VBGL_VBOXGUEST VBOX_WITH_HGCM IN_RING0
+   VBoxDev_DEPS       += $(VBOX_SVN_REV_HEADER)
+   VBoxDev_SOURCES     = VBoxDev-haiku.c
+  endif
+  
  else # OS/2:
   # The library order is crucial, so a bit of trickery is necessary.
   # A library is used to make sure that VBoxGuestA-os2.asm is first in the link. (temporary hack?)
