@@ -95,11 +95,11 @@ if1of ($(KBUILD_TARGET), freebsd haiku $(if $(defined VBOX_WITH_ADDITION_DRIVERS
    # Therefore vboxguest is a module containing the ring 0 guest lib, and vboxdev/vboxsf
    # use this module to access the guest lib.
    SYSMODS += VBoxDev
-   VBoxDev_TEMPLATE      = VBOXGUESTR0
+   VBoxDev_TEMPLATE    = VBOXGUESTR0
    VBoxDev_NAME        = vboxdev
    VBoxDev_DEFS        = VBOX_SVN_REV=$(VBOX_SVN_REV) _KERNEL_MODE=1 VBGL_VBOXGUEST VBOX_WITH_HGCM IN_RING0
    VBoxDev_DEPS       += $(VBOX_SVN_REV_HEADER)
-   VBoxDev_SOURCES     = VBoxDev-haiku.c
+   VBoxDev_SOURCES     = VBoxDev-haiku.c VBoxGuest-haiku-stubs.c
   endif
   
  else # OS/2:

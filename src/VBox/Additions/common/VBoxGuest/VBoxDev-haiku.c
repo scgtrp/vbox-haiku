@@ -37,13 +37,9 @@
 #include <iprt/mem.h>
 #include <iprt/asm.h>
 
-#include "VBoxGuest-haiku-mangling.h"
-
 #define DRIVER_NAME "vboxdev"
 #define DEVICE_NAME "misc/vboxguest"
 #define MODULE_NAME "generic/vboxguest"
-
-static struct vboxguest_module_info *g_VBoxGuest;
 
 static status_t VBoxGuestHaikuOpen(const char *name, uint32 flags, void **cookie);
 static status_t VBoxGuestHaikuClose(void *cookie);

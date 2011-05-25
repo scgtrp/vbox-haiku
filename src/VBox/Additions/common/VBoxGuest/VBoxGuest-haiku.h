@@ -18,6 +18,10 @@
 #ifndef ___VBoxGuest_haiku_h
 #define ___VBoxGuest_haiku_h
 
+#include <OS.h>
+#include <Drivers.h>
+#include <drivers/module.h>
+
 #include "VBoxGuestInternal.h"
 #include <VBox/log.h>
 #include <iprt/assert.h>
@@ -148,6 +152,29 @@ struct vboxguest_module_info {
 		void *pvData, size_t cbData, size_t *pcbDataReturned);
 	int (*_VBoxGuestCreateUserSession)(PVBOXGUESTDEVEXT pDevExt, PVBOXGUESTSESSION *ppSession);
 	void (*_VBoxGuestCloseSession)(PVBOXGUESTDEVEXT pDevExt, PVBOXGUESTSESSION pSession);
+	void * (*_VBoxGuestIDCOpen)(uint32_t *pu32Version);
+	int (*_VBoxGuestIDCClose)(void *pvSession);
+	int (*_VBoxGuestIDCCall)(void *pvSession, unsigned iCmd, void *pvData, size_t cbData, size_t *pcbDataReturned);
+	void (*_RTAssertMsg1Weak)(const char *pszExpr, unsigned uLine, const char *pszFile, const char *pszFunction);
+	void (*_RTAssertMsg2Weak)(const char *pszFormat, ...);
+	void (*_RTAssertMsg2WeakV)(const char *pszFormat, va_list va);
+	bool (*_RTAssertShouldPanic)(void);
+	int (*_RTSemFastMutexCreate)(PRTSEMFASTMUTEX phFastMtx);
+	int (*_RTSemFastMutexDestroy)(RTSEMFASTMUTEX hFastMtx);
+	int (*_RTSemFastMutexRelease)(RTSEMFASTMUTEX hFastMtx);
+	int (*_RTSemFastMutexRequest)(RTSEMFASTMUTEX hFastMtx);
 };
+
+
+#ifdef IN_VBOXGUEST
+#define g_DevExt (g_VBoxGuest.devExt)
+#define cUsers (g_VBoxGuest._cUsers)
+#define sState (g_VBoxGuest._sState)
+#else
+#define g_DevExt (g_VBoxGuest->devExt)
+#define cUsers (g_VBoxGuest->_cUsers)
+#define sState (g_VBoxGuest->_sState)
+extern struct vboxguest_module_info *g_VBoxGuest;
+#endif
 
 #endif

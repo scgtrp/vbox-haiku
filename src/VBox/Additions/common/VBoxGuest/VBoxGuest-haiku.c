@@ -40,8 +40,6 @@
 #include <iprt/asm.h>
 #include <iprt/timer.h>
 
-#include "VBoxGuest-haiku-mangling.h"
-
 #define MODULE_NAME VBOXGUEST_MODULE_NAME
 
 /*
@@ -57,6 +55,9 @@ static int32 VBoxGuestHaikuISR(void *pvState);
 DECLVBGL(int)    VBoxGuestHaikuServiceCall(void *pvSession, unsigned uCmd, void *pvData, size_t cbData, size_t *pcbDataReturned);
 DECLVBGL(void *) VBoxGuestHaikuServiceOpen(uint32_t *pu32Version);
 DECLVBGL(int)    VBoxGuestHaikuServiceClose(void *pvSession);
+DECLVBGL(void *) VBoxGuestIDCOpen(uint32_t *pu32Version);
+DECLVBGL(int)    VBoxGuestIDCClose(void *pvSession);
+DECLVBGL(int)    VBoxGuestIDCCall(void *pvSession, unsigned iCmd, void *pvData, size_t cbData, size_t *pcbDataReturned);
 
 static status_t std_ops(int32 op, ...);
 
@@ -147,6 +148,17 @@ static struct vboxguest_module_info g_VBoxGuest = {
 	VBoxGuestCommonIOCtl,
 	VBoxGuestCreateUserSession,
 	VBoxGuestCloseSession,
+	VBoxGuestIDCOpen,
+	VBoxGuestIDCClose,
+	VBoxGuestIDCCall,
+	RTAssertMsg1Weak,
+	RTAssertMsg2Weak,
+	RTAssertMsg2WeakV,
+	RTAssertShouldPanic,
+	RTSemFastMutexCreate,
+	RTSemFastMutexDestroy,
+	RTSemFastMutexRelease,
+	RTSemFastMutexRequest,
 };
 
 #if 0
