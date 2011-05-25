@@ -39,6 +39,7 @@
 
 #define DRIVER_NAME "vboxdev"
 #define DEVICE_NAME "misc/vboxguest"
+#define MODULE_NAME "generic/vboxguest"
 
 static struct vboxguest_module_info *g_VBoxGuest;
 
@@ -352,7 +353,7 @@ static status_t VBoxGuestHaikuRead (void *cookie, off_t position, void *data, si
 int32 api_version = B_CUR_DRIVER_API_VERSION;
 
 status_t init_hardware() {
-	return get_module("generic/vboxguest", (module_info **)&g_VBoxGuest);
+	return get_module(MODULE_NAME, (module_info **)&g_VBoxGuest);
 }
 
 status_t init_driver() {
@@ -379,5 +380,5 @@ const char** publish_devices() {
 }
 
 void uninit_driver() {
-	put_module("vboxguest");
+	put_module(MODULE_NAME);
 }
