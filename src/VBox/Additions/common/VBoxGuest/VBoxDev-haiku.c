@@ -37,6 +37,8 @@
 #include <iprt/mem.h>
 #include <iprt/asm.h>
 
+#include "VBoxGuest-haiku-mangling.h"
+
 #define DRIVER_NAME "vboxdev"
 #define DEVICE_NAME "misc/vboxguest"
 #define MODULE_NAME "generic/vboxguest"

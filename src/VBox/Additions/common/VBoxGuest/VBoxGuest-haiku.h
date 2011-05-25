@@ -29,6 +29,9 @@
 #include <iprt/power.h>
 #include <iprt/thread.h>
 
+/** The module name. */
+#define VBOXGUEST_MODULE_NAME "generic/vboxguest"
+
 struct VBoxGuestDeviceState
 {
     /** Resource ID of the I/O port */
@@ -146,21 +149,5 @@ struct vboxguest_module_info {
 	int (*_VBoxGuestCreateUserSession)(PVBOXGUESTDEVEXT pDevExt, PVBOXGUESTSESSION *ppSession);
 	void (*_VBoxGuestCloseSession)(PVBOXGUESTDEVEXT pDevExt, PVBOXGUESTSESSION pSession);
 };
-
-#ifdef IN_VBOXGUEST
-#define g_DevExt (g_VBoxGuest.devExt)
-#define cUsers (g_VBoxGuest._cUsers)
-#define sState (g_VBoxGuest._sState)
-#else
-#define g_DevExt (g_VBoxGuest->devExt)
-#define cUsers (g_VBoxGuest->_cUsers)
-#define sState (g_VBoxGuest->_sState)
-#define RT_MANGLER(f) (g_VBoxGuest->_ ## f)
-
-// technically not part of the runtime, but need to be exported like they are:
-#define VBoxGuestCommonIOCtl RT_MANGLER(VBoxGuestCommonIOCtl)
-#define VBoxGuestCloseSession RT_MANGLER(VBoxGuestCloseSession)
-#define VBoxGuestCreateUserSession RT_MANGLER(VBoxGuestCreateUserSession)
-#endif
 
 #endif

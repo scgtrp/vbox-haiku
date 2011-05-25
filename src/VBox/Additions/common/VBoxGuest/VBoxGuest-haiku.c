@@ -40,8 +40,9 @@
 #include <iprt/asm.h>
 #include <iprt/timer.h>
 
-/** The module name. */
-#define MODULE_NAME    "generic/vboxguest"
+#include "VBoxGuest-haiku-mangling.h"
+
+#define MODULE_NAME VBOXGUEST_MODULE_NAME
 
 /*
  * IRQ related functions.
