@@ -25,7 +25,7 @@ endif
 #
 # Include sub-makefiles.
 #
-#include $(PATH_SUB_CURRENT)/sharedfolders/Makefile.kmk
+include $(PATH_SUB_CURRENT)/sharedfolders/Makefile.kmk
 #include $(PATH_SUB_CURRENT)/drm/Makefile.kmk
 include $(PATH_SUB_CURRENT)/VBoxGuest/Makefile.kmk
 include $(PATH_SUB_CURRENT)/VBoxMouse/Makefile.kmk

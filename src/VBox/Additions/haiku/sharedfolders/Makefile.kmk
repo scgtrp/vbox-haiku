@@ -1,0 +1,52 @@
+# $Id$
+## @file
+# Sub-Makefile for the vboxsf (haiku shared folders module).
+#
+
+#
+# Copyright (C) 2006-2010 Oracle Corporation
+#
+# This file is part of VirtualBox Open Source Edition (OSE), as
+# available from http://www.virtualbox.org. This file is free software;
+# you can redistribute it and/or modify it under the terms of the GNU
+# General Public License (GPL) as published by the Free Software
+# Foundation, in version 2 as it comes in the "COPYING" file of the
+# VirtualBox OSE distribution. VirtualBox OSE is distributed in the
+# hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
+#
+
+SUB_DEPTH = ../../../../..
+include	$(KBUILD_PATH)/subheader.kmk
+
+ifdef VBOX_WITH_ADDITION_DRIVERS
+ SYSMODS += vboxsf
+endif
+
+#
+# Populate FILES_VBOXSF_NOBIN
+#
+#include $(PATH_SUB_CURRENT)/files_vboxsf
+
+#
+# The module (for syntax checking).
+# The DEBUG_HASH* stuff is for CONFIG_DYNAMIC_DEBUG-enabled kernels
+#
+vboxsf_TEMPLATE        = VBOXGUESTR0
+vboxsf_DEFS            = \
+	MODULE IN_RT_R0 VBOXGUEST VBOX_WITH_HGCM \
+	KBUILD_MODNAME=KBUILD_STR\(vboxsf\) \
+        KBUILD_BASENAME=KBUILD_STR\(vboxsf\)
+vboxsf_INCS            = \
+	$(PATH_ROOT)/src/VBox/Additions/common/VBoxGuestLib \
+	$(PATH_ROOT)/src/VBox/Additions/common/VBoxGuest \
+	$(PATH_ROOT)/src/VBox/Runtime/r0drv/haiku \
+	$(PATH_ROOT)/../haiku/headers/private/kernel
+vboxsf_SOURCES         = \
+	vboxsf.c \
+	vnode_cache.cpp \
+	$(PATH_ROOT)/src/VBox/Additions/common/VBoxGuest/VBoxGuest-haiku-stubs.c
+vboxsf_LIBS            = \
+	$(VBOX_LIB_VBGL_R0)
+
+include	$(KBUILD_PATH)/subfooter.kmk
+
