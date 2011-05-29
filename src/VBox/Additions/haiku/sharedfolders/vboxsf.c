@@ -39,16 +39,17 @@ void uninit_module(void)
 }
 
 PSHFLSTRING make_shflstring(const char* const s) {
-	PSHFLSTRING rv = malloc(strlen(s) + 3);
-	if (!rv) {
-		return NULL;
-	}
 	int len = strlen(s);
 	if (len > 0xFFFE) {
 		dprintf(FS_NAME ": make_shflstring: string too long\n");
-		free(rv);
 		return NULL;
 	}
+	
+	PSHFLSTRING rv = malloc(len + 3);
+	if (!rv) {
+		return NULL;
+	}
+	
 	rv->u16Length = len;
     rv->u16Size = len + 1;
     strcpy(rv->String.utf8, s);
@@ -104,23 +105,6 @@ status_t unmount(fs_volume *volume) {
 	vboxCallUnmapFolder(&g_clientHandle, volume->private_volume);
 	return B_OK;
 }
-/*
-status_t vboxsf_get_vnode(fs_volume* volume, ino_t id, fs_vnode* vnode, int* _type, uint32* _flags, bool reenter) {
-	dprintf("get_vnode %08x\n", id);
-	vboxsf_volume* v = volume->private_volume;
-	vboxsf_vnode* n = malloc(sizeof(vboxsf_vnode));
-	vnode->private_node = n;
-	n->map = &v->map;
-	n->path = NULL;
-	vnode->ops = &vboxsf_vnode_ops;
-	return B_OK;
-}
-
-status_t vboxsf_put_vnode(fs_volume* volume, fs_vnode* vnode, bool reenter) {
-	dprintf("put_vnode %08x\n", vnode->private_node);
-	free(vnode->private_node);
-	return B_OK;
-}*/
 
 status_t vboxsf_read_stat(fs_volume* volume, fs_vnode* _vnode, struct stat* st) {
 	// TODO
@@ -154,6 +138,10 @@ status_t vboxsf_open_dir(fs_volume* _volume, fs_vnode* _vnode, void** _cookie) {
 	
 	dprintf(FS_NAME ": handle is now %d\n", params.Handle);
 	PSHFLSTRING path = make_shflstring("");
+	if (!path) {
+		dprintf(FS_NAME ": make_shflstring() failed\n");
+		return B_ERROR;
+	}
 	int rc = vboxCallCreate(&g_clientHandle, &volume->map, path, &params);
 	dprintf(FS_NAME ": handle is now %d\n", params.Handle);
 	
@@ -167,13 +155,16 @@ status_t vboxsf_open_dir(fs_volume* _volume, fs_vnode* _vnode, void** _cookie) {
 			cookie->has_more_files = true;
 			return B_OK;
 		}
+		else {
+			free(path);
+			return B_FILE_NOT_FOUND;
+		}
 	}
 	else {
+		free(path);
 		dprintf(FS_NAME ": vboxCallCreate: %d\n", rc);
 		return B_ERROR;
 	}
-	
-	return B_ERROR;
 }
 
 status_t vboxsf_read_dir(fs_volume* _volume, fs_vnode* _vnode, void* _cookie,
