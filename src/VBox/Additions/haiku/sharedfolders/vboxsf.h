@@ -27,7 +27,13 @@ typedef struct vboxsf_dir_cookie {
 	SHFLHANDLE handle;
 	PSHFLSTRING path;
 	uint32 index;
+	bool has_more_files;
 } vboxsf_dir_cookie;
+
+typedef struct vboxsf_file_cookie {
+	SHFLHANDLE handle;
+	PSHFLSTRING path;
+} vboxsf_file_cookie;
 
 #ifdef __cplusplus
 extern "C" {

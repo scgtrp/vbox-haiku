@@ -73,7 +73,7 @@ status_t mount(fs_volume *volume, const char *device, uint32 flags, const char *
 	if (rv == 0) {
 		vboxsf_vnode* root_vnode;
 		
-		PSHFLSTRING name = make_shflstring(".");
+		PSHFLSTRING name = make_shflstring("");
 		if (!name) {
 			dprintf(FS_NAME ": make_shflstring() failed\n");
 			return B_ERROR;
@@ -94,7 +94,6 @@ status_t mount(fs_volume *volume, const char *device, uint32 flags, const char *
 	}
 	else {
 		dprintf(FS_NAME ": vboxCallMapFolder failed (%d)\n", rv);
-		kernel_debugger("8");
 		free(volume->private_volume);
 		return B_ERROR;
 	}
@@ -123,9 +122,12 @@ status_t vboxsf_put_vnode(fs_volume* volume, fs_vnode* vnode, bool reenter) {
 	return B_OK;
 }*/
 
-status_t read_stat(fs_volume* volume, fs_vnode* vnode, struct stat* st) {
+status_t vboxsf_read_stat(fs_volume* volume, fs_vnode* _vnode, struct stat* st) {
+	// TODO
+	vboxsf_vnode* vnode = _vnode->private_node;
+	dprintf("vboxsf_read_stat\n");
 	st->st_dev = 0;
-	st->st_ino = (ino_t)(1);
+	st->st_ino = vnode->vnode;
 	st->st_mode = S_IFDIR | S_IRWXU | S_IRWXG | S_IRWXO;
 	st->st_nlink = 1;
 	st->st_uid = 0;
@@ -140,7 +142,7 @@ status_t read_stat(fs_volume* volume, fs_vnode* vnode, struct stat* st) {
 	return B_OK;
 }
 
-status_t open_dir(fs_volume* _volume, fs_vnode* _vnode, void** _cookie) {
+status_t vboxsf_open_dir(fs_volume* _volume, fs_vnode* _vnode, void** _cookie) {
 	vboxsf_volume* volume = _volume->private_volume;
 	vboxsf_vnode* vnode = _vnode->private_node;
 	SHFLCREATEPARMS params;
@@ -150,73 +152,84 @@ status_t open_dir(fs_volume* _volume, fs_vnode* _vnode, void** _cookie) {
 	params.CreateFlags = SHFL_CF_DIRECTORY | SHFL_CF_ACT_OPEN_IF_EXISTS
 		| SHFL_CF_ACT_FAIL_IF_NEW | SHFL_CF_ACCESS_READ;
 	
-	PSHFLSTRING path = make_shflstring("*"); // TODO put real path here
+	dprintf(FS_NAME ": handle is now %d\n", params.Handle);
+	PSHFLSTRING path = make_shflstring("");
 	int rc = vboxCallCreate(&g_clientHandle, &volume->map, path, &params);
+	dprintf(FS_NAME ": handle is now %d\n", params.Handle);
 	
 	if (RT_SUCCESS(rc)) {
-		if (params.Result == SHFL_FILE_EXISTS) {
-			dprintf("wheeeee\n");
+		if (params.Result == SHFL_FILE_EXISTS && params.Handle != SHFL_HANDLE_NIL) {
 			vboxsf_dir_cookie* cookie = malloc(sizeof(vboxsf_dir_cookie));
 			*_cookie = cookie;
 			cookie->index = 0;
 			cookie->path = path;
-			cookie->handle = 42; // TODO
+			cookie->handle = params.Handle;
+			cookie->has_more_files = true;
 			return B_OK;
 		}
 	}
 	else {
 		dprintf(FS_NAME ": vboxCallCreate: %d\n", rc);
-		return B_PERMISSION_DENIED;
+		return B_ERROR;
 	}
 	
 	return B_ERROR;
 }
 
-status_t read_dir(fs_volume* _volume, fs_vnode* _vnode, void* _cookie,
+status_t vboxsf_read_dir(fs_volume* _volume, fs_vnode* _vnode, void* _cookie,
 	struct dirent* buffer, size_t bufferSize, uint32* _num) {
 	vboxsf_dir_cookie* cookie = _cookie;
 	vboxsf_volume* volume = _volume->private_volume;
 	vboxsf_vnode* vnode = _vnode->private_node;
 	uint32 num_read = 0;
 	status_t rv = B_OK;
-	for (; *_num > 0; (*_num)--) {
-		SHFLDIRINFO dir_buffer;
-		uint32_t pcbBuffer = sizeof(dir_buffer);
-		uint32_t count = 1;
-		
-		// TODO this can read more than one file at once, do that when needed
-		int rc = vboxCallDirInfo(&g_clientHandle, &volume->map, cookie->handle, cookie->path,
-			0, cookie->index++, &pcbBuffer, &dir_buffer, &count);
-		
-		if (!RT_SUCCESS(rc)) {
-			if (rc == VERR_NO_MORE_FILES) {
-				dprintf(FS_NAME ": no more files\n");
-			}
-			else {
+	
+	if (cookie->has_more_files) {
+		for (; *_num > 0; (*_num)--) {
+			uint32_t pcbBuffer = sizeof(SHFLDIRINFO) + NAME_MAX;
+			PSHFLDIRINFO dir_buffer = malloc(pcbBuffer);
+			uint32_t count = 1;
+			
+			// TODO this can read more than one file at once, do that when possible
+			int rc = vboxCallDirInfo(&g_clientHandle, &volume->map, cookie->handle, cookie->path,
+				0, cookie->index++, &pcbBuffer, dir_buffer, &count);
+			dprintf("%d\n", rc);
+			if (rc != 0 && rc != VERR_NO_MORE_FILES) {
 				dprintf(FS_NAME ": vboxCallDirInfo failed: %d\n", rc);
+				rv = B_ERROR;
+				break;
 			}
-			break;
+			
+			dprintf(FS_NAME ": vboxsf_read_dir: %s\n", dir_buffer->name.String.utf8);
+			
+			buffer[num_read].d_ino = 1; // TODO get a real vnode id
+			strncpy(buffer[num_read].d_name, dir_buffer->name.String.utf8, NAME_MAX);
+			
+			num_read++;
+			
+			if (rc == VERR_NO_MORE_FILES) {
+				cookie->has_more_files = false;
+				break;
+			}
 		}
-		
-		dprintf(FS_NAME ": read_dir: %s\n", dir_buffer.name.String.utf8);
-
-		buffer[num_read].d_ino = 1; // TODO get a real vnode id
-		strncpy(buffer[num_read].d_name, dir_buffer.name.String.utf8, NAME_MAX);
-		
-		num_read++;
 	}
 	
 	*_num = num_read;
-	return B_OK;
+	return rv;
 }
 
-status_t free_dir_cookie(fs_volume* volume, fs_vnode* vnode, void* cookie) {
+status_t vboxsf_free_dir_cookie(fs_volume* _volume, fs_vnode* vnode, void* _cookie) {
+	vboxsf_volume* volume = _volume->private_volume;
+	vboxsf_dir_cookie* cookie = _cookie;
+	
+	vboxCallClose(&g_clientHandle, &volume->map, cookie->handle);
+	free(cookie->path);
 	free(cookie);
 	
 	return B_OK;
 }
 
-status_t read_fs_info(fs_volume* _volume, struct fs_info* info) {
+status_t vboxsf_read_fs_info(fs_volume* _volume, struct fs_info* info) {
 	vboxsf_volume* volume = _volume->private_volume;
 	
 	SHFLVOLINFO volume_info;
@@ -241,10 +254,20 @@ status_t read_fs_info(fs_volume* _volume, struct fs_info* info) {
 	return B_OK;
 }
 
-status_t lookup(fs_volume* volume, fs_vnode* dir, const char* name, ino_t* _id) {
+status_t vboxsf_lookup(fs_volume* volume, fs_vnode* dir, const char* name, ino_t* _id) {
 	// TODO
+	dprintf(FS_NAME ": lookup %s\n", name);
 	*_id = 1;
 	return B_OK;
+}
+
+status_t vboxsf_open(fs_volume* _volume, fs_vnode* _vnode, int openMode, void** _cookie) {
+	vboxsf_volume* volume = _volume->private_volume;
+	vboxsf_vnode* vnode = _vnode->private_node;
+	
+	dprintf(FS_NAME ": open (mode=%x)\n", openMode);
+	
+	return B_ERROR;
 }
 
 static status_t std_ops(int32 op, ...) {
@@ -264,7 +287,7 @@ static status_t std_ops(int32 op, ...) {
 static fs_volume_ops vboxsf_volume_ops = {
 	unmount,
 	
-	read_fs_info, // read_fs_info
+	vboxsf_read_fs_info, // read_fs_info
 	NULL, // write_fs_info
 	NULL, // sync
 
@@ -292,7 +315,7 @@ static fs_volume_ops vboxsf_volume_ops = {
 };
 
 static fs_vnode_ops vboxsf_vnode_ops = {
-	lookup, // lookup
+	vboxsf_lookup, // lookup
 	NULL, // get_vnode_name
 	vboxsf_put_vnode, // put_vnode
 	NULL, // remove_vnode
@@ -313,21 +336,21 @@ static fs_vnode_ops vboxsf_vnode_ops = {
 	NULL, // unlink
 	NULL, // rename
 	NULL, // access
-	read_stat, // read_stat
+	vboxsf_read_stat, // read_stat
 	NULL, // write_stat
 	NULL, // preallocate
 	NULL, // create
-	NULL, // open
+	vboxsf_open, // open
 	NULL, // close
 	NULL, // free_cookie
 	NULL, // read
 	NULL, // write
 	NULL, // create_dir
 	NULL, // remove_dir
-	open_dir, // open_dir
+	vboxsf_open_dir, // open_dir
 	NULL, // close_dir
-	free_dir_cookie, // free_dir_cookie
-	read_dir, // read_dir
+	vboxsf_free_dir_cookie, // free_dir_cookie
+	vboxsf_read_dir, // read_dir
 	NULL, // rewind_dir
 	NULL, // open_attr_dir
 	NULL, // close_attr_dir
