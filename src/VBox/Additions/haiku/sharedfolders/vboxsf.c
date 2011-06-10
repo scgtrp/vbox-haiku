@@ -216,61 +216,76 @@ status_t vboxsf_read_dir(fs_volume* _volume, fs_vnode* _vnode, void* _cookie,
 	uint32 num_read = 0;
 	status_t rv = B_OK;
 	
-	dprintf("vboxsf_read_dir: %d\n", *_num);
-	
 	if (cookie->has_more_files) {
-		for (; *_num > 0; (*_num)--) {
-			uint32_t pcbBuffer = sizeof(SHFLDIRINFO) + NAME_MAX;
-			PSHFLDIRINFO dir_buffer = malloc(pcbBuffer);
-			uint32_t count = 1;
+		for (;;) {
+			uint32_t cbBuffer = 16384;
+			PSHFLDIRINFO dir_buffer = malloc(cbBuffer);
+			uint32_t count;
 			
-			// TODO this can read more than one file at once, do that when possible
 			int rc = vboxCallDirInfo(&g_clientHandle, &volume->map, cookie->handle, cookie->path,
-				0, cookie->index++, &pcbBuffer, dir_buffer, &count);
+				0, cookie->index, &cbBuffer, dir_buffer, &count);
 			if (rc != 0 && rc != VERR_NO_MORE_FILES) {
 				dprintf(FS_NAME ": vboxCallDirInfo failed: %d\n", rc);
 				rv = B_ERROR;
 				break;
 			}
-			else if (rc == VERR_NO_MORE_FILES) {
-				dprintf(FS_NAME ": no more files\n");
+			
+			dprintf(FS_NAME ": vboxsf_read_dir: got %d files\n", count);
+			
+			PSHFLDIRINFO this_entry = dir_buffer;
+			uint32_t i;
+			for (i = 0; i < count; i++) {
+				dprintf(FS_NAME ": vboxsf_read_dir: file %d: %s\n", i, this_entry->name.String.utf8);
+				PSHFLSTRING name1 = clone_shflstring(&this_entry->name);
+				if (!name1) {
+					dprintf(FS_NAME ": make_shflstring() failed\n");
+					return B_ERROR;
+				}
+				
+				vboxsf_vnode* new_vnode;
+				rv = vboxsf_new_vnode(&volume->map, name1, NULL, &new_vnode); // FIXME
+				if (rv != B_OK) {
+					dprintf(FS_NAME ": vboxsf_new_vnode() failed\n");
+					return rv;
+				}
+				
+				if (bufferSize <= sizeof(struct dirent) + this_entry->name.u16Length) {
+					dprintf("hit end of buffer\n");
+					goto end;
+				}
+				
+				buffer->d_dev = 0;
+				buffer->d_pdev = 0;
+				buffer->d_ino = new_vnode->vnode;
+				buffer->d_pino = vnode->vnode;
+				buffer->d_reclen = sizeof(struct dirent) + this_entry->name.u16Length;
+				strncpy(buffer->d_name, this_entry->name.String.utf8, NAME_MAX);
+				
+				dprintf("buffer[%u] = { d_reclen=%d, d_name=\"%s\" }\n",
+					num_read, buffer->d_reclen, buffer->d_name);
+				
+				num_read++;
+				if (num_read >= *_num) {
+					dprintf("read enough files\n");
+					goto end;
+				}
+				
+				bufferSize -= buffer->d_reclen;
+				dprintf("%lu bytes left\n", bufferSize);
+				buffer = ((void*)(buffer)) + buffer->d_reclen;
+				
+				size_t size = offsetof(SHFLDIRINFO, name.String) + this_entry->name.u16Size;
+				this_entry = ((void*)this_entry + size);
+			}
+			
+			if (rc == VERR_NO_MORE_FILES) {
 				cookie->has_more_files = false;
-				//num_read++;
 				break;
 			}
-			
-			dprintf(FS_NAME ": vboxsf_read_dir: %s\n", dir_buffer->name.String.utf8);
-			
-			PSHFLSTRING name1 = clone_shflstring(&dir_buffer->name);
-			if (!name1) {
-				dprintf(FS_NAME ": make_shflstring() failed\n");
-				return B_ERROR;
-			}
-			dprintf(FS_NAME ": vboxsf_read_dir: name1=%s, name=%s, n1len=%d\n", name1->String.utf8, dir_buffer->name.String.utf8, name1->u16Length);
-			
-			vboxsf_vnode* new_vnode;
-			rv = vboxsf_new_vnode(&volume->map, name1, NULL, &new_vnode); // FIXME
-			if (rv != B_OK) {
-				dprintf(FS_NAME ": vboxsf_new_vnode() failed\n");
-				return rv;
-			}
-			buffer->d_dev = 0;
-			buffer->d_pdev = 0;
-			buffer->d_ino = new_vnode->vnode;
-			buffer->d_pino = vnode->vnode;
-			buffer->d_reclen = sizeof(struct dirent) + dir_buffer->name.u16Length;
-			dprintf("%d\n", buffer->d_reclen);
-			strncpy(buffer->d_name, dir_buffer->name.String.utf8, NAME_MAX);
-			dprintf("%d\n", buffer->d_reclen);
-			
-			dprintf("buffer[%u] = { d_reclen=%d, d_name=\"%s\" }\n",
-				num_read, buffer->d_reclen, buffer->d_name);
-			
-			num_read++;
-			buffer = ((void*)(buffer)) + sizeof(*buffer) + dir_buffer->name.u16Length;
 		}
 	}
 	
+end:
 	*_num = num_read;
 	dprintf("vboxsf_read_dir: read %d\n", *_num);
 	return rv;
