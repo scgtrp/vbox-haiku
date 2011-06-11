@@ -462,7 +462,95 @@ status_t vboxsf_open(fs_volume* _volume, fs_vnode* _vnode, int openMode, void** 
 	
 	dprintf(FS_NAME ": open (mode=%x)\n", openMode);
 	
-	return B_ERROR;
+	SHFLCREATEPARMS params;
+	
+	RT_ZERO(params);
+	params.Handle = SHFL_HANDLE_NIL;
+	
+	if (openMode & O_RDWR)
+		params.CreateFlags |= SHFL_CF_ACCESS_READWRITE;
+	else if (openMode & O_RDONLY)
+		params.CreateFlags |= SHFL_CF_ACCESS_READ;
+	else if (openMode & O_WRONLY)
+		params.CreateFlags |= SHFL_CF_ACCESS_WRITE;
+	
+	if (openMode & O_APPEND)
+		params.CreateFlags |= SHFL_CF_ACCESS_APPEND;
+	
+	if (openMode & O_CREAT) {
+		params.CreateFlags |= SHFL_CF_ACT_CREATE_IF_NEW;
+		if (openMode & O_EXCL)
+			params.CreateFlags |= SHFL_CF_ACT_FAIL_IF_EXISTS;
+		else if (openMode & O_TRUNC)
+			params.CreateFlags |= SHFL_CF_ACT_OVERWRITE_IF_EXISTS;
+		else
+			params.CreateFlags |= SHFL_CF_ACT_OPEN_IF_EXISTS;
+	}
+	else {
+		params.CreateFlags |= SHFL_CF_ACT_FAIL_IF_NEW;
+		if (openMode & O_TRUNC)
+			params.CreateFlags |= SHFL_CF_ACT_OVERWRITE_IF_EXISTS;
+		else
+			params.CreateFlags |= SHFL_CF_ACT_OPEN_IF_EXISTS;
+	}
+	
+	int rc = vboxCallCreate(&g_clientHandle, &volume->map, vnode->path, &params);
+	if (!RT_SUCCESS(rc)) {
+		dprintf("vboxCallCreate returned %d\n", rc);
+		return B_ERROR;
+	}
+	
+	vboxsf_file_cookie* cookie = malloc(sizeof(vboxsf_file_cookie));
+	if (!cookie) {
+		dprintf("couldn't allocate file cookie\n");
+		return B_NO_MEMORY;
+	}
+	
+	cookie->handle = params.Handle;
+	cookie->path = vnode->path;
+	
+	*_cookie = cookie;
+	
+	return B_OK;
+}
+
+status_t vboxsf_close(fs_volume* _volume, fs_vnode* _vnode, void* _cookie) {
+	TRACE
+	vboxsf_volume* volume = _volume->private_volume;
+	vboxsf_file_cookie* cookie = _cookie;
+	
+	int rc = vboxCallClose(&g_clientHandle, &volume->map, cookie->handle);
+	dprintf("vboxCallClose returned %d\n", rc);
+	return (rc == 0)? B_OK : B_ERROR;
+}
+
+status_t vboxsf_free_cookie(fs_volume *volume, fs_vnode *vnode, void *cookie) {
+	// FIXME should the path be freed here?
+	free(cookie);
+	return B_OK;
+}
+
+status_t vboxsf_read(fs_volume* _volume, fs_vnode* _vnode, void* _cookie, off_t pos, void *buffer, size_t *length) {
+	TRACE
+	vboxsf_volume* volume = _volume->private_volume;
+	vboxsf_vnode* vnode = _vnode->private_node;
+	vboxsf_file_cookie* cookie = _cookie;
+	
+	if (*length > 0xFFFFFFFF) {
+		// TODO should this just read as much as it can?
+		dprintf("vboxsf_read: length too big\n");
+		return B_BAD_VALUE;
+	}
+	
+	uint32_t l = *length;
+	void* other_buffer = malloc(l);
+	int rc = vboxCallRead(&g_clientHandle, &volume->map, cookie->handle, pos, &l, other_buffer, false);
+	memcpy(buffer, other_buffer, l);
+	free(other_buffer);
+	
+	dprintf("vboxCallRead returned %d\n", rc);
+	*length = l;
+	return (rc == 0)? B_OK : B_ERROR;
 }
 
 static status_t std_ops(int32 op, ...) {
@@ -537,9 +625,9 @@ static fs_vnode_ops vboxsf_vnode_ops = {
 	NULL, // preallocate
 	NULL, // create
 	vboxsf_open, // open
-	NULL, // close
-	NULL, // free_cookie
-	NULL, // read
+	vboxsf_close, // close
+	vboxsf_free_cookie, // free_cookie
+	vboxsf_read, // read
 	NULL, // write
 	NULL, // create_dir
 	NULL, // remove_dir
