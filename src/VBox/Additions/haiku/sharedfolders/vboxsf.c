@@ -69,6 +69,52 @@ PSHFLSTRING clone_shflstring(PSHFLSTRING s) {
 	return rv;
 }
 
+PSHFLSTRING concat_shflstring_cstr(PSHFLSTRING s1, const char* const s2) {
+	TRACE
+	size_t s2len = strlen(s2);
+	PSHFLSTRING rv = malloc(sizeof(SHFLSTRING) + s1->u16Length + s2len);
+	if (rv) {
+		memcpy(rv, s1, sizeof(SHFLSTRING) + s1->u16Length);
+		strcat(rv->String.utf8, s2);
+		rv->u16Length += s2len;
+		rv->u16Size += s2len;
+	}
+	return rv;
+}
+
+PSHFLSTRING concat_cstr_shflstring(const char* const s1, PSHFLSTRING s2) {
+	TRACE
+	size_t s1len = strlen(s1);
+	PSHFLSTRING rv = malloc(sizeof(SHFLSTRING) + s1len + s2->u16Length);
+	if (rv) {
+		strcpy(rv->String.utf8, s1);
+		strcat(rv->String.utf8, s2->String.utf8);
+		rv->u16Length = s1len + s2->u16Length;
+		rv->u16Size = rv->u16Length + 1;
+	}
+	return rv;
+}
+
+PSHFLSTRING build_path(vboxsf_vnode* dir, const char* const name) {
+	TRACE
+	
+	dprintf("*** build_path(%p, %p)\n", dir, name);
+	if (!dir || !name)
+		return NULL;
+	
+	size_t len = dir->path->u16Length + strlen(name) + 1;
+	
+	PSHFLSTRING rv = malloc(sizeof(SHFLSTRING) + len);
+	if (rv) {
+		strcpy(rv->String.utf8, dir->path->String.utf8);
+		strcat(rv->String.utf8, "/");
+		strcat(rv->String.utf8, name);
+		rv->u16Length = len;
+		rv->u16Size = rv->u16Length + 1;
+	}
+	return rv;
+}
+
 status_t mount(fs_volume *volume, const char *device, uint32 flags, const char *args, ino_t *_rootVnodeID) {
 	TRACE
 	if (device) {
@@ -178,30 +224,23 @@ status_t vboxsf_open_dir(fs_volume* _volume, fs_vnode* _vnode, void** _cookie) {
 	params.CreateFlags = SHFL_CF_DIRECTORY | SHFL_CF_ACT_OPEN_IF_EXISTS
 		| SHFL_CF_ACT_FAIL_IF_NEW | SHFL_CF_ACCESS_READ;
 	
-	PSHFLSTRING path = make_shflstring("");
-	if (!path) {
-		dprintf(FS_NAME ": make_shflstring() failed\n");
-		return B_ERROR;
-	}
-	int rc = vboxCallCreate(&g_clientHandle, &volume->map, path, &params);
+	int rc = vboxCallCreate(&g_clientHandle, &volume->map, vnode->path, &params);
 	
 	if (RT_SUCCESS(rc)) {
 		if (params.Result == SHFL_FILE_EXISTS && params.Handle != SHFL_HANDLE_NIL) {
 			vboxsf_dir_cookie* cookie = malloc(sizeof(vboxsf_dir_cookie));
 			*_cookie = cookie;
 			cookie->index = 0;
-			cookie->path = path;
+			cookie->path = build_path(vnode, "*");
 			cookie->handle = params.Handle;
 			cookie->has_more_files = true;
 			return B_OK;
 		}
 		else {
-			free(path);
 			return B_FILE_NOT_FOUND;
 		}
 	}
 	else {
-		free(path);
 		dprintf(FS_NAME ": vboxCallCreate: %d\n", rc);
 		return B_ERROR;
 	}
@@ -243,7 +282,7 @@ status_t vboxsf_read_dir(fs_volume* _volume, fs_vnode* _vnode, void* _cookie,
 				}
 				
 				vboxsf_vnode* new_vnode;
-				rv = vboxsf_new_vnode(&volume->map, name1, NULL, &new_vnode); // FIXME
+				rv = vboxsf_new_vnode(&volume->map, build_path(vnode, name1->String.utf8), name1, &new_vnode);
 				if (rv != B_OK) {
 					dprintf(FS_NAME ": vboxsf_new_vnode() failed\n");
 					return rv;
@@ -261,9 +300,6 @@ status_t vboxsf_read_dir(fs_volume* _volume, fs_vnode* _vnode, void* _cookie,
 				buffer->d_reclen = sizeof(struct dirent) + this_entry->name.u16Length;
 				strncpy(buffer->d_name, this_entry->name.String.utf8, NAME_MAX);
 				
-				dprintf("buffer[%u] = { d_reclen=%d, d_name=\"%s\" }\n",
-					num_read, buffer->d_reclen, buffer->d_name);
-				
 				num_read++;
 				if (num_read >= *_num) {
 					dprintf("read enough files\n");
@@ -271,7 +307,6 @@ status_t vboxsf_read_dir(fs_volume* _volume, fs_vnode* _vnode, void* _cookie,
 				}
 				
 				bufferSize -= buffer->d_reclen;
-				dprintf("%lu bytes left\n", bufferSize);
 				buffer = ((void*)(buffer)) + buffer->d_reclen;
 				
 				size_t size = offsetof(SHFLDIRINFO, name.String) + this_entry->name.u16Size;
@@ -339,7 +374,8 @@ status_t vboxsf_lookup(fs_volume* _volume, fs_vnode* dir, const char* name, ino_
 	params.Handle = SHFL_HANDLE_NIL;
 	params.CreateFlags = SHFL_CF_LOOKUP | SHFL_CF_ACT_FAIL_IF_NEW;
 	
-	PSHFLSTRING path = make_shflstring(name);
+	dprintf("dir=%p name=%p\n", dir, name);
+	PSHFLSTRING path = build_path(dir->private_node, name);
 	if (!path) {
 		dprintf(FS_NAME ": make_shflstring() failed\n");
 		return B_ERROR;
@@ -352,7 +388,7 @@ status_t vboxsf_lookup(fs_volume* _volume, fs_vnode* dir, const char* name, ino_
 			status_t rv = vboxsf_new_vnode(&volume->map, path, path, &vn);
 			if (rv == B_OK) {
 				*_id = vn->vnode;
-				rv = publish_vnode(_volume, vn->vnode, vn, &vboxsf_vnode_ops, S_IFDIR, 0);
+				rv = publish_vnode(_volume, vn->vnode, vn, &vboxsf_vnode_ops, mode_from_fmode(params.Info.Attr.fMode), 0);
 			}
 			dprintf("vboxsf_lookup: returning %d\n", rv);
 			return rv;
