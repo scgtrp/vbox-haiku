@@ -137,7 +137,7 @@ status_t mount(fs_volume *volume, const char *device, uint32 flags, const char *
 		PSHFLSTRING name = make_shflstring("");
 		if (!name) {
 			dprintf(FS_NAME ": make_shflstring() failed\n");
-			return B_ERROR;
+			return B_NO_MEMORY;
 		}
 		
 		status_t rs = vboxsf_new_vnode(&vbsfvolume->map, name, name, &root_vnode);
@@ -157,7 +157,7 @@ status_t mount(fs_volume *volume, const char *device, uint32 flags, const char *
 	else {
 		dprintf(FS_NAME ": vboxCallMapFolder failed (%d)\n", rv);
 		free(volume->private_volume);
-		return B_ERROR;
+		return vbox_err_to_haiku_err(rv);
 	}
 }
 
@@ -189,7 +189,7 @@ status_t vboxsf_read_stat(fs_volume* _volume, fs_vnode* _vnode, struct stat* st)
 	if (RT_FAILURE(rc))
 	{
 		dprintf("vboxCallCreate: %d\n", params.Result);
-		return B_ERROR;
+		return vbox_err_to_haiku_err(params.Result);
 	}
 	if (params.Result != SHFL_FILE_EXISTS)
 	{
@@ -242,7 +242,7 @@ status_t vboxsf_open_dir(fs_volume* _volume, fs_vnode* _vnode, void** _cookie) {
 	}
 	else {
 		dprintf(FS_NAME ": vboxCallCreate: %d\n", rc);
-		return B_ERROR;
+		return vbox_err_to_haiku_err(rc);
 	}
 }
 
@@ -265,7 +265,7 @@ status_t vboxsf_read_dir(fs_volume* _volume, fs_vnode* _vnode, void* _cookie,
 				0, cookie->index, &cbBuffer, dir_buffer, &count);
 			if (rc != 0 && rc != VERR_NO_MORE_FILES) {
 				dprintf(FS_NAME ": vboxCallDirInfo failed: %d\n", rc);
-				rv = B_ERROR;
+				rv = vbox_err_to_haiku_err(rc);
 				break;
 			}
 			
@@ -278,7 +278,7 @@ status_t vboxsf_read_dir(fs_volume* _volume, fs_vnode* _vnode, void* _cookie,
 				PSHFLSTRING name1 = clone_shflstring(&this_entry->name);
 				if (!name1) {
 					dprintf(FS_NAME ": make_shflstring() failed\n");
-					return B_ERROR;
+					return B_NO_MEMORY;
 				}
 				
 				vboxsf_vnode* new_vnode;
@@ -350,7 +350,7 @@ status_t vboxsf_read_fs_info(fs_volume* _volume, struct fs_info* info) {
 	
 	if (RT_FAILURE(rc)) {
 		dprintf(FS_NAME ": vboxCallFSInfo failed (%d)\n", rc);
-		return B_ERROR;
+		return vbox_err_to_haiku_err(rc);
 	}
 	
 	info->flags = (volume_info.fsProperties.fReadOnly? B_FS_IS_READONLY : 0);
@@ -378,7 +378,7 @@ status_t vboxsf_lookup(fs_volume* _volume, fs_vnode* dir, const char* name, ino_
 	PSHFLSTRING path = build_path(dir->private_node, name);
 	if (!path) {
 		dprintf(FS_NAME ": make_shflstring() failed\n");
-		return B_ERROR;
+		return B_NO_MEMORY;
 	}
 	int rc = vboxCallCreate(&g_clientHandle, &volume->map, path, &params);
 	
@@ -402,7 +402,7 @@ status_t vboxsf_lookup(fs_volume* _volume, fs_vnode* dir, const char* name, ino_
 	else {
 		free(path);
 		dprintf(FS_NAME ": vboxCallCreate: %d\n", rc);
-		return B_ERROR;
+		return vbox_err_to_haiku_err(rc);
 	}
 
 	*_id = 1;
@@ -497,7 +497,7 @@ status_t vboxsf_open(fs_volume* _volume, fs_vnode* _vnode, int openMode, void** 
 	int rc = vboxCallCreate(&g_clientHandle, &volume->map, vnode->path, &params);
 	if (!RT_SUCCESS(rc)) {
 		dprintf("vboxCallCreate returned %d\n", rc);
-		return B_ERROR;
+		return vbox_err_to_haiku_err(rc);
 	}
 	
 	vboxsf_file_cookie* cookie = malloc(sizeof(vboxsf_file_cookie));
@@ -555,7 +555,7 @@ status_t vboxsf_create(fs_volume* _volume, fs_vnode* _dir, const char *name, int
 	
 	if (!RT_SUCCESS(rc)) {
 		dprintf("vboxCallCreate returned %d\n", rc);
-		return B_ERROR;
+		return vbox_err_to_haiku_err(rc);
 	}
 	
 	vboxsf_file_cookie* cookie = malloc(sizeof(vboxsf_file_cookie));
@@ -578,7 +578,7 @@ status_t vboxsf_close(fs_volume* _volume, fs_vnode* _vnode, void* _cookie) {
 	
 	int rc = vboxCallClose(&g_clientHandle, &volume->map, cookie->handle);
 	dprintf("vboxCallClose returned %d\n", rc);
-	return (rc == 0)? B_OK : B_ERROR;
+	return vbox_err_to_haiku_err(rc);
 }
 
 status_t vboxsf_rewind_dir(fs_volume* _volume, fs_vnode* _vnode, void* _cookie) {
@@ -619,7 +619,7 @@ status_t vboxsf_read(fs_volume* _volume, fs_vnode* _vnode, void* _cookie, off_t 
 	
 	dprintf("vboxCallRead returned %d\n", rc);
 	*length = l;
-	return (rc == 0)? B_OK : B_ERROR;
+	return vbox_err_to_haiku_err(rc);
 }
 
 status_t vboxsf_write(fs_volume* _volume, fs_vnode* _vnode, void* _cookie, off_t pos, const void *buffer, size_t *length) {
@@ -641,7 +641,7 @@ status_t vboxsf_write(fs_volume* _volume, fs_vnode* _vnode, void* _cookie, off_t
 	free(other_buffer);
 	
 	*length = l;
-	return (rc == 0)? B_OK : B_ERROR;
+	return vbox_err_to_haiku_err(rc);
 }
 
 status_t vboxsf_write_stat(fs_volume *volume, fs_vnode *vnode, const struct stat *stat, uint32 statMask) {
@@ -663,10 +663,7 @@ status_t vboxsf_create_dir(fs_volume *_volume, fs_vnode *parent, const char *nam
 	int rc = vboxCallCreate(&g_clientHandle, &volume->map, path, &params);
 	free(path);
 	if (params.Handle == SHFL_HANDLE_NIL) {
-		if (params.Result == SHFL_FILE_EXISTS)
-			return B_FILE_EXISTS;
-		else
-			return B_ERROR;
+		return vbox_err_to_haiku_err(rc);
 	}
 	else {
 		vboxCallClose(&g_clientHandle, &volume->map, params.Handle);
@@ -682,7 +679,7 @@ status_t vboxsf_remove_dir(fs_volume *_volume, fs_vnode *parent, const char *nam
 	int rc = vboxCallRemove(&g_clientHandle, &volume->map, path, SHFL_REMOVE_DIR);
 	free(path);
 	
-	return (rc == 0)? B_OK : B_ERROR;
+	return vbox_err_to_haiku_err(rc);
 }
 
 status_t vboxsf_unlink(fs_volume *_volume, fs_vnode *parent, const char *name) {
@@ -693,7 +690,25 @@ status_t vboxsf_unlink(fs_volume *_volume, fs_vnode *parent, const char *name) {
 	int rc = vboxCallRemove(&g_clientHandle, &volume->map, path, SHFL_REMOVE_FILE);
 	free(path);
 	
-	return (rc == 0)? B_OK : B_ERROR;
+	return vbox_err_to_haiku_err(rc);
+}
+
+// TODO move this into the runtime
+status_t vbox_err_to_haiku_err(int rc) {
+	switch (rc) {
+		case VINF_SUCCESS: return B_OK;
+		case VERR_INVALID_POINTER: return B_BAD_ADDRESS;
+		case VERR_INVALID_PARAMETER: return B_BAD_VALUE;
+		case VERR_PERMISSION_DENIED: return B_PERMISSION_DENIED;
+		case VERR_NOT_IMPLEMENTED: return B_UNSUPPORTED;
+		case VERR_FILE_NOT_FOUND: return B_ENTRY_NOT_FOUND;
+		
+		case SHFL_FILE_EXISTS: return B_FILE_EXISTS;
+		case SHFL_PATH_NOT_FOUND:
+		case SHFL_FILE_NOT_FOUND: return B_ENTRY_NOT_FOUND;
+		
+		default: return B_ERROR;
+	}
 }
 
 static status_t std_ops(int32 op, ...) {

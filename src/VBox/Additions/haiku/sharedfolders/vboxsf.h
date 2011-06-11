@@ -44,6 +44,7 @@ status_t vboxsf_get_vnode(fs_volume* volume, ino_t id, fs_vnode* vnode, int* _ty
 status_t vboxsf_put_vnode(fs_volume* volume, fs_vnode* vnode, bool reenter);
 PSHFLSTRING make_shflstring(const char* const s);
 mode_t mode_from_fmode(RTFMODE fMode);
+status_t vbox_err_to_haiku_err(int rc);
 #ifdef __cplusplus
 }
 #endif
