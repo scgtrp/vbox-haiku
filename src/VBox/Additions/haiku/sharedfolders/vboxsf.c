@@ -460,7 +460,7 @@ status_t vboxsf_open(fs_volume* _volume, fs_vnode* _vnode, int openMode, void** 
 	vboxsf_volume* volume = _volume->private_volume;
 	vboxsf_vnode* vnode = _vnode->private_node;
 	
-	dprintf(FS_NAME ": open (mode=%x)\n", openMode);
+	dprintf(FS_NAME ": open %s (mode=%x)\n", vnode->path->String.utf8, openMode);
 	
 	SHFLCREATEPARMS params;
 	
@@ -514,6 +514,63 @@ status_t vboxsf_open(fs_volume* _volume, fs_vnode* _vnode, int openMode, void** 
 	return B_OK;
 }
 
+status_t vboxsf_create(fs_volume* _volume, fs_vnode* _dir, const char *name, int openMode, int perms, void **_cookie, ino_t *_newVnodeID) {
+	TRACE
+	vboxsf_volume* volume = _volume->private_volume;
+	
+	SHFLCREATEPARMS params;
+	
+	RT_ZERO(params);
+	params.Handle = SHFL_HANDLE_NIL;
+	
+	if (openMode & O_RDWR)
+		params.CreateFlags |= SHFL_CF_ACCESS_READWRITE;
+	else if (openMode & O_RDONLY)
+		params.CreateFlags |= SHFL_CF_ACCESS_READ;
+	else if (openMode & O_WRONLY)
+		params.CreateFlags |= SHFL_CF_ACCESS_WRITE;
+	
+	if (openMode & O_APPEND)
+		params.CreateFlags |= SHFL_CF_ACCESS_APPEND;
+	
+	if (openMode & O_CREAT) {
+		params.CreateFlags |= SHFL_CF_ACT_CREATE_IF_NEW;
+		if (openMode & O_EXCL)
+			params.CreateFlags |= SHFL_CF_ACT_FAIL_IF_EXISTS;
+		else if (openMode & O_TRUNC)
+			params.CreateFlags |= SHFL_CF_ACT_OVERWRITE_IF_EXISTS;
+		else
+			params.CreateFlags |= SHFL_CF_ACT_OPEN_IF_EXISTS;
+	}
+	else {
+		params.CreateFlags |= SHFL_CF_ACT_FAIL_IF_NEW;
+		if (openMode & O_TRUNC)
+			params.CreateFlags |= SHFL_CF_ACT_OVERWRITE_IF_EXISTS;
+		else
+			params.CreateFlags |= SHFL_CF_ACT_OPEN_IF_EXISTS;
+	}
+	
+	PSHFLSTRING path = build_path(_dir->private_node, name);
+	int rc = vboxCallCreate(&g_clientHandle, &volume->map, path, &params);
+	
+	if (!RT_SUCCESS(rc)) {
+		dprintf("vboxCallCreate returned %d\n", rc);
+		return B_ERROR;
+	}
+	
+	vboxsf_file_cookie* cookie = malloc(sizeof(vboxsf_file_cookie));
+	if (!cookie) {
+		dprintf("couldn't allocate file cookie\n");
+		return B_NO_MEMORY;
+	}
+	
+	cookie->handle = params.Handle;
+	cookie->path = path;
+	
+	*_cookie = cookie;
+	return vboxsf_lookup(_volume, _dir, name, _newVnodeID);
+}
+
 status_t vboxsf_close(fs_volume* _volume, fs_vnode* _vnode, void* _cookie) {
 	TRACE
 	vboxsf_volume* volume = _volume->private_volume;
@@ -522,6 +579,18 @@ status_t vboxsf_close(fs_volume* _volume, fs_vnode* _vnode, void* _cookie) {
 	int rc = vboxCallClose(&g_clientHandle, &volume->map, cookie->handle);
 	dprintf("vboxCallClose returned %d\n", rc);
 	return (rc == 0)? B_OK : B_ERROR;
+}
+
+status_t vboxsf_rewind_dir(fs_volume* _volume, fs_vnode* _vnode, void* _cookie) {
+	TRACE
+	vboxsf_dir_cookie* cookie = _cookie;
+	cookie->index = 0;
+	return B_OK;
+}
+
+status_t vboxsf_close_dir(fs_volume *volume, fs_vnode *vnode, void *cookie) {
+	TRACE
+	return B_OK;
 }
 
 status_t vboxsf_free_cookie(fs_volume *volume, fs_vnode *vnode, void *cookie) {
@@ -543,13 +612,87 @@ status_t vboxsf_read(fs_volume* _volume, fs_vnode* _vnode, void* _cookie, off_t 
 	}
 	
 	uint32_t l = *length;
-	void* other_buffer = malloc(l);
+	void* other_buffer = malloc(l); // TODO map the user memory into kernel space here for efficiency
 	int rc = vboxCallRead(&g_clientHandle, &volume->map, cookie->handle, pos, &l, other_buffer, false);
 	memcpy(buffer, other_buffer, l);
 	free(other_buffer);
 	
 	dprintf("vboxCallRead returned %d\n", rc);
 	*length = l;
+	return (rc == 0)? B_OK : B_ERROR;
+}
+
+status_t vboxsf_write(fs_volume* _volume, fs_vnode* _vnode, void* _cookie, off_t pos, const void *buffer, size_t *length) {
+	TRACE
+	vboxsf_volume* volume = _volume->private_volume;
+	vboxsf_vnode* vnode = _vnode->private_node;
+	vboxsf_file_cookie* cookie = _cookie;
+	
+	if (*length > 0xFFFFFFFF) {
+		// TODO should this just read as much as it can?
+		dprintf("vboxsf_write: length too big\n");
+		return B_BAD_VALUE;
+	}
+	
+	uint32_t l = *length;
+	void* other_buffer = malloc(l); // TODO map the user memory into kernel space here for efficiency
+	memcpy(other_buffer, buffer, l);
+	int rc = vboxCallWrite(&g_clientHandle, &volume->map, cookie->handle, pos, &l, other_buffer, false);
+	free(other_buffer);
+	
+	*length = l;
+	return (rc == 0)? B_OK : B_ERROR;
+}
+
+status_t vboxsf_write_stat(fs_volume *volume, fs_vnode *vnode, const struct stat *stat, uint32 statMask) {
+	TRACE
+	return B_OK;
+}
+
+status_t vboxsf_create_dir(fs_volume *_volume, fs_vnode *parent, const char *name, int perms) {
+	TRACE
+	vboxsf_volume* volume = _volume->private_volume;
+	
+	SHFLCREATEPARMS params;
+	params.Handle = 0;
+	params.Info.cbObject = 0;
+	params.CreateFlags = SHFL_CF_DIRECTORY | SHFL_CF_ACT_CREATE_IF_NEW |
+	    SHFL_CF_ACT_FAIL_IF_EXISTS | SHFL_CF_ACCESS_READ;
+	
+	PSHFLSTRING path = build_path(parent->private_node, name);
+	int rc = vboxCallCreate(&g_clientHandle, &volume->map, path, &params);
+	free(path);
+	if (params.Handle == SHFL_HANDLE_NIL) {
+		if (params.Result == SHFL_FILE_EXISTS)
+			return B_FILE_EXISTS;
+		else
+			return B_ERROR;
+	}
+	else {
+		vboxCallClose(&g_clientHandle, &volume->map, params.Handle);
+		return B_OK;
+	}
+}
+
+status_t vboxsf_remove_dir(fs_volume *_volume, fs_vnode *parent, const char *name) {
+	TRACE
+	vboxsf_volume* volume = _volume->private_volume;
+	
+	PSHFLSTRING path = build_path(parent->private_node, name);
+	int rc = vboxCallRemove(&g_clientHandle, &volume->map, path, SHFL_REMOVE_DIR);
+	free(path);
+	
+	return (rc == 0)? B_OK : B_ERROR;
+}
+
+status_t vboxsf_unlink(fs_volume *_volume, fs_vnode *parent, const char *name) {
+	TRACE
+	vboxsf_volume* volume = _volume->private_volume;
+	
+	PSHFLSTRING path = build_path(parent->private_node, name);
+	int rc = vboxCallRemove(&g_clientHandle, &volume->map, path, SHFL_REMOVE_FILE);
+	free(path);
+	
 	return (rc == 0)? B_OK : B_ERROR;
 }
 
@@ -617,22 +760,22 @@ static fs_vnode_ops vboxsf_vnode_ops = {
 	NULL, // read_symlink
 	NULL, // create_symlink
 	NULL, // link
-	NULL, // unlink
+	vboxsf_unlink, // unlink
 	NULL, // rename
 	NULL, // access
 	vboxsf_read_stat, // read_stat
-	NULL, // write_stat
+	vboxsf_write_stat, // write_stat
 	NULL, // preallocate
-	NULL, // create
+	vboxsf_create, // create
 	vboxsf_open, // open
 	vboxsf_close, // close
 	vboxsf_free_cookie, // free_cookie
 	vboxsf_read, // read
-	NULL, // write
-	NULL, // create_dir
-	NULL, // remove_dir
+	vboxsf_write, // write
+	vboxsf_create_dir, // create_dir
+	vboxsf_remove_dir, // remove_dir
 	vboxsf_open_dir, // open_dir
-	NULL, // close_dir
+	vboxsf_close_dir, // close_dir
 	vboxsf_free_dir_cookie, // free_dir_cookie
 	vboxsf_read_dir, // read_dir
 	NULL, // rewind_dir
