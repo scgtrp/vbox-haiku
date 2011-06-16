@@ -9,6 +9,7 @@
 #include <KernelExport.h>
 #include <VBoxGuest-haiku.h>
 #include <VBoxGuestR0LibSharedFolders.h>
+#include <lock.h>
 
 typedef struct vboxsf_volume {
 	VBSFMAP map;
@@ -45,6 +46,7 @@ status_t vboxsf_put_vnode(fs_volume* volume, fs_vnode* vnode, bool reenter);
 PSHFLSTRING make_shflstring(const char* const s);
 mode_t mode_from_fmode(RTFMODE fMode);
 status_t vbox_err_to_haiku_err(int rc);
+extern mutex g_vnodeCacheLock;
 #ifdef __cplusplus
 }
 #endif

@@ -27,10 +27,10 @@ struct HashTableDefinition {
 };
 
 static BOpenHashTable<HashTableDefinition> g_cache;
-static ino_t g_next_vnid = 1;
+static ino_t g_nextVnid = 1;
+mutex g_vnodeCacheLock;
 
 extern "C" status_t vboxsf_new_vnode(PVBSFMAP map, PSHFLSTRING path, PSHFLSTRING name, vboxsf_vnode** p) {
-	// TODO check if one already exists with this path+map
 	vboxsf_vnode* vn = (vboxsf_vnode*)malloc(sizeof(vboxsf_vnode));
 	if (vn == NULL) {
 		return B_NO_MEMORY;
@@ -48,10 +48,20 @@ extern "C" status_t vboxsf_new_vnode(PVBSFMAP map, PSHFLSTRING path, PSHFLSTRING
 		else
 			vn->name = make_shflstring(cname);
 	}
-	vn->vnode = g_next_vnid++; // FIXME probably need locking here
+	
+	if (mutex_lock(&g_vnodeCacheLock) < B_OK) {
+		free(vn);
+		return B_ERROR;
+	}
+	
+	vn->vnode = g_nextVnid++; // FIXME probably need locking here
 	*p = vn;
 	dprintf("vboxsf: allocated %p (path=%p name=%p)\n", vn, vn->path, vn->name);
-	return g_cache.Insert(vn);
+	status_t rv = g_cache.Insert(vn);
+	
+	mutex_unlock(&g_vnodeCacheLock);
+	
+	return rv;
 }
 
 extern "C" status_t vboxsf_get_vnode(fs_volume* volume, ino_t id, fs_vnode* vnode,

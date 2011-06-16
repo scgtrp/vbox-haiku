@@ -178,7 +178,7 @@ DECLVBGL(int) vboxCallMapFolder (PVBSFCLIENT pClient, PSHFLSTRING szFolderName, 
 DECLVBGL(int) vboxCallUnmapFolder (PVBSFCLIENT pClient, PVBSFMAP pMap);
 DECLVBGL(int) vboxCallSetUtf8 (PVBSFCLIENT pClient);
 
-DECLVBGL(int) vboxReadLink (PVBSFCLIENT pClient, PVBSFMAP pMap, PSHFLSTRING ParsedPath, uint32_t pcbBuffer, uint8_t *pBuffer);
+DECLVBGL(int) vboxReadLink (PVBSFCLIENT pClient, PVBSFMAP pMap, PSHFLSTRING ParsedPath, uint32_t cbBuffer, uint8_t *pBuffer);
 DECLVBGL(int) vboxCallSymlink (PVBSFCLIENT pClient, PVBSFMAP pMap, PSHFLSTRING pNewPath, PSHFLSTRING pOldPath, PSHFLFSOBJINFO pBuffer);
 DECLVBGL(int) vboxCallSetSymlinks (PVBSFCLIENT pClient);
 

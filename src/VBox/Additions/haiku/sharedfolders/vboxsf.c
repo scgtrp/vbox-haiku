@@ -32,6 +32,13 @@ status_t init_module(void)
 		return B_ERROR;
 	}
 	
+	if (RT_FAILURE(vboxCallSetSymlinks(&g_clientHandle))) {
+		dprintf("vboxCallSetSymlinks failed\n");
+		return B_ERROR;
+	}
+	
+	mutex_init(&g_vnodeCacheLock, "vboxsf vnode cache lock");
+	
 	dprintf(FS_NAME ": inited successfully\n");
 	return B_OK;
 }
@@ -39,6 +46,7 @@ status_t init_module(void)
 void uninit_module(void)
 {
 	TRACE
+	mutex_destroy(&g_vnodeCacheLock);
 	put_module(VBOXGUEST_MODULE_NAME);
 }
 
@@ -237,7 +245,7 @@ status_t vboxsf_open_dir(fs_volume* _volume, fs_vnode* _vnode, void** _cookie) {
 			return B_OK;
 		}
 		else {
-			return B_FILE_NOT_FOUND;
+			return B_ENTRY_NOT_FOUND;
 		}
 	}
 	else {
@@ -396,7 +404,7 @@ status_t vboxsf_lookup(fs_volume* _volume, fs_vnode* dir, const char* name, ino_
 		else {
 			free(path);
 			dprintf("vboxsf_lookup: file not found\n");
-			return B_FILE_NOT_FOUND;
+			return B_ENTRY_NOT_FOUND;
 		}
 	}
 	else {
@@ -555,12 +563,14 @@ status_t vboxsf_create(fs_volume* _volume, fs_vnode* _dir, const char *name, int
 	
 	if (!RT_SUCCESS(rc)) {
 		dprintf("vboxCallCreate returned %d\n", rc);
+		free(path);
 		return vbox_err_to_haiku_err(rc);
 	}
 	
 	vboxsf_file_cookie* cookie = malloc(sizeof(vboxsf_file_cookie));
 	if (!cookie) {
 		dprintf("couldn't allocate file cookie\n");
+		free(path);
 		return B_NO_MEMORY;
 	}
 	
@@ -593,8 +603,10 @@ status_t vboxsf_close_dir(fs_volume *volume, fs_vnode *vnode, void *cookie) {
 	return B_OK;
 }
 
-status_t vboxsf_free_cookie(fs_volume *volume, fs_vnode *vnode, void *cookie) {
-	// FIXME should the path be freed here?
+status_t vboxsf_free_cookie(fs_volume *volume, fs_vnode *vnode, void *_cookie) {
+	TRACE
+	vboxsf_dir_cookie* cookie = _cookie;
+	free(cookie->path);
 	free(cookie);
 	return B_OK;
 }
@@ -606,9 +618,7 @@ status_t vboxsf_read(fs_volume* _volume, fs_vnode* _vnode, void* _cookie, off_t 
 	vboxsf_file_cookie* cookie = _cookie;
 	
 	if (*length > 0xFFFFFFFF) {
-		// TODO should this just read as much as it can?
-		dprintf("vboxsf_read: length too big\n");
-		return B_BAD_VALUE;
+		*length = 0xFFFFFFFF;
 	}
 	
 	uint32_t l = *length;
@@ -629,9 +639,7 @@ status_t vboxsf_write(fs_volume* _volume, fs_vnode* _vnode, void* _cookie, off_t
 	vboxsf_file_cookie* cookie = _cookie;
 	
 	if (*length > 0xFFFFFFFF) {
-		// TODO should this just read as much as it can?
-		dprintf("vboxsf_write: length too big\n");
-		return B_BAD_VALUE;
+		*length = 0xFFFFFFFF;
 	}
 	
 	uint32_t l = *length;
@@ -646,6 +654,7 @@ status_t vboxsf_write(fs_volume* _volume, fs_vnode* _vnode, void* _cookie, off_t
 
 status_t vboxsf_write_stat(fs_volume *volume, fs_vnode *vnode, const struct stat *stat, uint32 statMask) {
 	TRACE
+	// the host handles updating the stat info - in the guest, this is a no-op
 	return B_OK;
 }
 
@@ -689,6 +698,52 @@ status_t vboxsf_unlink(fs_volume *_volume, fs_vnode *parent, const char *name) {
 	PSHFLSTRING path = build_path(parent->private_node, name);
 	int rc = vboxCallRemove(&g_clientHandle, &volume->map, path, SHFL_REMOVE_FILE);
 	free(path);
+	
+	return vbox_err_to_haiku_err(rc);
+}
+
+status_t vboxsf_link(fs_volume *volume, fs_vnode *dir, const char *name, fs_vnode *vnode) {
+	TRACE
+	return B_UNSUPPORTED;
+}
+
+status_t vboxsf_rename(fs_volume* _volume, fs_vnode* fromDir, const char* fromName, fs_vnode* toDir, const char* toName) {
+	TRACE
+	vboxsf_volume* volume = _volume->private_volume;
+	
+	PSHFLSTRING oldpath = build_path(fromDir->private_node, fromName);
+	PSHFLSTRING newpath = build_path(toDir->private_node, toName);
+	int rc = vboxCallRename(&g_clientHandle, &volume->map, oldpath, newpath, SHFL_RENAME_FILE | SHFL_RENAME_REPLACE_IF_EXISTS);
+	free(oldpath);
+	free(newpath);
+	
+	return vbox_err_to_haiku_err(rc);
+}
+
+status_t vboxsf_create_symlink(fs_volume* _volume, fs_vnode* dir, const char* name, const char* path, int mode) {
+	TRACE
+	vboxsf_volume* volume = _volume->private_volume;
+	
+	PSHFLSTRING target = make_shflstring(path);
+	PSHFLSTRING linkpath = build_path(dir->private_node, name);
+	SHFLFSOBJINFO stuff;
+	RT_ZERO(stuff);
+	
+	int rc = vboxCallSymlink(&g_clientHandle, &volume->map, linkpath, target, &stuff);
+	
+	free(target);
+	free(linkpath);
+	
+	return vbox_err_to_haiku_err(rc);
+}
+
+status_t vboxsf_read_symlink(fs_volume* _volume, fs_vnode* link, char* buffer, size_t* _bufferSize) {
+	TRACE
+	vboxsf_volume* volume = _volume->private_volume;
+	vboxsf_vnode* vnode = link->private_node;
+	
+	int rc = vboxReadLink(&g_clientHandle, &volume->map, vnode->path, *_bufferSize, buffer);
+	*_bufferSize = strlen(buffer);
 	
 	return vbox_err_to_haiku_err(rc);
 }
@@ -772,11 +827,11 @@ static fs_vnode_ops vboxsf_vnode_ops = {
 	NULL, // select
 	NULL, // deselect
 	NULL, // fsync
-	NULL, // read_symlink
-	NULL, // create_symlink
-	NULL, // link
+	vboxsf_read_symlink, // read_symlink
+	vboxsf_create_symlink, // create_symlink
+	vboxsf_link, // link
 	vboxsf_unlink, // unlink
-	NULL, // rename
+	vboxsf_rename, // rename
 	NULL, // access
 	vboxsf_read_stat, // read_stat
 	vboxsf_write_stat, // write_stat
@@ -793,7 +848,7 @@ static fs_vnode_ops vboxsf_vnode_ops = {
 	vboxsf_close_dir, // close_dir
 	vboxsf_free_dir_cookie, // free_dir_cookie
 	vboxsf_read_dir, // read_dir
-	NULL, // rewind_dir
+	vboxsf_rewind_dir, // rewind_dir
 	NULL, // open_attr_dir
 	NULL, // close_attr_dir
 	NULL, // free_attr_dir_cookie
