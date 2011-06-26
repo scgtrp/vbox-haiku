@@ -37,8 +37,13 @@
 # include <unistd.h>
 # ifndef RT_OS_OS2
 #  ifndef RT_OS_FREEBSD
-#   include <utmpx.h> /* @todo FreeBSD 9 should have this. */
+#   ifndef RT_OS_HAIKU
+#    include <utmpx.h> /* @todo FreeBSD 9 should have this. */
+#   endif
 #  endif
+# endif
+# ifdef RT_OS_HAIKU
+#  include <sys/sockio.h>
 # endif
 # ifdef RT_OS_SOLARIS
 #  include <sys/sockio.h>
@@ -245,6 +250,10 @@ static int vboxserviceVMInfoWriteUsers(void)
 
 #elif defined(RT_OS_OS2)
     /** @todo OS/2: Port logged on (LAN/local/whatever) user info retrieval. */
+    rc = VERR_NOT_IMPLEMENTED;
+
+#elif defined(RT_OS_HAIKU)
+    /** @todo Haiku: Port logged on (LAN/local/whatever) user info retrieval. */
     rc = VERR_NOT_IMPLEMENTED;
 
 #else
@@ -599,7 +608,7 @@ static int vboxserviceVMInfoWriteNetwork(void)
             VBoxServiceError("VMInfo/Network: Failed to ioctl(SIOCGIFNETMASK) on socket: Error %Rrc\n", rc);
             break;
         }
-# if defined(RT_OS_OS2) || defined(RT_OS_SOLARIS)
+# if defined(RT_OS_OS2) || defined(RT_OS_SOLARIS) || defined(RT_OS_HAIKU)
         pAddress = (sockaddr_in *)&ifrequest[i].ifr_addr;
 # else
         pAddress = (sockaddr_in *)&ifrequest[i].ifr_netmask;
@@ -644,16 +653,19 @@ static int vboxserviceVMInfoWriteNetwork(void)
         }
 # else
 #  ifndef RT_OS_OS2 /** @todo port this to OS/2 */
+#   ifndef RT_OS_HAIKU /** @todo port this to Haiku */
         if (ioctl(sd, SIOCGIFHWADDR, &ifrequest[i]) < 0)
         {
             rc = RTErrConvertFromErrno(errno);
             VBoxServiceError("VMInfo/Network: Failed to ioctl(SIOCGIFHWADDR) on socket: Error %Rrc\n", rc);
             break;
         }
+#   endif
 #  endif
 # endif
 
 # ifndef RT_OS_OS2 /** @todo port this to OS/2 */
+# ifndef RT_OS_HAIKU /** @todo port this to Haiku */
         char szMac[32];
 #  if defined(RT_OS_SOLARIS)
         uint8_t *pu8Mac = IfMac.au8;
@@ -664,6 +676,7 @@ static int vboxserviceVMInfoWriteNetwork(void)
                     pu8Mac[0], pu8Mac[1], pu8Mac[2], pu8Mac[3],  pu8Mac[4], pu8Mac[5]);
         RTStrPrintf(szPropPath, sizeof(szPropPath), "/VirtualBox/GuestInfo/Net/%u/MAC", cIfacesReport);
         VBoxServicePropCacheUpdate(&g_VMInfoPropCache, szPropPath, "%s", szMac);
+# endif /* !Haiku*/
 # endif /* !OS/2*/
 
         RTStrPrintf(szPropPath, sizeof(szPropPath), "/VirtualBox/GuestInfo/Net/%u/Status", cIfacesReport);

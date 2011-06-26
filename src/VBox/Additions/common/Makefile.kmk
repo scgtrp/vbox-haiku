@@ -25,7 +25,7 @@ ifndef VBOX_ONLY_TESTSUITE
  if1of ($(KBUILD_TARGET), freebsd haiku linux os2 solaris win)
   include $(PATH_SUB_CURRENT)/VBoxGuest/Makefile.kmk
  endif
- if1of ($(KBUILD_TARGET), freebsd linux os2 solaris win)
+ if1of ($(KBUILD_TARGET), freebsd haiku linux os2 solaris win)
   include $(PATH_SUB_CURRENT)/VBoxService/Makefile.kmk
  endif
  ifdef VBOX_WITH_CROGL

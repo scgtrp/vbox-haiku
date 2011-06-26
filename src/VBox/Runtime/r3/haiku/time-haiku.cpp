@@ -37,6 +37,7 @@
 #include <OS.h>
 
 #include <iprt/time.h>
+#include <iprt/err.h>
 #include "internal/time.h"
 
 
@@ -72,4 +73,13 @@ RTDECL(uint64_t) RTTimeSystemNanoTS(void)
 RTDECL(uint64_t) RTTimeSystemMilliTS(void)
 {
     return rtTimeGetSystemNanoTS() / 1000000;
+}
+
+
+RTDECL(int) RTTimeSet(PCRTTIMESPEC pTime)
+{
+    struct timeval tv;
+	RTTimeSpecGetTimeval(pTime, &tv);
+	set_real_time_clock(tv.tv_sec);
+	return VINF_SUCCESS;
 }
