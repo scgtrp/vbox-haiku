@@ -28,8 +28,10 @@ typedef struct vboxsf_vnode {
 typedef struct vboxsf_dir_cookie {
 	SHFLHANDLE handle;
 	PSHFLSTRING path;
-	uint32 index;
+	uint32_t index;
 	bool has_more_files;
+	PSHFLDIRINFO buffer_start, buffer;
+	uint32_t buffer_length, num_files;
 } vboxsf_dir_cookie;
 
 typedef struct vboxsf_file_cookie {

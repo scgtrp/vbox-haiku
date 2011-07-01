@@ -54,7 +54,7 @@ extern "C" status_t vboxsf_new_vnode(PVBSFMAP map, PSHFLSTRING path, PSHFLSTRING
 		return B_ERROR;
 	}
 	
-	vn->vnode = g_nextVnid++; // FIXME probably need locking here
+	vn->vnode = g_nextVnid++;
 	*p = vn;
 	dprintf("vboxsf: allocated %p (path=%p name=%p)\n", vn, vn->path, vn->name);
 	status_t rv = g_cache.Insert(vn);

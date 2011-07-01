@@ -242,6 +242,8 @@ status_t vboxsf_open_dir(fs_volume* _volume, fs_vnode* _vnode, void** _cookie) {
 			cookie->path = build_path(vnode, "*");
 			cookie->handle = params.Handle;
 			cookie->has_more_files = true;
+			cookie->buffer_start = cookie->buffer = NULL;
+			cookie->buffer_length = cookie->num_files = 0;
 			return B_OK;
 		}
 		else {
@@ -254,6 +256,80 @@ status_t vboxsf_open_dir(fs_volume* _volume, fs_vnode* _vnode, void** _cookie) {
 	}
 }
 
+/** read a single entry from a dir */
+status_t vboxsf_read_dir_1(vboxsf_volume* volume, vboxsf_vnode* vnode, vboxsf_dir_cookie* cookie,
+	struct dirent* buffer, size_t bufferSize) {
+	TRACE
+	dprintf("%p, %d, %p\n", cookie, cookie->has_more_files, cookie->buffer);
+	if (!cookie->has_more_files) {
+		dprintf("--1\n");
+		return B_ENTRY_NOT_FOUND;
+	}
+	if (!cookie->buffer) {
+		dprintf("--2\n");
+		cookie->buffer_length = 16384;
+		cookie->buffer_start = cookie->buffer = malloc(cookie->buffer_length);
+		
+		int rc = vboxCallDirInfo(&g_clientHandle, &volume->map, cookie->handle, cookie->path,
+			0, cookie->index, &cookie->buffer_length, cookie->buffer, &cookie->num_files);
+		
+		dprintf("--3 rc=%d\n", rc);
+		if (rc != 0 && rc != VERR_NO_MORE_FILES) {
+			dprintf(FS_NAME ": vboxCallDirInfo failed: %d\n", rc);
+			free(cookie->buffer_start);
+			cookie->buffer_start = NULL;
+			return vbox_err_to_haiku_err(rc);
+		}
+		dprintf("--4\n");
+		
+		if (rc == VERR_NO_MORE_FILES) {
+			free(cookie->buffer_start);
+			cookie->buffer_start = NULL;
+			cookie->has_more_files = false;
+			return B_ENTRY_NOT_FOUND;
+		}
+	}
+	
+	if (bufferSize <= sizeof(struct dirent) + cookie->buffer->name.u16Length) {
+		dprintf("hit end of buffer\n");
+		return B_BUFFER_OVERFLOW;
+	}
+	
+	dprintf("--5\n");
+	PSHFLSTRING name1 = clone_shflstring(&cookie->buffer->name);
+	if (!name1) {
+		dprintf(FS_NAME ": make_shflstring() failed\n");
+		return B_NO_MEMORY;
+	}
+	dprintf("--6\n");
+	
+	vboxsf_vnode* new_vnode;
+	int rv = vboxsf_new_vnode(&volume->map, build_path(vnode, name1->String.utf8), name1, &new_vnode);
+	if (rv != B_OK) {
+		dprintf(FS_NAME ": vboxsf_new_vnode() failed\n");
+		return rv;
+	}
+	dprintf("--7\n");
+	buffer->d_dev = 0;
+	buffer->d_pdev = 0;
+	buffer->d_ino = new_vnode->vnode;
+	buffer->d_pino = vnode->vnode;
+	buffer->d_reclen = sizeof(struct dirent) + cookie->buffer->name.u16Length;
+	strncpy(buffer->d_name, cookie->buffer->name.String.utf8, NAME_MAX);
+	dprintf("--8\n");
+	size_t size = offsetof(SHFLDIRINFO, name.String) + cookie->buffer->name.u16Size;
+	cookie->buffer = ((void*)cookie->buffer + size);
+	cookie->index++;
+	
+	if (cookie->index >= cookie->num_files) {
+		// hit end of this buffer, next call will reallocate a new one
+		free(cookie->buffer_start);
+		cookie->buffer_start = cookie->buffer = NULL;
+	}
+	dprintf("--9\n");
+	return B_OK;
+}
+
 status_t vboxsf_read_dir(fs_volume* _volume, fs_vnode* _vnode, void* _cookie,
 	struct dirent* buffer, size_t bufferSize, uint32* _num) {
 	TRACE
@@ -263,7 +339,22 @@ status_t vboxsf_read_dir(fs_volume* _volume, fs_vnode* _vnode, void* _cookie,
 	uint32 num_read = 0;
 	status_t rv = B_OK;
 	
-	if (cookie->has_more_files) {
+	for (num_read = 0; num_read < *_num && cookie->has_more_files; num_read++) {
+		rv = vboxsf_read_dir_1(volume, vnode, cookie, buffer, bufferSize);
+		if (rv == B_BUFFER_OVERFLOW || rv == B_ENTRY_NOT_FOUND) {
+			// hit end of at least one of the buffers - not really an error
+			rv = B_OK;
+			break;
+		}
+		bufferSize -= buffer->d_reclen;
+		buffer = ((void*)(buffer)) + buffer->d_reclen;
+	}
+	
+	
+	*_num = num_read;
+	return rv;
+	
+	/*if (cookie->has_more_files) {
 		for (;;) {
 			uint32_t cbBuffer = 16384;
 			PSHFLDIRINFO dir_buffer = malloc(cbBuffer);
@@ -271,6 +362,7 @@ status_t vboxsf_read_dir(fs_volume* _volume, fs_vnode* _vnode, void* _cookie,
 			
 			int rc = vboxCallDirInfo(&g_clientHandle, &volume->map, cookie->handle, cookie->path,
 				0, cookie->index, &cbBuffer, dir_buffer, &count);
+			
 			if (rc != 0 && rc != VERR_NO_MORE_FILES) {
 				dprintf(FS_NAME ": vboxCallDirInfo failed: %d\n", rc);
 				rv = vbox_err_to_haiku_err(rc);
@@ -331,7 +423,7 @@ status_t vboxsf_read_dir(fs_volume* _volume, fs_vnode* _vnode, void* _cookie,
 end:
 	*_num = num_read;
 	dprintf("vboxsf_read_dir: read %d\n", *_num);
-	return rv;
+	return rv;*/
 }
 
 status_t vboxsf_free_dir_cookie(fs_volume* _volume, fs_vnode* vnode, void* _cookie) {
@@ -502,6 +594,8 @@ status_t vboxsf_open(fs_volume* _volume, fs_vnode* _vnode, int openMode, void** 
 			params.CreateFlags |= SHFL_CF_ACT_OPEN_IF_EXISTS;
 	}
 	
+	dprintf("vboxCallCreate(%p %p %p %p)\n", &g_clientHandle, &volume->map, vnode->path, &params);
+	
 	int rc = vboxCallCreate(&g_clientHandle, &volume->map, vnode->path, &params);
 	if (!RT_SUCCESS(rc)) {
 		dprintf("vboxCallCreate returned %d\n", rc);
@@ -606,7 +700,6 @@ status_t vboxsf_close_dir(fs_volume *volume, fs_vnode *vnode, void *cookie) {
 status_t vboxsf_free_cookie(fs_volume *volume, fs_vnode *vnode, void *_cookie) {
 	TRACE
 	vboxsf_dir_cookie* cookie = _cookie;
-	free(cookie->path);
 	free(cookie);
 	return B_OK;
 }
