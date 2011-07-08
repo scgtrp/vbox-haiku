@@ -474,12 +474,12 @@ status_t vboxsf_lookup(fs_volume* _volume, fs_vnode* dir, const char* name, ino_
 	params.Handle = SHFL_HANDLE_NIL;
 	params.CreateFlags = SHFL_CF_LOOKUP | SHFL_CF_ACT_FAIL_IF_NEW;
 	
-	dprintf("dir=%p name=%p\n", dir, name);
 	PSHFLSTRING path = build_path(dir->private_node, name);
 	if (!path) {
 		dprintf(FS_NAME ": make_shflstring() failed\n");
 		return B_NO_MEMORY;
 	}
+	
 	int rc = vboxCallCreate(&g_clientHandle, &volume->map, path, &params);
 	
 	if (RT_SUCCESS(rc)) {
@@ -490,12 +490,10 @@ status_t vboxsf_lookup(fs_volume* _volume, fs_vnode* dir, const char* name, ino_
 				*_id = vn->vnode;
 				rv = publish_vnode(_volume, vn->vnode, vn, &vboxsf_vnode_ops, mode_from_fmode(params.Info.Attr.fMode), 0);
 			}
-			dprintf("vboxsf_lookup: returning %d\n", rv);
 			return rv;
 		}
 		else {
 			free(path);
-			dprintf("vboxsf_lookup: file not found\n");
 			return B_ENTRY_NOT_FOUND;
 		}
 	}
