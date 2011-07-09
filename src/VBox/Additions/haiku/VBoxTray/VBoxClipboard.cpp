@@ -72,6 +72,7 @@ status_t VBoxClipboardService::Connect()
 			resume_thread(fServiceThreadID);
 			
 			err = be_clipboard->StartWatching(BMessenger(this));
+			printf("be_clipboard->StartWatching: %08x\n", err);
 			if (err == B_OK)
 				return B_OK;
 			else

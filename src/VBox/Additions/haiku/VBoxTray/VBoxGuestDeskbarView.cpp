@@ -115,6 +115,7 @@ void VBoxGuestDeskbarView::AttachedToWindow()
 	}
 	
 	Looper()->AddHandler(fClipboardService);
+	fClipboardService->Connect();
 }
 
 void VBoxGuestDeskbarView::DetachedFromWindow()
@@ -200,13 +201,13 @@ status_t VBoxGuestDeskbarView::_Init(BMessage *archive)
 	}
 	
     int rc = RTR3Init();
+	printf("%d\n", rc);
     if (RT_SUCCESS(rc)) {
         rc = VbglR3Init();
     }
 	if (RT_SUCCESS(rc)) {
 		printf("** starting clipboard service\n");
 		fClipboardService = new VBoxClipboardService();
-		return fClipboardService->Connect();
 	}
 	
 	return RTErrConvertToErrno(rc);
