@@ -1,0 +1,51 @@
+Guest Additions Installation/Usage Instructions for Haiku
+---------------------------------------------------------
+
+These are temporary instructions for those who want to test the Haiku port
+of the guest additions before a proper package or installer has been created.
+
+== You will need: ==
+- The contents of this repository
+- A Haiku installation with development tools installed
+
+== To compile the guest additions: ==
+./configure --build-headless --disable-python --disable-java
+kmk VBOX_ONLY_ADDITIONS=1 VBOX_WITH_ADDITION_DRIVERS=1 all
+
+== To install: ==
+mkdir -p ~/config/add-ons/kernel/generic/
+cp out/haiku.x86/release/bin/additions/vboxguest ~/config/add-ons/kernel/generic/
+
+mkdir -p ~/config/add-ons/kernel/drivers/dev/misc/
+cp out/haiku.x86/release/bin/additions/vboxdev ~/config/add-ons/kernel/drivers/bin/
+ln -s ../../bin/vboxdev ~/config/add-ons/kernel/drivers/dev/misc/
+
+mkdir -p ~/config/add-ons/kernel/file_systems/
+cp out/haiku.x86/release/bin/additions/vboxsf ~/config/add-ons/kernel/file_systems/
+cp out/haiku.x86/release/bin/additions/VBoxMouse ~/config/add-ons/input_server/devices/
+
+mkdir -p /boot/apps/VBoxAdditions/
+cp out/haiku.x86/release/bin/additions/VBoxService /boot/apps/VBoxAdditions/
+cp out/haiku.x86/release/bin/additions/VBoxTray /boot/apps/VBoxAdditions/
+ln -s /boot/apps/VBoxAdditions/VBoxService ~/config/boot/launch
+
+/boot/apps/VBoxAdditions/VBoxService
+/boot/apps/VBoxAdditions/VBoxTray
+
+== To uninstall: ==
+rm -Rf /boot/apps/VBoxAdditions
+rm ~/config/add-ons/input_server/devices/VBoxMouse
+rm ~/config/add-ons/kernel/file_systems/vboxsf
+rm ~/config/add-ons/kernel/drivers/dev/misc/vboxdev
+rm ~/config/add-ons/kernel/drivers/bin/vboxdev
+rm ~/config/add-ons/kernel/generic/vboxguest
+
+== Usage: ==
+Time synchronization and clipboard sharing are done by VBoxService and
+VBoxTray respectively - once they have been started you do not need to do
+anything special to use them.
+
+To mount a shared folder, tell Haiku to mount a null filesystem of type
+'vboxsf' and pass the share name as a parameter:
+
+mount -t vboxsf -p SharedFolderFullOfLolcats /mountpoint
