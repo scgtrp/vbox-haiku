@@ -39,9 +39,7 @@ vboxsf_DEFS            = \
 vboxsf_INCS            = \
 	$(PATH_ROOT)/src/VBox/Additions/common/VBoxGuestLib \
 	$(PATH_ROOT)/src/VBox/Additions/common/VBoxGuest \
-	$(PATH_ROOT)/src/VBox/Runtime/r0drv/haiku \
-	$(PATH_ROOT)/../haiku/headers/private/kernel \
-	$(PATH_ROOT)/../haiku/build/config_headers
+	$(PATH_ROOT)/src/VBox/Runtime/r0drv/haiku
 vboxsf_SOURCES         = \
 	vboxsf.c \
 	vnode_cache.cpp \

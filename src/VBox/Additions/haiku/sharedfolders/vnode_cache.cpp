@@ -1,5 +1,5 @@
 #include "vboxsf.h"
-#include <util/OpenHashTable.h>
+#include "OpenHashTable.h"
 
 struct HashTableDefinition {
 	typedef uint32 KeyType;

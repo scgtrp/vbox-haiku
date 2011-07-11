@@ -9,7 +9,7 @@
 #include <KernelExport.h>
 #include <VBoxGuest-haiku.h>
 #include <VBoxGuestR0LibSharedFolders.h>
-#include <lock.h>
+#include "lock.h"
 
 typedef struct vboxsf_volume {
 	VBSFMAP map;
