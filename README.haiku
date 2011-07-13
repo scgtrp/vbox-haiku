@@ -9,6 +9,7 @@ of the guest additions before a proper package or installer has been created.
 - A GCC4-based Haiku installation with development tools installed
 
 == To compile the guest additions: ==
+export PATH=$PATH:/path/to/vbox/source/kBuild/bin/haiku.x86
 ./configure --build-headless --disable-python --disable-java
 kmk VBOX_ONLY_ADDITIONS=1 VBOX_WITH_ADDITION_DRIVERS=1 all
 
