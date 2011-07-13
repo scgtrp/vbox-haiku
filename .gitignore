@@ -1,5 +1,5 @@
 *.o
-kBuild/*
+#kBuild/*
 out/*
 input_server
 install.sh
