@@ -34,7 +34,7 @@ VBoxMouse_LIBS     = \
 	be device \
 	$(VBOX_LIB_IPRT_GUEST_R3) \
 	$(VBOX_LIB_VBGL_R3) \
-	./input_server
+	/system/servers/input_server
 
 # XXX: link to /system/servers/input_server ?
 
