@@ -114,8 +114,10 @@ void VBoxGuestDeskbarView::AttachedToWindow()
 		SetLowColor(Parent()->LowColor());
 	}
 	
-	Looper()->AddHandler(fClipboardService);
-	fClipboardService->Connect();
+	if (fClipboardService) { // don't repeatedly crash deskbar if vboxdev not loaded
+		Looper()->AddHandler(fClipboardService);
+		fClipboardService->Connect();
+	}
 }
 
 void VBoxGuestDeskbarView::DetachedFromWindow()
@@ -193,8 +195,7 @@ status_t VBoxGuestDeskbarView::_Init(BMessage *archive)
 	size_t size;
 	//data = resources.LoadResource(B_VECTOR_ICON_TYPE,
 	//	kNetworkStatusNoDevice + i, &size);
-	data = resources.LoadResource('data',
-		400, &size);
+	data = resources.LoadResource('data', 400, &size);
 	if (data != NULL) {
 		BMemoryIO mem(data, size);
 		fIcon = BTranslationUtils::GetBitmap(&mem);
