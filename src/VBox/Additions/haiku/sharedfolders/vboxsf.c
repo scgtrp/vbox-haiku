@@ -33,8 +33,7 @@ status_t init_module(void)
 	}
 	
 	if (RT_FAILURE(vboxCallSetSymlinks(&g_clientHandle))) {
-		dprintf("vboxCallSetSymlinks failed\n");
-		return B_ERROR;
+		dprintf("warning: vboxCallSetSymlinks failed (old vbox?) - symlinks will appear as copies\n");
 	}
 	
 	mutex_init(&g_vnodeCacheLock, "vboxsf vnode cache lock");
@@ -233,7 +232,6 @@ status_t vboxsf_open_dir(fs_volume* _volume, fs_vnode* _vnode, void** _cookie) {
 		| SHFL_CF_ACT_FAIL_IF_NEW | SHFL_CF_ACCESS_READ;
 	
 	int rc = vboxCallCreate(&g_clientHandle, &volume->map, vnode->path, &params);
-	
 	if (RT_SUCCESS(rc)) {
 		if (params.Result == SHFL_FILE_EXISTS && params.Handle != SHFL_HANDLE_NIL) {
 			vboxsf_dir_cookie* cookie = malloc(sizeof(vboxsf_dir_cookie));
@@ -406,7 +404,6 @@ status_t vboxsf_lookup(fs_volume* _volume, fs_vnode* dir, const char* name, ino_
 	}
 	
 	int rc = vboxCallCreate(&g_clientHandle, &volume->map, path, &params);
-	
 	if (RT_SUCCESS(rc)) {
 		if (params.Result == SHFL_FILE_EXISTS) {
 			vboxsf_vnode* vn;
@@ -513,8 +510,6 @@ status_t vboxsf_open(fs_volume* _volume, fs_vnode* _vnode, int openMode, void** 
 		else
 			params.CreateFlags |= SHFL_CF_ACT_OPEN_IF_EXISTS;
 	}
-	
-	dprintf("vboxCallCreate(%p %p %p %p)\n", &g_clientHandle, &volume->map, vnode->path, &params);
 	
 	int rc = vboxCallCreate(&g_clientHandle, &volume->map, vnode->path, &params);
 	if (!RT_SUCCESS(rc)) {
