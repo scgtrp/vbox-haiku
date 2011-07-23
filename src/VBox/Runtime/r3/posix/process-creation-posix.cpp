@@ -42,6 +42,10 @@
 # include <pwd.h>
 # include <shadow.h>
 #endif
+#if defined(RT_OS_HAIKU)
+# include <pwd.h>
+# include <shadow.h>
+#endif
 #if defined(RT_OS_LINUX) || defined(RT_OS_OS2)
 /* While Solaris has posix_spawn() of course we don't want to use it as
  * we need to have the child in a different process contract, no matter
@@ -138,6 +142,36 @@ static int rtCheckCredentials(const char *pszUser, const char *pszPasswd, gid_t 
     *uid = ppw->pw_uid;
     return VINF_SUCCESS;
 
+#elif defined(RT_OS_HAIKU)
+    struct passwd* passwd = getpwnam(pszUser);
+    struct spwd* spwd = getspnam(pszUser);
+    
+    const char* requiredPassword = passwd->pw_passwd;
+    if (strcmp(requiredPassword, "x") == 0) {
+        if (spwd == NULL) {
+            // Mmh, we're suppose to check the shadow password, but we don't
+            // have it. Bail out.
+            return false;
+        }
+
+        requiredPassword = spwd->sp_pwdp;
+    }
+    
+    if (!pszPasswd)
+        pszPasswd = "";
+
+    // crypt and check it
+    char* encryptedPassword = crypt(pszPasswd, requiredPassword);
+
+    if (strcmp(encryptedPassword, requiredPassword) == 0) {
+        *uid = passwd->pw_uid;
+        *gid = passwd->pw_gid;
+        return VINF_SUCCESS;
+    }
+    else {
+        return VERR_PERMISSION_DENIED;
+    }
+    
 #else
     return VERR_PERMISSION_DENIED;
 #endif

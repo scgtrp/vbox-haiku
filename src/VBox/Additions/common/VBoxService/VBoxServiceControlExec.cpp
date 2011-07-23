@@ -384,7 +384,9 @@ static int VBoxServiceControlExecProcLoop(PVBOXSERVICECTRLTHREAD pThread,
             }
             if (RT_FAILURE(rc) || rc == VINF_EOF)
                 break; /* Abort command, or client dead or something. */
+#ifndef RT_OS_HAIKU /* workaround for a bug in Haiku's poll() - see https://dev.haiku-os.org/ticket/7859 */
             continue;
+#endif
         }
 
         /*
