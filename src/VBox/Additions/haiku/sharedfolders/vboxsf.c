@@ -262,25 +262,21 @@ status_t vboxsf_read_dir_1(vboxsf_volume* volume, vboxsf_vnode* vnode, vboxsf_di
 	TRACE
 	dprintf("%p, %d, %p\n", cookie, cookie->has_more_files, cookie->buffer);
 	if (!cookie->has_more_files) {
-		dprintf("--1\n");
 		return B_ENTRY_NOT_FOUND;
 	}
 	if (!cookie->buffer) {
-		dprintf("--2\n");
 		cookie->buffer_length = 16384;
 		cookie->buffer_start = cookie->buffer = malloc(cookie->buffer_length);
 		
 		int rc = vboxCallDirInfo(&g_clientHandle, &volume->map, cookie->handle, cookie->path,
 			0, cookie->index, &cookie->buffer_length, cookie->buffer, &cookie->num_files);
 		
-		dprintf("--3 rc=%d\n", rc);
 		if (rc != 0 && rc != VERR_NO_MORE_FILES) {
 			dprintf(FS_NAME ": vboxCallDirInfo failed: %d\n", rc);
 			free(cookie->buffer_start);
 			cookie->buffer_start = NULL;
 			return vbox_err_to_haiku_err(rc);
 		}
-		dprintf("--4\n");
 		
 		if (rc == VERR_NO_MORE_FILES) {
 			free(cookie->buffer_start);
@@ -295,13 +291,11 @@ status_t vboxsf_read_dir_1(vboxsf_volume* volume, vboxsf_vnode* vnode, vboxsf_di
 		return B_BUFFER_OVERFLOW;
 	}
 	
-	dprintf("--5\n");
 	PSHFLSTRING name1 = clone_shflstring(&cookie->buffer->name);
 	if (!name1) {
 		dprintf(FS_NAME ": make_shflstring() failed\n");
 		return B_NO_MEMORY;
 	}
-	dprintf("--6\n");
 	
 	vboxsf_vnode* new_vnode;
 	int rv = vboxsf_new_vnode(&volume->map, build_path(vnode, name1->String.utf8), name1, &new_vnode);
@@ -309,14 +303,13 @@ status_t vboxsf_read_dir_1(vboxsf_volume* volume, vboxsf_vnode* vnode, vboxsf_di
 		dprintf(FS_NAME ": vboxsf_new_vnode() failed\n");
 		return rv;
 	}
-	dprintf("--7\n");
 	buffer->d_dev = 0;
 	buffer->d_pdev = 0;
 	buffer->d_ino = new_vnode->vnode;
 	buffer->d_pino = vnode->vnode;
 	buffer->d_reclen = sizeof(struct dirent) + cookie->buffer->name.u16Length;
 	strncpy(buffer->d_name, cookie->buffer->name.String.utf8, NAME_MAX);
-	dprintf("--8\n");
+	
 	size_t size = offsetof(SHFLDIRINFO, name.String) + cookie->buffer->name.u16Size;
 	cookie->buffer = ((void*)cookie->buffer + size);
 	cookie->index++;
@@ -326,7 +319,6 @@ status_t vboxsf_read_dir_1(vboxsf_volume* volume, vboxsf_vnode* vnode, vboxsf_di
 		free(cookie->buffer_start);
 		cookie->buffer_start = cookie->buffer = NULL;
 	}
-	dprintf("--9\n");
 	return B_OK;
 }
 
@@ -349,7 +341,6 @@ status_t vboxsf_read_dir(fs_volume* _volume, fs_vnode* _vnode, void* _cookie,
 		bufferSize -= buffer->d_reclen;
 		buffer = ((void*)(buffer)) + buffer->d_reclen;
 	}
-	
 	
 	*_num = num_read;
 	return rv;
@@ -382,7 +373,12 @@ status_t vboxsf_read_fs_info(fs_volume* _volume, struct fs_info* info) {
 		return vbox_err_to_haiku_err(rc);
 	}
 	
-	info->flags = (volume_info.fsProperties.fReadOnly? B_FS_IS_READONLY : 0);
+	info->flags = B_FS_IS_PERSISTENT;
+	if (volume_info.fsProperties.fReadOnly)
+		info->flags |= B_FS_IS_READONLY;
+	
+	info->dev = 0;
+	info->root = 1;
 	info->block_size = volume_info.ulBytesPerAllocationUnit;
 	info->io_size = volume_info.ulBytesPerAllocationUnit;
 	info->total_blocks = volume_info.ullTotalAllocationBytes / info->block_size;
@@ -431,9 +427,6 @@ status_t vboxsf_lookup(fs_volume* _volume, fs_vnode* dir, const char* name, ino_
 		dprintf(FS_NAME ": vboxCallCreate: %d\n", rc);
 		return vbox_err_to_haiku_err(rc);
 	}
-
-	*_id = 1;
-	return B_OK;
 }
 
 mode_t mode_from_fmode(RTFMODE fMode) {
