@@ -796,6 +796,7 @@ VBGLR3DECL(void) VbglR3GuestPropEnumFree(PVBGLR3GUESTPROPENUM pHandle)
  * @param   cPatterns       The number of patterns in @a papszPatterns.  0 means
  *                          match everything.
  */
+extern "C" int printf(const char*, ...);
 VBGLR3DECL(int) VbglR3GuestPropDelSet(uint32_t u32ClientId,
                                       const char * const *papszPatterns,
                                       uint32_t cPatterns)
@@ -811,21 +812,24 @@ VBGLR3DECL(int) VbglR3GuestPropDelSet(uint32_t u32ClientId,
                                  &pszValue,
                                  &pu64Timestamp,
                                  &pszFlags);
+    
+    if (RT_SUCCESS(rc)) {
+        while (RT_SUCCESS(rc) && pszName)
+        {
+			printf("rc=%d pHandle=%p\n", rc, pHandle);
+            rc = VbglR3GuestPropWriteValue(u32ClientId, pszName, NULL);
+            if (!RT_SUCCESS(rc))
+                break;
 
-    while (RT_SUCCESS(rc) && pszName)
-    {
-        rc = VbglR3GuestPropWriteValue(u32ClientId, pszName, NULL);
-        if (!RT_SUCCESS(rc))
-            break;
+            rc = VbglR3GuestPropEnumNext(pHandle,
+                                         &pszName,
+                                         &pszValue,
+                                         &pu64Timestamp,
+                                         &pszFlags);
+        }
 
-        rc = VbglR3GuestPropEnumNext(pHandle,
-                                     &pszName,
-                                     &pszValue,
-                                     &pu64Timestamp,
-                                     &pszFlags);
+        VbglR3GuestPropEnumFree(pHandle);
     }
-
-    VbglR3GuestPropEnumFree(pHandle);
     return rc;
 }
 
