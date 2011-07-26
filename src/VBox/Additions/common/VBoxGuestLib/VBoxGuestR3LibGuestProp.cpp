@@ -816,7 +816,6 @@ VBGLR3DECL(int) VbglR3GuestPropDelSet(uint32_t u32ClientId,
     if (RT_SUCCESS(rc)) {
         while (RT_SUCCESS(rc) && pszName)
         {
-			printf("rc=%d pHandle=%p\n", rc, pHandle);
             rc = VbglR3GuestPropWriteValue(u32ClientId, pszName, NULL);
             if (!RT_SUCCESS(rc))
                 break;
