@@ -212,7 +212,7 @@ status_t VBoxMouse::_ServiceThread()
 			event->AddFloat("y", y);
 			event->AddFloat("be:tablet_x", x);
 			event->AddFloat("be:tablet_y", y);
-			event->PrintToStream();
+			//event->PrintToStream();
 			EnqueueMessage(event);
 
 

@@ -36,8 +36,15 @@ VBoxMouse_LIBS     = \
 	$(VBOX_LIB_VBGL_R3) \
 	/system/servers/input_server
 
-# XXX: link to /system/servers/input_server ?
+PROGRAMS += VBoxMouseFilter
+VBoxMouseFilter_TEMPLATE = VBOXGUESTR3EXE
+VBoxMouseFilter_DEFS     = VBOX_WITH_HGCM LOG_TO_BACKDOOR
+VBoxMouseFilter_DEFS    += LOG_ENABLED
+VBoxMouseFilter_INCS     = ../include
+VBoxMouseFilter_SOURCES  = \
+	VBoxMouseFilter.cpp
 
+VBoxMouseFilter_LIBS = $(VBoxMouse_LIBS)
 
 include	$(KBUILD_PATH)/subfooter.kmk
 
