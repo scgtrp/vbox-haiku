@@ -163,6 +163,13 @@ struct vboxguest_module_info {
 	int (*_RTSemFastMutexDestroy)(RTSEMFASTMUTEX hFastMtx);
 	int (*_RTSemFastMutexRelease)(RTSEMFASTMUTEX hFastMtx);
 	int (*_RTSemFastMutexRequest)(RTSEMFASTMUTEX hFastMtx);
+	int (*_RTHeapSimpleRelocate)(RTHEAPSIMPLE hHeap, uintptr_t offDelta);
+	int (*_RTHeapOffsetInit)(PRTHEAPOFFSET phHeap, void *pvMemory, size_t cbMemory);
+	int (*_RTHeapSimpleInit)(PRTHEAPSIMPLE pHeap, void *pvMemory, size_t cbMemory);
+	void * (*_RTHeapOffsetAlloc)(RTHEAPOFFSET hHeap, size_t cb, size_t cbAlignment);
+	void * (*_RTHeapSimpleAlloc)(RTHEAPSIMPLE Heap, size_t cb, size_t cbAlignment);
+	void (*_RTHeapOffsetFree)(RTHEAPOFFSET hHeap, void *pv);
+	void (*_RTHeapSimpleFree)(RTHEAPSIMPLE Heap, void *pv);
 };
 
 

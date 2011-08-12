@@ -30,6 +30,7 @@ include $(PATH_SUB_CURRENT)/sharedfolders/Makefile.kmk
 #include $(PATH_SUB_CURRENT)/VBoxGuest/Makefile.kmk
 include $(PATH_SUB_CURRENT)/VBoxMouse/Makefile.kmk
 include $(PATH_SUB_CURRENT)/VBoxTray/Makefile.kmk
+include $(PATH_SUB_CURRENT)/VBoxVideo/Makefile.kmk
 
 include $(KBUILD_PATH)/subfooter.kmk
 

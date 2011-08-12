@@ -281,3 +281,24 @@ int RTSemFastMutexRelease(RTSEMFASTMUTEX hFastMtx) {
 int RTSemFastMutexRequest(RTSEMFASTMUTEX hFastMtx) {
 	return g_VBoxGuest->_RTSemFastMutexRequest(hFastMtx);
 }
+int RTHeapSimpleRelocate(RTHEAPSIMPLE hHeap, uintptr_t offDelta) {
+	return g_VBoxGuest->_RTHeapSimpleRelocate(hHeap, offDelta);
+}
+int RTHeapOffsetInit(PRTHEAPOFFSET phHeap, void *pvMemory, size_t cbMemory) {
+	return g_VBoxGuest->_RTHeapOffsetInit(phHeap, pvMemory, cbMemory);
+}
+int RTHeapSimpleInit(PRTHEAPSIMPLE pHeap, void *pvMemory, size_t cbMemory) {
+	return g_VBoxGuest->_RTHeapSimpleInit(pHeap, pvMemory, cbMemory);
+}
+void * RTHeapOffsetAlloc(RTHEAPOFFSET hHeap, size_t cb, size_t cbAlignment) {
+	return g_VBoxGuest->_RTHeapOffsetAlloc(hHeap, cb, cbAlignment);
+}
+void * RTHeapSimpleAlloc(RTHEAPSIMPLE Heap, size_t cb, size_t cbAlignment) {
+	return g_VBoxGuest->_RTHeapSimpleAlloc(Heap, cb, cbAlignment);
+}
+void RTHeapOffsetFree(RTHEAPOFFSET hHeap, void *pv) {
+	g_VBoxGuest->_RTHeapOffsetFree(hHeap, pv);
+}
+void RTHeapSimpleFree(RTHEAPSIMPLE Heap, void *pv) {
+	g_VBoxGuest->_RTHeapSimpleFree(Heap, pv);
+}

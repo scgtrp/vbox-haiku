@@ -1,0 +1,54 @@
+# $Id$
+## @file
+# Sub-Makefile for the VBoxVideo (haiku shared folders module).
+#
+
+#
+# Copyright (C) 2006-2010 Oracle Corporation
+#
+# This file is part of VirtualBox Open Source Edition (OSE), as
+# available from http://www.virtualbox.org. This file is free software;
+# you can redistribute it and/or modify it under the terms of the GNU
+# General Public License (GPL) as published by the Free Software
+# Foundation, in version 2 as it comes in the "COPYING" file of the
+# VirtualBox OSE distribution. VirtualBox OSE is distributed in the
+# hope that it will be useful, but WITHOUT ANY WARRANTY of any kind.
+#
+
+SUB_DEPTH = ../../../../../..
+include	$(KBUILD_PATH)/subheader.kmk
+
+ifdef VBOX_WITH_ADDITION_DRIVERS
+ SYSMODS += vboxvideo
+endif
+
+#
+# Populate FILES_VBOXSF_NOBIN
+#
+#include $(PATH_SUB_CURRENT)/files_VBoxVideo
+
+#
+# The module (for syntax checking).
+# The DEBUG_HASH* stuff is for CONFIG_DYNAMIC_DEBUG-enabled kernels
+#
+vboxvideo_TEMPLATE        = VBOXGUESTR0
+vboxvideo_DEFS            = \
+	MODULE IN_RT_R0 VBOXGUEST VBOX_WITH_HGCM \
+	KBUILD_MODNAME=KBUILD_STR\(VBoxVideo\) \
+        KBUILD_BASENAME=KBUILD_STR\(VBoxVideo\)
+vboxvideo_INCS            = \
+	$(PATH_ROOT)/src/VBox/Additions/common/VBoxGuestLib \
+	$(PATH_ROOT)/src/VBox/Additions/common/VBoxGuest \
+	$(PATH_ROOT)/src/VBox/Runtime/r0drv/haiku
+vboxvideo_SOURCES         = \
+	driver.cpp \
+	$(PATH_ROOT)/src/VBox/Additions/common/VBoxVideo/HGSMIBase.cpp \
+	$(PATH_ROOT)/src/VBox/Additions/common/VBoxVideo/Modesetting.cpp \
+	$(PATH_ROOT)/src/VBox/Additions/common/VBoxVideo/VBVABase.cpp \
+	$(PATH_ROOT)/src/VBox/Additions/common/VBoxGuest/VBoxGuest-haiku-stubs.c
+vboxvideo_LIBS            = \
+	$(VBOX_LIB_VBGL_R0) \
+	$(VBOX_PATH_ADDITIONS_LIB)/HGSMIGuestR0Lib$(VBOX_SUFF_LIB)
+
+include	$(KBUILD_PATH)/subfooter.kmk
+

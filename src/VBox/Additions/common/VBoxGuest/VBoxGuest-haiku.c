@@ -39,6 +39,7 @@
 #include <iprt/memobj.h>
 #include <iprt/asm.h>
 #include <iprt/timer.h>
+#include <iprt/heap.h>
 
 #define MODULE_NAME VBOXGUEST_MODULE_NAME
 
@@ -159,6 +160,13 @@ static struct vboxguest_module_info g_VBoxGuest = {
 	RTSemFastMutexDestroy,
 	RTSemFastMutexRelease,
 	RTSemFastMutexRequest,
+	RTHeapSimpleRelocate,
+	RTHeapOffsetInit,
+	RTHeapSimpleInit,
+	RTHeapOffsetAlloc,
+	RTHeapSimpleAlloc,
+	RTHeapOffsetFree,
+	RTHeapSimpleFree
 };
 
 #if 0

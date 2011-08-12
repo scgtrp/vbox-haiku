@@ -26,6 +26,9 @@ ifdef VBOX_ONLY_ADDITIONS
    include $(PATH_SUB_CURRENT)/GuestHost/Makefile.kmk
   endif
  endif
+ ifeq ($(KBUILD_TARGET),haiku) # haiku has video but no opengl accel
+  include $(PATH_SUB_CURRENT)/GuestHost/Makefile.kmk
+ endif
  include $(PATH_SUB_CURRENT)/Additions/Makefile.kmk
 
 else ifdef VBOX_ONLY_DOCS
