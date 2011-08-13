@@ -144,6 +144,20 @@ status_t init_driver()
 			gDeviceInfo.sharedInfo->currentMode.timing.h_display = width;
 			gDeviceInfo.sharedInfo->currentMode.timing.v_display = height;
 			
+			// map the PCI memory space
+			uint32 command_reg = gPCI->read_pci_config(gDeviceInfo.pciInfo.bus,
+				gDeviceInfo.pciInfo.device, gDeviceInfo.pciInfo.function,  PCI_command, 2);
+			command_reg |= PCI_command_io | PCI_command_memory | PCI_command_master;
+			gPCI->write_pci_config(gDeviceInfo.pciInfo.bus, gDeviceInfo.pciInfo.device,
+				gDeviceInfo.pciInfo.function, PCI_command, 2, command_reg);
+			
+			gDeviceInfo.sharedInfo->framebufferArea =
+				map_physical_memory("vboxvideo framebuffer", (phys_addr_t)gDeviceInfo.pciInfo.u.h0.base_registers[0],
+					gDeviceInfo.pciInfo.u.h0.base_register_sizes[0], B_ANY_KERNEL_BLOCK_ADDRESS | B_MTR_WC,
+					B_READ_AREA + B_WRITE_AREA, &(gDeviceInfo.sharedInfo->framebuffer));
+			
+			*(uint32*)(gDeviceInfo.sharedInfo->framebuffer) = 0xFFFFFFFF;
+				
 			break;
 		}
 		

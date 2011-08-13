@@ -26,20 +26,11 @@ sem_id vboxvideo_accelerant_retrace_semaphore(void);
 // modes & constraints
 uint32 vboxvideo_accelerant_mode_count(void);
 status_t vboxvideo_get_mode_list(display_mode *dm);
-status_t vboxvideo_propose_display_mode(display_mode *target, const display_mode *low, const display_mode *high);
 status_t vboxvideo_set_display_mode(display_mode *modeToSet);
 status_t vboxvideo_get_display_mode(display_mode *currentMode);
 status_t vboxvideo_get_edid_info(void *info, size_t size, uint32 *_version);
 status_t vboxvideo_get_frame_buffer_config(frame_buffer_config *config);
 status_t vboxvideo_get_pixel_clock_limits(display_mode *dm, uint32 *low, uint32 *high);
-status_t vboxvideo_move_display(uint16 hDisplayStart, uint16 vDisplayStart);
-status_t vboxvideo_get_timing_constraints(display_timing_constraints *dtc);
-void vboxvideo_set_indexed_colors(uint count, uint8 first, uint8 *colorData, uint32 flags);
-
-// DPMS
-uint32 vboxvideo_dpms_capabilities(void);
-uint32 vboxvideo_dpms_mode(void);
-status_t vboxvideo_set_dpms_mode(uint32 dpmsFlags);
 
 // cursor
 status_t vboxvideo_set_cursor_shape(uint16 width, uint16 height, uint16 hotX, uint16 hotY, uint8 *andMask, uint8 *xorMask);

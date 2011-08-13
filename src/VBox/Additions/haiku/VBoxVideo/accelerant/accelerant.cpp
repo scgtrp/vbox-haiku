@@ -2,6 +2,7 @@
 #include "accelerant.h"
 #include <stdio.h>
 #include <string.h>
+#include <errno.h>
 
 #define TRACE(x...) do { FILE* logfile = fopen("/var/log/vboxvideo.accelerant.log", "a"); fprintf(logfile, x); fflush(logfile); fsync(fileno(logfile)); fclose(logfile); sync(); } while(0)
 
@@ -53,8 +54,6 @@ extern "C" void* get_accelerant_hook(uint32 feature, void* data) {
 			return (void*)vboxvideo_accelerant_mode_count;
 		case B_GET_MODE_LIST:
 			return (void*)vboxvideo_get_mode_list;
-		case B_PROPOSE_DISPLAY_MODE:
-			return (void*)vboxvideo_propose_display_mode;
 		case B_SET_DISPLAY_MODE:
 			return (void*)vboxvideo_set_display_mode;
 		case B_GET_DISPLAY_MODE:
@@ -65,21 +64,7 @@ extern "C" void* get_accelerant_hook(uint32 feature, void* data) {
 			return (void*)vboxvideo_get_frame_buffer_config;
 		case B_GET_PIXEL_CLOCK_LIMITS:
 			return (void*)vboxvideo_get_pixel_clock_limits;
-		case B_MOVE_DISPLAY:
-			return (void*)vboxvideo_move_display;
-		case B_SET_INDEXED_COLORS:
-			return (void*)vboxvideo_set_indexed_colors;
-		case B_GET_TIMING_CONSTRAINTS:
-			return (void*)vboxvideo_get_timing_constraints;
-
-		/* DPMS */
-		case B_DPMS_CAPABILITIES:
-			return (void*)vboxvideo_dpms_capabilities;
-		case B_DPMS_MODE:
-			return (void*)vboxvideo_dpms_mode;
-		case B_SET_DPMS_MODE:
-			return (void*)vboxvideo_set_dpms_mode;
-
+		
 		/* cursor managment */
 		case B_SET_CURSOR_SHAPE:
 			return (void*)vboxvideo_set_cursor_shape;
@@ -106,11 +91,12 @@ extern "C" void* get_accelerant_hook(uint32 feature, void* data) {
 	return NULL;
 }
 
-status_t vboxvideo_init_accelerant(int fd) {
+status_t vboxvideo_init_common(int fd, bool cloned) {
+	unlink("/var/log/vboxvideo.accelerant.log"); // clear old log - next TRACE() will recreate it
 	TRACE("%s\n", __FUNCTION__);
 	
 	gInfo.deviceFD = fd;
-	gInfo.isClone = false;
+	gInfo.isClone = cloned;
 	gInfo.sharedInfo = NULL;
 	gInfo.sharedInfoArea = -1;
 	
@@ -134,6 +120,10 @@ status_t vboxvideo_init_accelerant(int fd) {
 	return B_OK;
 }
 
+status_t vboxvideo_init_accelerant(int fd) {
+	return vboxvideo_init_common(fd, false);
+}
+
 ssize_t vboxvideo_accelerant_clone_info_size(void) {
 	TRACE("%s\n", __FUNCTION__);
 	return B_PATH_NAME_LENGTH;
@@ -146,10 +136,30 @@ void vboxvideo_get_accelerant_clone_info(void *data) {
 
 status_t vboxvideo_clone_accelerant(void *data) {
 	TRACE("%s\n", __FUNCTION__);
-	return B_ERROR;
+	
+	// create full device name
+	char path[MAXPATHLEN];
+	strcpy(path, "/dev/");
+	strcat(path, (const char *)data);
+
+	int fd = open(path, B_READ_WRITE);
+	if (fd < 0)
+		return errno;
+	
+	return vboxvideo_init_common(fd, true);
 }
 
-void vboxvideo_uninit_accelerant(void) { TRACE("%s\n", __FUNCTION__); }
+void vboxvideo_uninit_accelerant(void) {
+	delete_area(gInfo.sharedInfoArea);
+	gInfo.sharedInfo = NULL;
+	gInfo.sharedInfoArea = -1;
+	
+	if (gInfo.isClone)
+		close(gInfo.deviceFD);
+	
+	TRACE("%s\n", __FUNCTION__);
+}
+
 status_t vboxvideo_get_accelerant_device_info(accelerant_device_info *adi) {
 	TRACE("%s\n", __FUNCTION__);
 	adi->version = B_ACCELERANT_VERSION;
@@ -158,7 +168,11 @@ status_t vboxvideo_get_accelerant_device_info(accelerant_device_info *adi) {
 	strcpy(adi->serial_no, "9001");
 	return B_OK;
 }
-sem_id vboxvideo_accelerant_retrace_semaphore(void) { TRACE("%s\n", __FUNCTION__); }
+
+sem_id vboxvideo_accelerant_retrace_semaphore(void) {
+	TRACE("%s\n", __FUNCTION__);
+	return -1;
+}
 
 // modes & constraints
 uint32 vboxvideo_accelerant_mode_count(void) {
@@ -172,16 +186,12 @@ status_t vboxvideo_get_mode_list(display_mode *dm) {
 	return vboxvideo_get_display_mode(dm);
 }
 
-status_t vboxvideo_propose_display_mode(display_mode *target, const display_mode *low, const display_mode *high) {
-	TRACE("%s\n", __FUNCTION__);
-	return B_UNSUPPORTED;
-}
-
 status_t vboxvideo_set_display_mode(display_mode *modeToSet) {
 	TRACE("%s\n", __FUNCTION__);
 	TRACE("trying to set mode %dx%d\n", modeToSet->timing.h_display, modeToSet->timing.v_display);
 	return ioctl(gInfo.deviceFD, VBOXVIDEO_SET_DISPLAY_MODE, modeToSet, sizeof(display_mode));
 }
+
 status_t vboxvideo_get_display_mode(display_mode *currentMode) {
 	TRACE("%s\n", __FUNCTION__);
 	*currentMode = gInfo.sharedInfo->currentMode;
@@ -234,23 +244,33 @@ status_t vboxvideo_get_edid_info(void *info, size_t size, uint32 *_version) {
 	return B_OK;
 }
 
-status_t vboxvideo_get_frame_buffer_config(frame_buffer_config *config) { TRACE("%s\n", __FUNCTION__); }
-status_t vboxvideo_get_pixel_clock_limits(display_mode *dm, uint32 *low, uint32 *high) { TRACE("%s\n", __FUNCTION__); }
-status_t vboxvideo_move_display(uint16 hDisplayStart, uint16 vDisplayStart) { TRACE("%s\n", __FUNCTION__); }
-status_t vboxvideo_get_timing_constraints(display_timing_constraints *dtc) { TRACE("%s\n", __FUNCTION__); }
-void vboxvideo_set_indexed_colors(uint count, uint8 first, uint8 *colorData, uint32 flags) { TRACE("%s\n", __FUNCTION__); }
+status_t vboxvideo_get_frame_buffer_config(frame_buffer_config *config) {
+	TRACE("%s\n", __FUNCTION__);
+	config->frame_buffer = gInfo.sharedInfo->framebuffer;
+	config->frame_buffer_dma = NULL;
+	config->bytes_per_row = gInfo.sharedInfo->currentMode.flags * gInfo.sharedInfo->currentMode.timing.h_display / 8;
+	return B_OK;
+}
 
-// DPMS
-uint32 vboxvideo_dpms_capabilities(void) { TRACE("%s\n", __FUNCTION__); }
-uint32 vboxvideo_dpms_mode(void) { TRACE("%s\n", __FUNCTION__); }
-status_t vboxvideo_set_dpms_mode(uint32 dpmsFlags) { TRACE("%s\n", __FUNCTION__); }
+status_t vboxvideo_get_pixel_clock_limits(display_mode *dm, uint32 *low, uint32 *high) {
+	TRACE("%s\n", __FUNCTION__);
+	return B_UNSUPPORTED;
+}
 
 // cursor
 status_t vboxvideo_set_cursor_shape(uint16 width, uint16 height, uint16 hotX, uint16 hotY, uint8 *andMask, uint8 *xorMask) {
+	TRACE("%s\n", __FUNCTION__);
 	// VBoxHGSMIUpdatePointerShape
+	return B_UNSUPPORTED;
 }
-void vboxvideo_move_cursor(uint16 x, uint16 y) { TRACE("%s\n", __FUNCTION__); }
-void vboxvideo_show_cursor(bool is_visible) { TRACE("%s\n", __FUNCTION__); }
+
+void vboxvideo_move_cursor(uint16 x, uint16 y) {
+	TRACE("%s\n", __FUNCTION__);
+}
+
+void vboxvideo_show_cursor(bool is_visible) {
+	TRACE("%s\n", __FUNCTION__);
+}
 
 // accelerant engine
 uint32 vboxvideo_accelerant_engine_count(void) {
@@ -272,22 +292,33 @@ status_t vboxvideo_release_engine(engine_token *et, sync_token *st) {
 	return B_OK;
 }
 
-void vboxvideo_wait_engine_idle(void) { TRACE("%s\n", __FUNCTION__); }
+void vboxvideo_wait_engine_idle(void) {
+	TRACE("%s\n", __FUNCTION__);
+}
 
-status_t vboxvideo_get_sync_token(engine_token *et, sync_token *st) { TRACE("%s\n", __FUNCTION__); return B_OK; }
+status_t vboxvideo_get_sync_token(engine_token *et, sync_token *st) {
+	TRACE("%s\n", __FUNCTION__);
+	return B_OK;
+}
 
-status_t vboxvideo_sync_to_token(sync_token *st) { TRACE("%s\n", __FUNCTION__); return B_OK; }
+status_t vboxvideo_sync_to_token(sync_token *st) {
+	TRACE("%s\n", __FUNCTION__);
+	return B_OK;
+}
 
 // 2D acceleration
 void vboxvideo_screen_to_screen_blit(engine_token *et, blit_params *list, uint32 count) {
 	TRACE("%s\n", __FUNCTION__);
 }
+
 void vboxvideo_fill_rectangle(engine_token *et, uint32 color, fill_rect_params *list, uint32 count) {
 	TRACE("%s\n", __FUNCTION__);
 }
+
 void vboxvideo_invert_rectangle(engine_token *et, fill_rect_params *list, uint32 count) {
 	TRACE("%s\n", __FUNCTION__);
 }
+
 void vboxvideo_fill_span(engine_token *et, uint32 color, uint16 *list, uint32 count) {
 	TRACE("%s\n", __FUNCTION__);
 }

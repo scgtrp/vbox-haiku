@@ -7,6 +7,9 @@
 
 struct SharedInfo {
 	display_mode currentMode;
+	
+	area_id framebufferArea;
+	void* framebuffer;
 };
 
 enum {
