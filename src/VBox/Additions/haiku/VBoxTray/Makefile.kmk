@@ -28,6 +28,7 @@ VBoxTray_DEFS    += LOG_ENABLED
 VBoxTray_INCS     = ../include
 VBoxTray_SOURCES  = \
 	VBoxClipboard.cpp \
+	VBoxDisplay.cpp \
 	VBoxGuestApplication.cpp \
 	VBoxGuestDeskbarView.cpp
 
@@ -36,6 +37,7 @@ VBoxTray_SOURCES += \
 
 VBoxTray_LIBS     = \
 	be translation \
+	$(VBOX_LIB_VBGL_R3) \
 	$(VBOX_LIB_IPRT_GUEST_R3) \
 	$(VBOX_LIB_VBGL_R3)
 

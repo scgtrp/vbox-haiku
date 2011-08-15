@@ -52,7 +52,7 @@ our_image(image_info& image)
 VBoxGuestDeskbarView::VBoxGuestDeskbarView()
 	: BView(BRect(0, 0, 15, 15), VIEWNAME, B_FOLLOW_NONE,
 		B_WILL_DRAW | B_NAVIGABLE),
-	fIcon(NULL), fClipboardService(NULL)
+	fIcon(NULL), fClipboardService(NULL), fDisplayService(NULL)
 {
 	PRINT(("%s()\n", __FUNCTION__));
 	_Init();
@@ -117,6 +117,10 @@ void VBoxGuestDeskbarView::AttachedToWindow()
 	if (fClipboardService) { // don't repeatedly crash deskbar if vboxdev not loaded
 		Looper()->AddHandler(fClipboardService);
 		fClipboardService->Connect();
+	}
+	
+	if (fDisplayService) {
+		fDisplayService->Start();
 	}
 }
 
@@ -207,8 +211,8 @@ status_t VBoxGuestDeskbarView::_Init(BMessage *archive)
         rc = VbglR3Init();
     }
 	if (RT_SUCCESS(rc)) {
-		printf("** starting clipboard service\n");
 		fClipboardService = new VBoxClipboardService();
+		fDisplayService = new VBoxDisplayService();
 	}
 	
 	return RTErrConvertToErrno(rc);

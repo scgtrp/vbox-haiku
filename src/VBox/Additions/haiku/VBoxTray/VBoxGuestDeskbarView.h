@@ -30,6 +30,7 @@
 
 #include <VBoxGuestInternal.h>
 #include "VBoxClipboard.h"
+#include "VBoxDisplay.h"
 
 
 class VBoxGuestDeskbarView : public BView {
@@ -46,14 +47,15 @@ public:
 
 	virtual	void		MouseDown(BPoint point);
 
-	static status_t			AddToDeskbar(bool force=true);
-	static status_t			RemoveFromDeskbar();
+	static status_t		AddToDeskbar(bool force=true);
+	static status_t		RemoveFromDeskbar();
 	
 private:
 	status_t			_Init(BMessage *archive=NULL);
 	BBitmap				*fIcon;
 	
 	VBoxClipboardService *fClipboardService;
+	VBoxDisplayService *fDisplayService;
 };
 
 #endif /* __VBOXGUESTTRAYVIEW__H */

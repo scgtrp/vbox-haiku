@@ -140,9 +140,13 @@ status_t init_driver()
 			gDeviceInfo.sharedInfo->currentMode.virtual_height = height;
 			gDeviceInfo.sharedInfo->currentMode.h_display_start = 0;
 			gDeviceInfo.sharedInfo->currentMode.v_display_start = 0;
-			gDeviceInfo.sharedInfo->currentMode.flags = bpp;
+			gDeviceInfo.sharedInfo->currentMode.flags = 0;
 			gDeviceInfo.sharedInfo->currentMode.timing.h_display = width;
 			gDeviceInfo.sharedInfo->currentMode.timing.v_display = height;
+			// not used, but this makes a reasonable-sounding refresh rate show in screen prefs:
+			gDeviceInfo.sharedInfo->currentMode.timing.h_total = 1000;
+			gDeviceInfo.sharedInfo->currentMode.timing.v_total = 1;
+			gDeviceInfo.sharedInfo->currentMode.timing.pixel_clock = 850;
 			
 			// map the PCI memory space
 			uint32 command_reg = gPCI->read_pci_config(gDeviceInfo.pciInfo.bus,
@@ -156,8 +160,6 @@ status_t init_driver()
 					gDeviceInfo.pciInfo.u.h0.base_register_sizes[0], B_ANY_KERNEL_BLOCK_ADDRESS | B_MTR_WC,
 					B_READ_AREA + B_WRITE_AREA, &(gDeviceInfo.sharedInfo->framebuffer));
 			
-			*(uint32*)(gDeviceInfo.sharedInfo->framebuffer) = 0xFFFFFFFF;
-				
 			break;
 		}
 		
@@ -165,29 +167,6 @@ status_t init_driver()
 	}
 	
 	return B_OK;
-}
-
-static uint32 get_color_space_for_depth(uint32 depth)
-{
-	switch (depth) {
-		case 1:
-			return B_GRAY1;
-		case 4:
-			return B_GRAY8;
-				// the app_server is smart enough to translate this to VGA mode
-		case 8:
-			return B_CMAP8;
-		case 15:
-			return B_RGB15;
-		case 16:
-			return B_RGB16;
-		case 24:
-			return B_RGB24;
-		case 32:
-			return B_RGB32;
-	}
-
-	return 0;
 }
 
 const char** publish_devices()
@@ -296,7 +275,9 @@ status_t device_ioctl(void* cookie, uint32 msg, void* buf, size_t len)
 	
 	case VBOXVIDEO_SET_DISPLAY_MODE: {
 		display_mode* mode = (display_mode*)buf;
-		VBoxVideoSetModeRegisters(mode->timing.h_display, mode->timing.v_display, mode->timing.h_display, mode->flags, 0, 0, 0);
+		VBoxVideoSetModeRegisters(mode->timing.h_display, mode->timing.v_display,
+			mode->timing.h_display, get_depth_for_color_space(mode->space), 0, 0, 0);
+		gDeviceInfo.sharedInfo->currentMode = *mode;
 		return B_OK;
 	}
 	default:

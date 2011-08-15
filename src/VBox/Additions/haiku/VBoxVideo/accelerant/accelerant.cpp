@@ -66,12 +66,12 @@ extern "C" void* get_accelerant_hook(uint32 feature, void* data) {
 			return (void*)vboxvideo_get_pixel_clock_limits;
 		
 		/* cursor managment */
-		case B_SET_CURSOR_SHAPE:
+		/*case B_SET_CURSOR_SHAPE:
 			return (void*)vboxvideo_set_cursor_shape;
 		case B_MOVE_CURSOR:
 			return (void*)vboxvideo_move_cursor;
 		case B_SHOW_CURSOR:
-			return (void*)vboxvideo_show_cursor;
+			return (void*)vboxvideo_show_cursor;*/
 
 		/* engine/synchronization */
 		case B_ACCELERANT_ENGINE_COUNT:
@@ -163,7 +163,7 @@ void vboxvideo_uninit_accelerant(void) {
 status_t vboxvideo_get_accelerant_device_info(accelerant_device_info *adi) {
 	TRACE("%s\n", __FUNCTION__);
 	adi->version = B_ACCELERANT_VERSION;
-	strcpy(adi->name, "VirtualBox Graphics Adapter");
+	strcpy(adi->name, "Virtual display");
 	strcpy(adi->chipset, "VirtualBox Graphics Adapter");
 	strcpy(adi->serial_no, "9001");
 	return B_OK;
@@ -181,7 +181,7 @@ uint32 vboxvideo_accelerant_mode_count(void) {
 }
 
 status_t vboxvideo_get_mode_list(display_mode *dm) {
-	// TODO
+	// TODO return some standard modes here
 	TRACE("%s\n", __FUNCTION__);
 	return vboxvideo_get_display_mode(dm);
 }
@@ -207,7 +207,7 @@ status_t vboxvideo_get_edid_info(void *info, size_t size, uint32 *_version) {
 		0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, /* header */
 		0x58, 0x58, /* manufacturer (VBX) */
 		0x00, 0x00, /* product code */
-		0x00, 0x00,0x00, 0x00, /* serial number goes here */
+		0x00, 0x00, 0x00, 0x00, /* serial number goes here */
 		0x01, /* week of manufacture */
 		0x00, /* year of manufacture */
 		0x01, 0x03, /* EDID version */
@@ -248,13 +248,17 @@ status_t vboxvideo_get_frame_buffer_config(frame_buffer_config *config) {
 	TRACE("%s\n", __FUNCTION__);
 	config->frame_buffer = gInfo.sharedInfo->framebuffer;
 	config->frame_buffer_dma = NULL;
-	config->bytes_per_row = gInfo.sharedInfo->currentMode.flags * gInfo.sharedInfo->currentMode.timing.h_display / 8;
+	config->bytes_per_row = get_depth_for_color_space(gInfo.sharedInfo->currentMode.space)
+		* gInfo.sharedInfo->currentMode.timing.h_display / 8;
 	return B_OK;
 }
 
 status_t vboxvideo_get_pixel_clock_limits(display_mode *dm, uint32 *low, uint32 *high) {
 	TRACE("%s\n", __FUNCTION__);
-	return B_UNSUPPORTED;
+	// irrelevant for virtual monitors
+	*low = 0;
+	*high = 9001;
+	return B_OK;
 }
 
 // cursor
