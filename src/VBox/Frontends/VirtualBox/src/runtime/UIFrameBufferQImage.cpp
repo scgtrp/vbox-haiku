@@ -26,7 +26,7 @@
 /* Local includes */
 # include "UIFrameBufferQImage.h"
 # include "UIMachineView.h"
-# include "VBoxProblemReporter.h"
+# include "UIMessageCenter.h"
 # include "VBoxGlobal.h"
 
 /* Global includes */
@@ -93,7 +93,7 @@ void UIFrameBufferQImage::paintEvent(QPaintEvent *pEvent)
 
     QPainter painter(m_pMachineView->viewport());
 
-    
+
     if ((ulong)r.width() < m_width * 2 / 3)
     {
         /* This method is faster for narrow updates */
@@ -193,7 +193,7 @@ void UIFrameBufferQImage::resizeEvent(UIResizeEvent *pEvent)
     }
 
     if (bRemind)
-        vboxProblem().remindAboutWrongColorDepth(pEvent->bitsPerPixel(), 32);
+        msgCenter().remindAboutWrongColorDepth(pEvent->bitsPerPixel(), 32);
 }
 
 #endif /* VBOX_GUI_USE_QIMAGE */

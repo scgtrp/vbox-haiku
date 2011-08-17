@@ -6,7 +6,7 @@
  */
 
 /*
- * Copyright (C) 2010 Oracle Corporation
+ * Copyright (C) 2010-2011 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -126,6 +126,7 @@ public:
         m_pErrText->setText(aText);
         setCurrentIndex(indexOf(m_pErrBox));
     }
+
 signals:
 
     void linkClicked(const QString &aURL);
@@ -162,6 +163,8 @@ private:
 
     void createTextPage();
     void createErrPage();
+
+    static QString summarizeGenericProperties(const CNetworkAdapter &adapter);
 
     /* Private member vars */
     CVirtualBox m_vbox;
@@ -462,6 +465,97 @@ UIDetailsPagePrivate::~UIDetailsPagePrivate()
                                                      boxes);
 }
 
+void UIDetailsPagePrivate::retranslateUi()
+{
+    if (m_pErrLabel)
+        m_pErrLabel->setText(tr(
+            "The selected virtual machine is <i>inaccessible</i>. Please "
+            "inspect the error message shown below and press the "
+            "<b>Refresh</b> button if you want to repeat the accessibility "
+            "check:"));
+
+    if (mRefreshAction && mRefreshButton)
+    {
+        mRefreshButton->setText(mRefreshAction->text());
+        mRefreshButton->setIcon(mRefreshAction->icon());
+        mRefreshButton->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    }
+
+    /* General */
+    {
+        m_secBoxes.value(GeneralSec)->setTitle(tr("General", "details report"));
+        m_actions.value(GeneralSec)->setText(m_secBoxes.value(GeneralSec)->title());
+    }
+
+    /* System */
+    {
+        m_secBoxes.value(SystemSec)->setTitle(tr("System", "details report"));
+        m_actions.value(SystemSec)->setText(m_secBoxes.value(SystemSec)->title());
+    }
+
+    /* Preview */
+    {
+        m_secBoxes.value(PreviewSec)->setTitle(tr("Preview", "details report"));
+        m_actions.value(PreviewSec)->setText(m_secBoxes.value(PreviewSec)->title());
+    }
+
+    /* Display */
+    {
+        m_secBoxes.value(DisplaySec)->setTitle(tr("Display", "details report"));
+        m_actions.value(DisplaySec)->setText(m_secBoxes.value(DisplaySec)->title());
+    }
+
+    /* Storage */
+    {
+        m_secBoxes.value(StorageSec)->setTitle(tr("Storage", "details report"));
+        m_actions.value(StorageSec)->setText(m_secBoxes.value(StorageSec)->title());
+    }
+
+    /* Audio */
+    {
+        m_secBoxes.value(AudioSec)->setTitle(tr("Audio", "details report"));
+        m_actions.value(AudioSec)->setText(m_secBoxes.value(AudioSec)->title());
+    }
+
+    /* Network */
+    {
+        m_secBoxes.value(NetworkSec)->setTitle(tr("Network", "details report"));
+        m_actions.value(NetworkSec)->setText(m_secBoxes.value(NetworkSec)->title());
+    }
+
+    /* Serial Ports */
+    {
+        m_secBoxes.value(SerialPortsSec)->setTitle(tr("Serial Ports", "details report"));
+        m_actions.value(SerialPortsSec)->setText(m_secBoxes.value(SerialPortsSec)->title());
+    }
+
+#ifdef VBOX_WITH_PARALLEL_PORTS
+    /* Parallel Ports */
+    {
+        m_secBoxes.value(ParallelPortsSec)->setTitle(tr("Parallel Ports", "details report"));
+        m_actions.value(ParallelPortsSec)->setText(m_secBoxes.value(ParallelPortsSec)->title());
+    }
+#endif /* VBOX_WITH_PARALLEL_PORTS */
+
+    /* USB */
+    {
+        m_secBoxes.value(USBSec)->setTitle(tr("USB", "details report"));
+        m_actions.value(USBSec)->setText(m_secBoxes.value(USBSec)->title());
+    }
+
+    /* Shared Folders */
+    {
+        m_secBoxes.value(SharedFoldersSec)->setTitle(tr("Shared Folders", "details report"));
+        m_actions.value(SharedFoldersSec)->setText(m_secBoxes.value(SharedFoldersSec)->title());
+    }
+
+    /* Description */
+    {
+        m_secBoxes.value(DescriptionSec)->setTitle(tr("Description", "details report"));
+        m_actions.value(DescriptionSec)->setText(m_secBoxes.value(DescriptionSec)->title());
+    }
+}
+
 void UIDetailsPagePrivate::sltUpdateGeneral()
 {
     m_secBoxes.value(GeneralSec)->setTitleLinkEnabled(m_fChangeable);
@@ -500,6 +594,12 @@ void UIDetailsPagePrivate::sltUpdateSystem()
                 item += sSectionItemTpl2.arg(tr("Processors", "details report"),
                                              tr("<nobr>%1</nobr>", "details report"))
                     .arg(cCPU);
+
+            int iCPUExecCap = m_machine.GetCPUExecutionCap();
+            if (iCPUExecCap < 100)
+                item += sSectionItemTpl2.arg(tr("Execution Cap", "details report"),
+                                             tr("<nobr>%1%</nobr>", "details report"))
+                    .arg(iCPUExecCap);
 
             /* Boot order */
             QStringList bootOrder;
@@ -739,18 +839,21 @@ void UIDetailsPagePrivate::sltUpdateNetwork()
                      * this name instead */
                     if (type == KNetworkAttachmentType_Bridged)
                         attType = attType.arg(tr("Bridged adapter, %1",
-                                                 "details report (network)").arg(adapter.GetHostInterface()));
+                                                 "details report (network)").arg(adapter.GetBridgedInterface()));
                     else if (type == KNetworkAttachmentType_Internal)
                         attType = attType.arg(tr("Internal network, '%1'",
                                                  "details report (network)").arg(adapter.GetInternalNetwork()));
                     else if (type == KNetworkAttachmentType_HostOnly)
                         attType = attType.arg(tr("Host-only adapter, '%1'",
-                                                 "details report (network)").arg(adapter.GetHostInterface()));
-#ifdef VBOX_WITH_VDE
-                    else if (type == KNetworkAttachmentType_VDE)
-                        attType = attType.arg(tr("VDE network, '%1'",
-                                                 "details report (network)").arg(adapter.GetVDENetwork()));
-#endif
+                                                 "details report (network)").arg(adapter.GetHostOnlyInterface()));
+                    else if (type == KNetworkAttachmentType_Generic)
+                    {
+                        QString strGenericDriverProperties(summarizeGenericProperties(adapter));
+                        attType = strGenericDriverProperties.isNull() ?
+                                  attType.arg(tr("Generic driver, '%1'", "details report (network)").arg(adapter.GetGenericDriver())) :
+                                  attType.arg(tr("Generic driver, '%1' {&nbsp;%2&nbsp;}", "details report (network)")
+                                              .arg(adapter.GetGenericDriver(), strGenericDriverProperties));
+                    }
                     else
                         attType = attType.arg(vboxGlobal().toString(type));
 
@@ -1069,95 +1172,23 @@ void UIDetailsPagePrivate::createErrPage()
     retranslateUi();
 }
 
-void UIDetailsPagePrivate::retranslateUi()
+/**
+ *  Return a text summary of the properties of a generic network adapter
+ */
+/* static */
+QString UIDetailsPagePrivate::summarizeGenericProperties(const CNetworkAdapter &adapter)
 {
-    if (m_pErrLabel)
-        m_pErrLabel->setText(tr(
-            "The selected virtual machine is <i>inaccessible</i>. Please "
-            "inspect the error message shown below and press the "
-            "<b>Refresh</b> button if you want to repeat the accessibility "
-            "check:"));
-
-    if (mRefreshAction && mRefreshButton)
+    QVector<QString> names;
+    QVector<QString> props;
+    props = adapter.GetProperties(QString(), names);
+    QString strResult;
+    for (int i = 0; i < names.size(); ++i)
     {
-        mRefreshButton->setText(mRefreshAction->text());
-        mRefreshButton->setIcon(mRefreshAction->icon());
-        mRefreshButton->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+        strResult += names[i] + "=" + props[i];
+        if (i < names.size() - 1)
+            strResult += ", ";
     }
-
-    /* General */
-    {
-        m_secBoxes.value(GeneralSec)->setTitle(tr("General", "details report"));
-        m_actions.value(GeneralSec)->setText(m_secBoxes.value(GeneralSec)->title());
-    }
-
-    /* System */
-    {
-        m_secBoxes.value(SystemSec)->setTitle(tr("System", "details report"));
-        m_actions.value(SystemSec)->setText(m_secBoxes.value(SystemSec)->title());
-    }
-
-    /* Preview */
-    {
-        m_secBoxes.value(PreviewSec)->setTitle(tr("Preview", "details report"));
-        m_actions.value(PreviewSec)->setText(m_secBoxes.value(PreviewSec)->title());
-    }
-
-    /* Display */
-    {
-        m_secBoxes.value(DisplaySec)->setTitle(tr("Display", "details report"));
-        m_actions.value(DisplaySec)->setText(m_secBoxes.value(DisplaySec)->title());
-    }
-
-    /* Storage */
-    {
-        m_secBoxes.value(StorageSec)->setTitle(tr("Storage", "details report"));
-        m_actions.value(StorageSec)->setText(m_secBoxes.value(StorageSec)->title());
-    }
-
-    /* Audio */
-    {
-        m_secBoxes.value(AudioSec)->setTitle(tr("Audio", "details report"));
-        m_actions.value(AudioSec)->setText(m_secBoxes.value(AudioSec)->title());
-    }
-
-    /* Network */
-    {
-        m_secBoxes.value(NetworkSec)->setTitle(tr("Network", "details report"));
-        m_actions.value(NetworkSec)->setText(m_secBoxes.value(NetworkSec)->title());
-    }
-
-    /* Serial Ports */
-    {
-        m_secBoxes.value(SerialPortsSec)->setTitle(tr("Serial Ports", "details report"));
-        m_actions.value(SerialPortsSec)->setText(m_secBoxes.value(SerialPortsSec)->title());
-    }
-
-#ifdef VBOX_WITH_PARALLEL_PORTS
-    /* Parallel Ports */
-    {
-        m_secBoxes.value(ParallelPortsSec)->setTitle(tr("Parallel Ports", "details report"));
-        m_actions.value(ParallelPortsSec)->setText(m_secBoxes.value(ParallelPortsSec)->title());
-    }
-#endif /* VBOX_WITH_PARALLEL_PORTS */
-
-    /* USB */
-    {
-        m_secBoxes.value(USBSec)->setTitle(tr("USB", "details report"));
-        m_actions.value(USBSec)->setText(m_secBoxes.value(USBSec)->title());
-    }
-
-    /* Shared Folders */
-    {
-        m_secBoxes.value(SharedFoldersSec)->setTitle(tr("Shared Folders", "details report"));
-        m_actions.value(SharedFoldersSec)->setText(m_secBoxes.value(SharedFoldersSec)->title());
-    }
-
-    /* Description */
-    {
-        m_secBoxes.value(DescriptionSec)->setTitle(tr("Description", "details report"));
-        m_actions.value(DescriptionSec)->setText(m_secBoxes.value(DescriptionSec)->title());
-    }
+    return strResult;
 }
 
 /**

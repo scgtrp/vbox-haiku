@@ -22,6 +22,9 @@
 #else
 # define HOST_I386 1
 # define HOST_LONG_BITS 32
+#endif
+
+#ifndef IPRT_NO_CRT
 # ifdef RT_OS_WINDOWS
 #  define CONFIG_WIN32 1
 # elif defined(RT_OS_OS2)
@@ -35,11 +38,11 @@
 #  define CONFIG_SOLARIS
 # elif defined(RT_OS_HAIKU)
 #  define CONFIG_HAIKU
-# elif !defined(IPRT_NO_CRT)
+# else
 #  define HAVE_BYTESWAP_H 1
 # endif
 #endif
-#define QEMU_VERSION "0.8.1"
+#define QEMU_VERSION "0.13.0"
 #define CONFIG_UNAME_RELEASE ""
 #define CONFIG_QEMU_SHAREDIR "."
 

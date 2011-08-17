@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2006-2010 Oracle Corporation
+ * Copyright (C) 2006-2011 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -47,7 +47,7 @@ typedef class VRDEServerType *HVRDESERVER;
 #else
 struct VRDEServer;
 typedef struct VRDEServerType *HVRDESERVER;
-#endif /* __cplusplus */
+#endif /* !__cplusplus */
 
 /* Callback based VRDE server interface declarations. */
 
@@ -1117,7 +1117,7 @@ typedef struct _VRDEENTRYPOINTS_3
 } VRDEENTRYPOINTS_3;
 
 
-/* Indexes for VRDECallbackProperty. 
+/* Indexes for VRDECallbackProperty.
  * *_QP_* queries a property.
  * *_SP_* sets a property.
  */
@@ -1206,6 +1206,8 @@ typedef struct _VRDECALLBACKS_1
 
     /**
      * Query or set various information, on how the VRDE server operates, from or to the application.
+     * Queries for properties will always return success, and if the key is not known or has no
+     * value associated with it an empty string is returned.
      *
      *
      * @param pvCallback  The callback specific pointer.

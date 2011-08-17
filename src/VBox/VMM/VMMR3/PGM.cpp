@@ -4,7 +4,7 @@
  */
 
 /*
- * Copyright (C) 2006-2010 Oracle Corporation
+ * Copyright (C) 2006-2011 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -1196,6 +1196,20 @@ VMMR3DECL(int) PGMR3Init(PVM pVM)
     pVM->pgm.s.offVM       = RT_OFFSETOF(VM, pgm.s);
     pVM->pgm.s.offVCpuPGM  = RT_OFFSETOF(VMCPU, pgm.s);
 
+    for (unsigned i = 0; i < RT_ELEMENTS(pVM->pgm.s.aHandyPages); i++)
+    {
+        pVM->pgm.s.aHandyPages[i].HCPhysGCPhys  = NIL_RTHCPHYS;
+        pVM->pgm.s.aHandyPages[i].idPage        = NIL_GMM_PAGEID;
+        pVM->pgm.s.aHandyPages[i].idSharedPage  = NIL_GMM_PAGEID;
+    }
+
+    for (unsigned i = 0; i < RT_ELEMENTS(pVM->pgm.s.aLargeHandyPage); i++)
+    {
+        pVM->pgm.s.aLargeHandyPage[i].HCPhysGCPhys  = NIL_RTHCPHYS;
+        pVM->pgm.s.aLargeHandyPage[i].idPage        = NIL_GMM_PAGEID;
+        pVM->pgm.s.aLargeHandyPage[i].idSharedPage  = NIL_GMM_PAGEID;
+    }
+
     /* Init the per-CPU part. */
     for (VMCPUID idCpu = 0; idCpu < pVM->cCpus; idCpu++)
     {
@@ -1326,7 +1340,7 @@ VMMR3DECL(int) PGMR3Init(PVM pVM)
     AssertRCReturn(rc, rc);
 
     PGMR3PhysChunkInvalidateTLB(pVM);
-    PGMPhysInvalidatePageMapTLB(pVM);
+    pgmPhysInvalidatePageMapTLB(pVM);
 
     /*
      * For the time being we sport a full set of handy pages in addition to the base
@@ -2161,9 +2175,9 @@ VMMR3_INT_DECL(int) PGMR3InitCompleted(PVM pVM, VMINITCOMPLETED enmWhat)
 #ifdef VBOX_WITH_PCI_PASSTHROUGH
             if (pVM->pgm.s.fPciPassthrough)
             {
-                AssertLogRelReturn(pVM->pgm.s.fRamPreAlloc, VERR_INVALID_PARAMETER);
-                AssertLogRelReturn(HWACCMIsEnabled(pVM), VERR_INVALID_PARAMETER);
-                AssertLogRelReturn(HWACCMIsNestedPagingActive(pVM), VERR_INVALID_PARAMETER);
+                AssertLogRelReturn(pVM->pgm.s.fRamPreAlloc, VERR_PCI_PASSTHROUGH_NO_RAM_PREALLOC);
+                AssertLogRelReturn(HWACCMIsEnabled(pVM), VERR_PCI_PASSTHROUGH_NO_HWACCM);
+                AssertLogRelReturn(HWACCMIsNestedPagingActive(pVM), VERR_PCI_PASSTHROUGH_NO_NESTED_PAGING);
 
                 /*
                  * Report assignments to the IOMMU (hope that's good enough for now).

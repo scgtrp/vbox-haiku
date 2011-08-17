@@ -189,13 +189,10 @@ typedef SUPREQHDR *PSUPREQHDR;
  *     any IOC version requirements in SUPLib.cpp.
  *  -# When increment the major number, execute all pending work.
  *
- * Skip versions:
- *  - 0x0018XXXX - Used by 4.0 for the >= 32/64 CPUs support.
- *
  * @todo Pending work on next major version change:
  *          - None.
  */
-#define SUPDRV_IOC_VERSION                              0x00170001
+#define SUPDRV_IOC_VERSION                              0x00190000
 
 /** SUP_IOCTL_COOKIE. */
 typedef struct SUPCOOKIE
@@ -348,7 +345,11 @@ typedef struct SUPLDRSYM
 {
     /** Offset into of the string table. */
     uint32_t        offName;
-    /** Offset of the symbol relative to the image load address. */
+    /** Offset of the symbol relative to the image load address.
+     * @remarks When used inside the SUPDrv to calculate real addresses, it
+     *          must be cast to int32_t for the sake of native loader support
+     *          on Solaris.  (The loader puts the and data in different
+     *          memory areans, and the text one is generally higher.) */
     uint32_t        offSymbol;
 } SUPLDRSYM;
 /** Pointer to a symbol table entry. */

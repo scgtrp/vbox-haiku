@@ -2,35 +2,46 @@
 #ifndef QEMU_COMMON_H
 #define QEMU_COMMON_H
 
+#include "config-host.h"
+
 #ifdef VBOX
 
-# include <string.h>
-# include <inttypes.h>
+# include <iprt/string.h>
+# include <iprt/types.h>
 # include <iprt/ctype.h>
-
-#define QEMU_NORETURN __attribute__ ((__noreturn__))
 
 void pstrcpy(char *buf, int buf_size, const char *str);
 char *pstrcat(char *buf, int buf_size, const char *s);
-# define snprintf RTStrPrintf
+# define snprintf               RTStrPrintf
 
-#define qemu_isalnum(c)		RT_C_IS_ALNUM((unsigned char)(c))
-#define qemu_isalpha(c)		RT_C_IS_ALPHA((unsigned char)(c))
-#define qemu_iscntrl(c)		RT_C_IS_CNTRL((unsigned char)(c))
-#define qemu_isdigit(c)		RT_C_IS_DIGIT((unsigned char)(c))
-#define qemu_isgraph(c)		RT_C_IS_GRAPH((unsigned char)(c))
-#define qemu_islower(c)		RT_C_IS_LOWER((unsigned char)(c))
-#define qemu_isprint(c)		RT_C_IS_PRINT((unsigned char)(c))
-#define qemu_ispunct(c)		RT_C_IS_PUNCT((unsigned char)(c))
-#define qemu_isspace(c)		RT_C_IS_SPACE((unsigned char)(c))
-#define qemu_isupper(c)		RT_C_IS_UPPER((unsigned char)(c))
-#define qemu_isxdigit(c)	RT_C_IS_XDIGIT((unsigned char)(c))
-#define qemu_tolower(c)		RT_C_TO_LOWER((unsigned char)(c))
-#define qemu_toupper(c)		RT_C_TO_UPPER((unsigned char)(c))
-#define qemu_isascii(c)		RT_C_IS_ASCII((unsigned char)(c))
-#define qemu_toascii(c)		RT_C_TO_ASCII((unsigned char)(c))
+# define qemu_isalnum(c)        RT_C_IS_ALNUM((unsigned char)(c))
+# define qemu_isalpha(c)        RT_C_IS_ALPHA((unsigned char)(c))
+# define qemu_iscntrl(c)        RT_C_IS_CNTRL((unsigned char)(c))
+# define qemu_isdigit(c)        RT_C_IS_DIGIT((unsigned char)(c))
+# define qemu_isgraph(c)        RT_C_IS_GRAPH((unsigned char)(c))
+# define qemu_islower(c)        RT_C_IS_LOWER((unsigned char)(c))
+# define qemu_isprint(c)        RT_C_IS_PRINT((unsigned char)(c))
+# define qemu_ispunct(c)        RT_C_IS_PUNCT((unsigned char)(c))
+# define qemu_isspace(c)        RT_C_IS_SPACE((unsigned char)(c))
+# define qemu_isupper(c)        RT_C_IS_UPPER((unsigned char)(c))
+# define qemu_isxdigit(c)	RT_C_IS_XDIGIT((unsigned char)(c))
+# define qemu_tolower(c)        RT_C_TO_LOWER((unsigned char)(c))
+# define qemu_toupper(c)        RT_C_TO_UPPER((unsigned char)(c))
+# define qemu_isascii(c)        RT_C_IS_ASCII((unsigned char)(c))
+# define qemu_toascii(c)        RT_C_TO_ASCII((unsigned char)(c))
 
-#define qemu_init_vcpu(env)     do { } while (0) /* we don't need this :-) */
+# define qemu_init_vcpu(env)    do { } while (0) /* we don't need this :-) */
+
+# define QEMU_NORETURN              __attribute__((__noreturn__))
+# ifdef CONFIG_GCC_ATTRIBUTE_WARN_UNUSED_RESULT
+#  define QEMU_WARN_UNUSED_RESULT   __attribute__((warn_unused_result))
+# else
+#  define QEMU_WARN_UNUSED_RESULT
+# endif
+#define QEMU_BUILD_BUG_ON(x) typedef char __build_bug_on__##__LINE__[(x)?-1:1];
+
+#include <stdio.h>
+#include "cpu.h"
 
 
 #else /* !VBOX */
@@ -41,6 +52,19 @@ char *pstrcat(char *buf, int buf_size, const char *s);
 #endif
 
 #define QEMU_NORETURN __attribute__ ((__noreturn__))
+#ifdef CONFIG_GCC_ATTRIBUTE_WARN_UNUSED_RESULT
+#define QEMU_WARN_UNUSED_RESULT __attribute__((warn_unused_result))
+#else
+#define QEMU_WARN_UNUSED_RESULT
+#endif
+
+#define QEMU_BUILD_BUG_ON(x) typedef char __build_bug_on__##__LINE__[(x)?-1:1];
+
+typedef struct QEMUTimer QEMUTimer;
+typedef struct QEMUFile QEMUFile;
+typedef struct QEMUBH QEMUBH;
+typedef struct DeviceState DeviceState;
+
 
 /* Hack around the mess dyngen-exec.h causes: We need QEMU_NORETURN in files that
    cannot include the following headers without conflicts. This condition has
@@ -51,6 +75,7 @@ char *pstrcat(char *buf, int buf_size, const char *s);
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdarg.h>
+#include <stdbool.h>
 #include <string.h>
 #include <strings.h>
 #include <inttypes.h>
@@ -62,7 +87,6 @@ char *pstrcat(char *buf, int buf_size, const char *s);
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <assert.h>
-#include "config-host.h"
 
 #ifndef O_LARGEFILE
 #define O_LARGEFILE 0
@@ -70,17 +94,26 @@ char *pstrcat(char *buf, int buf_size, const char *s);
 #ifndef O_BINARY
 #define O_BINARY 0
 #endif
-
+#ifndef MAP_ANONYMOUS
+#define MAP_ANONYMOUS MAP_ANON
+#endif
 #ifndef ENOMEDIUM
 #define ENOMEDIUM ENODEV
 #endif
+#if !defined(ENOTSUP)
+#define ENOTSUP 4096
+#endif
 
-#ifndef HAVE_IOVEC
-#define HAVE_IOVEC
+#ifndef CONFIG_IOVEC
+#define CONFIG_IOVEC
 struct iovec {
     void *iov_base;
     size_t iov_len;
 };
+/*
+ * Use the same value as Linux for now.
+ */
+#define IOV_MAX		1024
 #else
 #include <sys/uio.h>
 #endif
@@ -88,10 +121,8 @@ struct iovec {
 #ifdef _WIN32
 #define fsync _commit
 #define lseek _lseeki64
-#define ENOTSUP 4096
 extern int qemu_ftruncate64(int, int64_t);
 #define ftruncate qemu_ftruncate64
-
 
 static inline char *realpath(const char *path, char *resolved_path)
 {
@@ -119,9 +150,11 @@ static inline char *realpath(const char *path, char *resolved_path)
 #endif /* !defined(NEED_CPU_H) */
 
 /* bottom halves */
-typedef struct QEMUBH QEMUBH;
-
 typedef void QEMUBHFunc(void *opaque);
+
+void async_context_push(void);
+void async_context_pop(void);
+int get_async_context_id(void);
 
 QEMUBH *qemu_bh_new(QEMUBHFunc *cb, void *opaque);
 void qemu_bh_schedule(QEMUBH *bh);
@@ -135,6 +168,7 @@ void qemu_bh_schedule_idle(QEMUBH *bh);
 void qemu_bh_cancel(QEMUBH *bh);
 void qemu_bh_delete(QEMUBH *bh);
 int qemu_bh_poll(void);
+void qemu_bh_update_timeout(int *timeout);
 
 uint64_t muldiv64(uint64_t a, uint32_t b, uint32_t c);
 
@@ -149,6 +183,12 @@ int stristart(const char *str, const char *val, const char **ptr);
 int qemu_strnlen(const char *s, int max_len);
 time_t mktimegm(struct tm *tm);
 int qemu_fls(int i);
+int qemu_fdatasync(int fd);
+int fcntl_setfl(int fd, int flag);
+
+/* path.c */
+void init_paths(const char *prefix);
+const char *path(const char *pathname);
 
 #define qemu_isalnum(c)		isalnum((unsigned char)(c))
 #define qemu_isalpha(c)		isalpha((unsigned char)(c))
@@ -173,8 +213,18 @@ void qemu_free(void *ptr);
 char *qemu_strdup(const char *str);
 char *qemu_strndup(const char *str, size_t size);
 
-void *get_mmap_addr(unsigned long size);
+void qemu_mutex_lock_iothread(void);
+void qemu_mutex_unlock_iothread(void);
 
+int qemu_open(const char *name, int flags, ...);
+ssize_t qemu_write_full(int fd, const void *buf, size_t count)
+    QEMU_WARN_UNUSED_RESULT;
+void qemu_set_cloexec(int fd);
+
+#ifndef _WIN32
+int qemu_eventfd(int pipefd[2]);
+int qemu_pipe(int pipefd[2]);
+#endif
 
 /* Error handling.  */
 
@@ -183,7 +233,7 @@ void QEMU_NORETURN hw_error(const char *fmt, ...)
 
 /* IO callbacks.  */
 typedef void IOReadHandler(void *opaque, const uint8_t *buf, int size);
-typedef int IOCanRWHandler(void *opaque);
+typedef int IOCanReadHandler(void *opaque);
 typedef void IOHandler(void *opaque);
 
 struct ParallelIOArg {
@@ -207,12 +257,14 @@ typedef struct PixelFormat PixelFormat;
 typedef struct TextConsole TextConsole;
 typedef TextConsole QEMUConsole;
 typedef struct CharDriverState CharDriverState;
+typedef struct MACAddr MACAddr;
 typedef struct VLANState VLANState;
-typedef struct QEMUFile QEMUFile;
+typedef struct VLANClientState VLANClientState;
 typedef struct i2c_bus i2c_bus;
 typedef struct i2c_slave i2c_slave;
 typedef struct SMBusDevice SMBusDevice;
-typedef struct QEMUTimer QEMUTimer;
+typedef struct PCIHostState PCIHostState;
+typedef struct PCIExpressHost PCIExpressHost;
 typedef struct PCIBus PCIBus;
 typedef struct PCIDevice PCIDevice;
 typedef struct SerialState SerialState;
@@ -221,8 +273,13 @@ typedef struct PCMCIACardState PCMCIACardState;
 typedef struct MouseTransformInfo MouseTransformInfo;
 typedef struct uWireSlave uWireSlave;
 typedef struct I2SCodec I2SCodec;
-typedef struct DeviceState DeviceState;
 typedef struct SSIBus SSIBus;
+typedef struct EventNotifier EventNotifier;
+typedef struct VirtIODevice VirtIODevice;
+
+typedef uint64_t pcibus_t;
+
+void cpu_exec_init_all(unsigned long tb_size);
 
 /* CPU save/load.  */
 void cpu_save(QEMUFile *f, void *opaque);
@@ -237,6 +294,14 @@ void qemu_notify_event(void);
 /* Unblock cpu */
 void qemu_cpu_kick(void *env);
 int qemu_cpu_self(void *env);
+
+/* work queue */
+struct qemu_work_item {
+    struct qemu_work_item *next;
+    void (*func)(void *data);
+    void *data;
+    int done;
+};
 
 #ifdef CONFIG_USER_ONLY
 #define qemu_init_vcpu(env) do { } while (0)
@@ -254,6 +319,7 @@ typedef struct QEMUIOVector {
 void qemu_iovec_init(QEMUIOVector *qiov, int alloc_hint);
 void qemu_iovec_init_external(QEMUIOVector *qiov, struct iovec *iov, int niov);
 void qemu_iovec_add(QEMUIOVector *qiov, void *base, size_t len);
+void qemu_iovec_concat(QEMUIOVector *dst, QEMUIOVector *src, size_t size);
 void qemu_iovec_destroy(QEMUIOVector *qiov);
 void qemu_iovec_reset(QEMUIOVector *qiov);
 void qemu_iovec_to_buffer(QEMUIOVector *qiov, void *buf);
@@ -261,6 +327,17 @@ void qemu_iovec_from_buffer(QEMUIOVector *qiov, const void *buf, size_t count);
 
 struct Monitor;
 typedef struct Monitor Monitor;
+
+/* Convert a byte between binary and BCD.  */
+static inline uint8_t to_bcd(uint8_t val)
+{
+    return ((val / 10) << 4) | (val % 10);
+}
+
+static inline uint8_t from_bcd(uint8_t val)
+{
+    return ((val >> 4) * 10) + (val & 0x0f);
+}
 
 #include "module.h"
 

@@ -4,7 +4,7 @@
  */
 
 /*
- * Copyright (C) 2008 Oracle Corporation
+ * Copyright (C) 2008-2011 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -103,6 +103,8 @@ struct VBoxNetAdapter
             RTMAC             Mac;
             /** Protocol families attached to this adapter. */
             protocol_family_t aAttachedFamilies[VBOXNETADP_MAX_FAMILIES];
+            /** Packet sniffer mode. */
+            bpf_tap_mode      nTapMode;
             /** @} */
 # elif defined(RT_OS_LINUX)
             /** @name Darwin instance data.
@@ -120,6 +122,8 @@ struct VBoxNetAdapter
 # endif
         } s;
 #endif
+        /** Union alignment to a pointer. */
+        void *pvAlign;
         /** Padding. */
 #if defined(RT_OS_WINDOWS)
 # if defined(VBOX_NETFLT_ONDEMAND_BIND)
@@ -138,6 +142,10 @@ struct VBoxNetAdapter
 };
 typedef struct VBoxNetAdapter VBOXNETADP;
 typedef VBOXNETADP *PVBOXNETADP;
+/* Paranoia checks for alignment and padding. */
+AssertCompileMemberAlignment(VBOXNETADP, u, ARCH_BITS/8);
+AssertCompileMemberAlignment(VBOXNETADP, szName, ARCH_BITS/8);
+AssertCompileMembersSameSize(VBOXNETADP, u, VBOXNETADP, u.abPadding);
 
 DECLHIDDEN(int) vboxNetAdpInit(void);
 DECLHIDDEN(void) vboxNetAdpShutdown(void);

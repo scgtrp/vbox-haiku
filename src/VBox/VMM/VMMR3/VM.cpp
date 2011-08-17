@@ -343,6 +343,14 @@ VMMR3DECL(int)   VMR3Create(uint32_t cCpus, PCVMM2USERMETHODS pVmm2UserMethods,
                                   "pack' which must be downloaded and installed separately");
                     break;
 
+                case VERR_PCI_PASSTHROUGH_NO_HWACCM:
+                    pszError = N_("PCI passthrough requires VT-x/AMD-V");
+                    break;
+
+                case VERR_PCI_PASSTHROUGH_NO_NESTED_PAGING:
+                    pszError = N_("PCI passthrough requires nested paging");
+                    break;
+
                 default:
                     if (VMR3GetErrorCountU(pUVM) == 0)
                         pszError = RTErrGetFull(rc);
@@ -603,6 +611,9 @@ static int vmR3CreateU(PUVM pUVM, uint32_t cCpus, PFNCFGMCONSTRUCTOR pfnCFGMCons
         AssertRelease(pVM->cCpus == cCpus);
         AssertRelease(pVM->uCpuExecutionCap == 100);
         AssertRelease(pVM->offVMCPU == RT_UOFFSETOF(VM, aCpus));
+        AssertCompileMemberAlignment(VM, cpum, 64);
+        AssertCompileMemberAlignment(VM, tm, 64);
+        AssertCompileMemberAlignment(VM, aCpus, PAGE_SIZE);
 
         Log(("VMR3Create: Created pUVM=%p pVM=%p pVMR0=%p hSelf=%#x cCpus=%RU32\n",
              pUVM, pVM, pVM->pVMR0, pVM->hSelf, pVM->cCpus));
@@ -678,13 +689,15 @@ static int vmR3CreateU(PUVM pUVM, uint32_t cCpus, PFNCFGMCONSTRUCTOR pfnCFGMCons
             if (RT_SUCCESS(rc))
             {
                 rc = CFGMR3QueryStringAllocDef(pRoot, "Name", &pUVM->vm.s.pszName, "<unknown>");
-                AssertLogRelMsg(RT_SUCCESS(rc) && rc != VERR_CFGM_VALUE_NOT_FOUND, ("Configuration error: Querying \"Name\" failed, rc=%Rrc\n", rc));
+                AssertLogRelMsg(RT_SUCCESS(rc), ("Configuration error: Querying \"Name\" failed, rc=%Rrc\n", rc));
             }
 
             if (RT_SUCCESS(rc))
             {
                 rc = CFGMR3QueryBytes(pRoot, "UUID", &pUVM->vm.s.Uuid, sizeof(pUVM->vm.s.Uuid));
-                AssertLogRelMsg(RT_SUCCESS(rc) && rc != VERR_CFGM_VALUE_NOT_FOUND, ("Configuration error: Querying \"UUID\" failed, rc=%Rrc\n", rc));
+                if (rc == VERR_CFGM_VALUE_NOT_FOUND)
+                    rc = VINF_SUCCESS;
+                AssertLogRelMsg(RT_SUCCESS(rc), ("Configuration error: Querying \"UUID\" failed, rc=%Rrc\n", rc));
             }
 
             if (RT_SUCCESS(rc))
@@ -2527,7 +2540,7 @@ static void vmR3DestroyUVM(PUVM pUVM, uint32_t cMilliesEMTWait)
             break;
         for (PVMREQ pReq = pReqHead; pReq; pReq = pReq->pNext)
         {
-            ASMAtomicUoWriteSize(&pReq->iStatus, VERR_INTERNAL_ERROR);
+            ASMAtomicUoWriteS32(&pReq->iStatus, VERR_INTERNAL_ERROR);
             ASMAtomicWriteSize(&pReq->enmState, VMREQSTATE_INVALID);
             RTSemEventSignal(pReq->EventSem);
             RTThreadSleep(2);
@@ -2552,7 +2565,7 @@ static void vmR3DestroyUVM(PUVM pUVM, uint32_t cMilliesEMTWait)
                 break;
             for (PVMREQ pReq = pReqHead; pReq; pReq = pReq->pNext)
             {
-                ASMAtomicUoWriteSize(&pReq->iStatus, VERR_INTERNAL_ERROR);
+                ASMAtomicUoWriteS32(&pReq->iStatus, VERR_INTERNAL_ERROR);
                 ASMAtomicWriteSize(&pReq->enmState, VMREQSTATE_INVALID);
                 RTSemEventSignal(pReq->EventSem);
                 RTThreadSleep(2);

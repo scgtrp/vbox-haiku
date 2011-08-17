@@ -5,7 +5,7 @@
  */
 
 /*
- * Copyright (C) 2006-2009 Oracle Corporation
+ * Copyright (C) 2006-2011 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -411,6 +411,8 @@ typedef struct AHCIPort
     bool                            fSpunUp;
     /** First D2H FIS was send. */
     bool                            fFirstD2HFisSend;
+    /** Mark the drive as having a non-rotational medium (i.e. as a SSD). */
+    bool                            fNonRotational;
     /** Attached device is a CD/DVD drive. */
     bool                            fATAPI;
     /** Passthrough SCSI commands. */
@@ -572,9 +574,11 @@ typedef struct AHCI
     PDMILEDPORTS                    ILeds;
     /** Status LUN: Partner of ILeds. */
     R3PTRTYPE(PPDMILEDCONNECTORS)   pLedsConnector;
+    /** Status LUN: Media Notifys. */
+    R3PTRTYPE(PPDMIMEDIANOTIFY)     pMediaNotify;
 
-#if HC_ARCH_BITS == 64
-    uint32_t                        Alignment1[2];
+#if HC_ARCH_BITS == 32
+    uint32_t                        Alignment1;
 #endif
 
     /** Base address of the MMIO region. */
@@ -893,15 +897,7 @@ typedef struct pAhciPort_opreg
 
 #ifndef VBOX_DEVICE_STRUCT_TESTCASE
 RT_C_DECLS_BEGIN
-PDMBOTHCBDECL(int) ahciMMIORead(PPDMDEVINS pDevIns, void *pvUser, RTGCPHYS GCPhysAddr, void *pv, unsigned cb);
-PDMBOTHCBDECL(int) ahciMMIOWrite(PPDMDEVINS pDevIns, void *pvUser, RTGCPHYS GCPhysAddr, void *pv, unsigned cb);
 static void ahciHBAReset(PAHCI pThis);
-PDMBOTHCBDECL(int) ahciIOPortWrite1(PPDMDEVINS pDevIns, void *pvUser, RTIOPORT Port, uint32_t u32, unsigned cb);
-PDMBOTHCBDECL(int) ahciIOPortRead1(PPDMDEVINS pDevIns, void *pvUser, RTIOPORT Port, uint32_t *pu32, unsigned cb);
-PDMBOTHCBDECL(int) ahciIOPortWrite2(PPDMDEVINS pDevIns, void *pvUser, RTIOPORT Port, uint32_t u32, unsigned cb);
-PDMBOTHCBDECL(int) ahciIOPortRead2(PPDMDEVINS pDevIns, void *pvUser, RTIOPORT Port, uint32_t *pu32, unsigned cb);
-PDMBOTHCBDECL(int) ahciLegacyFakeWrite(PPDMDEVINS pDevIns, void *pvUser, RTIOPORT Port, uint32_t u32, unsigned cb);
-PDMBOTHCBDECL(int) ahciLegacyFakeRead(PPDMDEVINS pDevIns, void *pvUser, RTIOPORT Port, uint32_t *pu32, unsigned cb);
 #ifdef IN_RING3
 static int  ahciPostFisIntoMemory(PAHCIPort pAhciPort, unsigned uFisType, uint8_t *cmdFis);
 static void ahciPostFirstD2HFisIntoMemory(PAHCIPort pAhciPort);
@@ -1046,7 +1042,7 @@ static int PortCmdIssue_w(PAHCI ahci, PAHCIPort pAhciPort, uint32_t iReg, uint32
     uCIValue = ASMAtomicXchgU32(&pAhciPort->u32TasksFinished, 0);
     pAhciPort->regCI &= ~uCIValue;
 
-    if (   (pAhciPort->regCMD & AHCI_PORT_CMD_ST)
+    if (   (pAhciPort->regCMD & AHCI_PORT_CMD_CR)
         && u32Value > 0)
     {
         uint32_t u32Tasks;
@@ -1315,15 +1311,16 @@ static int PortCmd_w(PAHCI ahci, PAHCIPort pAhciPort, uint32_t iReg, uint32_t u3
         {
             ahciLog(("%s: Engine starts\n", __FUNCTION__));
 
-            /** Set engine state to running. */
-            u32Value |= AHCI_PORT_CMD_CR;
+            /* Set engine state to running if there is a device attached. */
+            if (pAhciPort->pDrvBase)
+                u32Value |= AHCI_PORT_CMD_CR;
         }
         else
         {
             ahciLog(("%s: Engine stops\n", __FUNCTION__));
             /* Clear command issue register. */
             pAhciPort->regCI = 0;
-            /** Clear current command slot. */
+            /* Clear current command slot. */
             pAhciPort->u32CurrentCommandSlot = 0;
             u32Value &= ~AHCI_PORT_CMD_CR;
         }
@@ -1522,6 +1519,8 @@ static int PortFisAddr_w(PAHCI ahci, PAHCIPort pAhciPort, uint32_t iReg, uint32_
 {
     ahciLog(("%s: write u32Value=%#010x\n", __FUNCTION__, u32Value));
 
+    Assert(!(u32Value & ~AHCI_PORT_FB_RESERVED));
+
     pAhciPort->regFB = (u32Value & AHCI_PORT_FB_RESERVED);
     pAhciPort->GCPhysAddrFb = AHCI_RTGCPHYS_FROM_U32(pAhciPort->regFBU, pAhciPort->regFB);
 
@@ -1567,6 +1566,8 @@ static int PortCmdLstAddr_r(PAHCI ahci, PAHCIPort pAhciPort, uint32_t iReg, uint
 static int PortCmdLstAddr_w(PAHCI ahci, PAHCIPort pAhciPort, uint32_t iReg, uint32_t u32Value)
 {
     ahciLog(("%s: write u32Value=%#010x\n", __FUNCTION__, u32Value));
+
+    Assert(!(u32Value & ~AHCI_PORT_CLB_RESERVED));
 
     pAhciPort->regCLB = (u32Value & AHCI_PORT_CLB_RESERVED);
     pAhciPort->GCPhysAddrClb = AHCI_RTGCPHYS_FROM_U32(pAhciPort->regCLBU, pAhciPort->regCLB);
@@ -2146,7 +2147,7 @@ static int ahciRegisterRead(PAHCI pAhci, uint32_t uReg, void *pv, unsigned cb)
  * @param   pv          Where to fetch the result.
  * @param   cb          Number of bytes to write.
  */
-static int ahciRegisterWrite(PAHCI pAhci, uint32_t uReg, void *pv, unsigned cb)
+static int ahciRegisterWrite(PAHCI pAhci, uint32_t uReg, void const *pv, unsigned cb)
 {
     int rc = VINF_SUCCESS;
     uint32_t iReg;
@@ -2240,7 +2241,7 @@ PDMBOTHCBDECL(int) ahciMMIORead(PPDMDEVINS pDevIns, void *pvUser, RTGCPHYS GCPhy
  * @param   pv          Where to fetch the result.
  * @param   cb          Number of bytes to write.
  */
-PDMBOTHCBDECL(int) ahciMMIOWrite(PPDMDEVINS pDevIns, void *pvUser, RTGCPHYS GCPhysAddr, void *pv, unsigned cb)
+PDMBOTHCBDECL(int) ahciMMIOWrite(PPDMDEVINS pDevIns, void *pvUser, RTGCPHYS GCPhysAddr, void const *pv, unsigned cb)
 {
     PAHCI pAhci = PDMINS_2_DATA(pDevIns, PAHCI);
     int   rc = VINF_SUCCESS;
@@ -2387,6 +2388,8 @@ PDMBOTHCBDECL(int) ahciIdxDataWrite(PPDMDEVINS pDevIns, void *pvUser, RTIOPORT P
         {
             Assert(iReg == 1);
             rc = ahciRegisterWrite(pAhci, pAhci->regIdx, &u32, cb);
+            if (rc == VINF_IOM_HC_MMIO_WRITE)
+                rc = VINF_IOM_HC_IOPORT_WRITE;
         }
     }
     /* else: ignore */
@@ -2427,6 +2430,8 @@ PDMBOTHCBDECL(int) ahciIdxDataRead(PPDMDEVINS pDevIns, void *pvUser, RTIOPORT Po
         {
             Assert(iReg == 1);
             rc = ahciRegisterRead(pAhci, pAhci->regIdx, pu32, cb);
+            if (rc == VINF_IOM_HC_MMIO_READ)
+                rc = VINF_IOM_HC_IOPORT_READ;
         }
     }
     else
@@ -3071,6 +3076,8 @@ static int ahciIdentifySS(PAHCIPort pAhciPort, void *pvBuf)
     p[101] = RT_H2LE_U16(pAhciPort->cTotalSectors >> 16);
     p[102] = RT_H2LE_U16(pAhciPort->cTotalSectors >> 32);
     p[103] = RT_H2LE_U16(pAhciPort->cTotalSectors >> 48);
+    if (pAhciPort->fNonRotational)
+        p[217] = RT_H2LE_U16(1); /* Non-rotational medium */
 
     /* The following are SATA specific */
     p[75] = RT_H2LE_U16(pAhciPort->CTX_SUFF(pAhci)->cCmdSlotsAvail-1); /* Number of commands we support, 0's based */
@@ -4135,13 +4142,13 @@ static int atapiReadSectors(PAHCIPort pAhciPort, PAHCIPORTTASKSTATE pAhciPortTas
     switch (cbSector)
     {
         case 2048:
-            pAhciPortTaskState->uOffset = iATAPILBA * cbSector;
+            pAhciPortTaskState->uOffset = (uint64_t)iATAPILBA * cbSector;
             pAhciPortTaskState->cbTransfer = cSectors * cbSector;
             break;
         case 2352:
         {
             pAhciPortTaskState->pfnPostProcess = atapiReadSectors2352PostProcess;
-            pAhciPortTaskState->uOffset = iATAPILBA * 2048;
+            pAhciPortTaskState->uOffset = (uint64_t)iATAPILBA * 2048;
             pAhciPortTaskState->cbTransfer = cSectors * 2048;
             break;
         }
@@ -4378,17 +4385,24 @@ static AHCITXDIR atapiParseCmdVirtualATAPI(PAHCIPort pAhciPort, PAHCIPORTTASKSTA
                     case 1: /* 01 - Start motor */
                         break;
                     case 2: /* 10 - Eject media */
+                    {
                         /* This must be done from EMT. */
-                        {
-                            PAHCI pAhci = pAhciPort->CTX_SUFF(pAhci);
-                            PPDMDEVINS pDevIns = pAhci->CTX_SUFF(pDevIns);
+                        PAHCI pAhci = pAhciPort->CTX_SUFF(pAhci);
+                        PPDMDEVINS pDevIns = pAhci->CTX_SUFF(pDevIns);
 
-                            rc2 = VMR3ReqCallWait(PDMDevHlpGetVM(pDevIns), VMCPUID_ANY,
-                                                  (PFNRT)pAhciPort->pDrvMount->pfnUnmount, 3,
-                                                  pAhciPort->pDrvMount, false/*=fForce*/, true/*=fEject*/);
-                            Assert(RT_SUCCESS(rc2) || (rc2 == VERR_PDM_MEDIA_LOCKED) || (rc2 = VERR_PDM_MEDIA_NOT_MOUNTED));
+                        rc2 = VMR3ReqCallWait(PDMDevHlpGetVM(pDevIns), VMCPUID_ANY,
+                                              (PFNRT)pAhciPort->pDrvMount->pfnUnmount, 3,
+                                              pAhciPort->pDrvMount, false/*=fForce*/, true/*=fEject*/);
+                        Assert(RT_SUCCESS(rc2) || (rc2 == VERR_PDM_MEDIA_LOCKED) || (rc2 = VERR_PDM_MEDIA_NOT_MOUNTED));
+                        if (RT_SUCCESS(rc) && pAhci->pMediaNotify)
+                        {
+                            rc2 = VMR3ReqCallNoWait(PDMDevHlpGetVM(pDevIns), VMCPUID_ANY,
+                                                    (PFNRT)pAhci->pMediaNotify->pfnEjected, 2,
+                                                    pAhci->pMediaNotify, pAhciPort->iLUN);
+                            AssertRC(rc);
                         }
                         break;
+                    }
                     case 3: /* 11 - Load media */
                         /** @todo rc = s->pDrvMount->pfnLoadMedia(s->pDrvMount) */
                         break;
@@ -7078,7 +7092,7 @@ static DECLCALLBACK(int) ahciAsyncIOLoopWakeUp(PPDMDEVINS pDevIns, PPDMTHREAD pT
 /* -=-=-=-=- DBGF -=-=-=-=- */
 
 /**
- * LsiLogic status info callback.
+ * AHCI status info callback.
  *
  * @param   pDevIns     The device instance.
  * @param   pHlp        The output helpers.
@@ -7871,8 +7885,119 @@ static DECLCALLBACK(void) ahciR3Resume(PPDMDEVINS pDevIns)
     if (pAhci->fBootable)
         for (uint32_t i = 0; i < RT_ELEMENTS(pAhci->aCts); i++)
             ataControllerResume(&pAhci->aCts[i]);
-    return;
 }
+
+/**
+ * Initializes the VPD data of a attached device.
+ *
+ * @returns VBox status code.
+ * @param   pDevIns      The device instance.
+ * @param   pAhciPort    The attached device.
+ * @param   szName       Name of the port to get the CFGM node.
+ */
+static int ahciR3VpdInit(PPDMDEVINS pDevIns, PAHCIPort pAhciPort, const char *pszName)
+{
+    int rc = VINF_SUCCESS;
+    PAHCI pAhci = PDMINS_2_DATA(pDevIns, PAHCI);
+
+    /* Generate a default serial number. */
+    char szSerial[AHCI_SERIAL_NUMBER_LENGTH+1];
+    RTUUID Uuid;
+
+    if (pAhciPort->pDrvBlock)
+        rc = pAhciPort->pDrvBlock->pfnGetUuid(pAhciPort->pDrvBlock, &Uuid);
+    else
+        RTUuidClear(&Uuid);
+
+    if (RT_FAILURE(rc) || RTUuidIsNull(&Uuid))
+    {
+        /* Generate a predictable serial for drives which don't have a UUID. */
+        RTStrPrintf(szSerial, sizeof(szSerial), "VB%x-1a2b3c4d",
+                    pAhciPort->iLUN);
+    }
+    else
+        RTStrPrintf(szSerial, sizeof(szSerial), "VB%08x-%08x", Uuid.au32[0], Uuid.au32[3]);
+
+    /* Get user config if present using defaults otherwise. */
+    PCFGMNODE pCfgNode = CFGMR3GetChild(pDevIns->pCfg, pszName);
+    rc = CFGMR3QueryStringDef(pCfgNode, "SerialNumber", pAhciPort->szSerialNumber, sizeof(pAhciPort->szSerialNumber),
+                              szSerial);
+    if (RT_FAILURE(rc))
+    {
+        if (rc == VERR_CFGM_NOT_ENOUGH_SPACE)
+            return PDMDEV_SET_ERROR(pDevIns, VERR_INVALID_PARAMETER,
+                                    N_("AHCI configuration error: \"SerialNumber\" is longer than 20 bytes"));
+        return PDMDEV_SET_ERROR(pDevIns, rc,
+                                N_("AHCI configuration error: failed to read \"SerialNumber\" as string"));
+    }
+
+    rc = CFGMR3QueryStringDef(pCfgNode, "FirmwareRevision", pAhciPort->szFirmwareRevision, sizeof(pAhciPort->szFirmwareRevision),
+                              "1.0");
+    if (RT_FAILURE(rc))
+    {
+        if (rc == VERR_CFGM_NOT_ENOUGH_SPACE)
+            return PDMDEV_SET_ERROR(pDevIns, VERR_INVALID_PARAMETER,
+                                    N_("AHCI configuration error: \"FirmwareRevision\" is longer than 8 bytes"));
+        return PDMDEV_SET_ERROR(pDevIns, rc,
+                                N_("AHCI configuration error: failed to read \"FirmwareRevision\" as string"));
+    }
+
+    rc = CFGMR3QueryStringDef(pCfgNode, "ModelNumber", pAhciPort->szModelNumber, sizeof(pAhciPort->szModelNumber),
+                              pAhciPort->fATAPI ? "VBOX CD-ROM" : "VBOX HARDDISK");
+    if (RT_FAILURE(rc))
+    {
+        if (rc == VERR_CFGM_NOT_ENOUGH_SPACE)
+            return PDMDEV_SET_ERROR(pDevIns, VERR_INVALID_PARAMETER,
+                                   N_("AHCI configuration error: \"ModelNumber\" is longer than 40 bytes"));
+        return PDMDEV_SET_ERROR(pDevIns, rc,
+                                N_("AHCI configuration error: failed to read \"ModelNumber\" as string"));
+    }
+
+    rc = CFGMR3QueryBoolDef(pCfgNode, "NonRotationalMedium", &pAhciPort->fNonRotational, false);
+    if (RT_FAILURE(rc))
+        return PDMDEV_SET_ERROR(pDevIns, rc,
+                    N_("AHCI configuration error: failed to read \"NonRotationalMedium\" as boolean"));
+
+    /* There are three other identification strings for CD drives used for INQUIRY */
+    if (pAhciPort->fATAPI)
+    {
+        rc = CFGMR3QueryStringDef(pCfgNode, "ATAPIVendorId", pAhciPort->szInquiryVendorId, sizeof(pAhciPort->szInquiryVendorId),
+                                  "VBOX");
+        if (RT_FAILURE(rc))
+        {
+            if (rc == VERR_CFGM_NOT_ENOUGH_SPACE)
+                return PDMDEV_SET_ERROR(pDevIns, VERR_INVALID_PARAMETER,
+                                N_("AHCI configuration error: \"ATAPIVendorId\" is longer than 16 bytes"));
+            return PDMDEV_SET_ERROR(pDevIns, rc,
+                    N_("AHCI configuration error: failed to read \"ATAPIVendorId\" as string"));
+        }
+
+        rc = CFGMR3QueryStringDef(pCfgNode, "ATAPIProductId", pAhciPort->szInquiryProductId, sizeof(pAhciPort->szInquiryProductId),
+                                  "CD-ROM");
+        if (RT_FAILURE(rc))
+        {
+            if (rc == VERR_CFGM_NOT_ENOUGH_SPACE)
+                return PDMDEV_SET_ERROR(pDevIns, VERR_INVALID_PARAMETER,
+                                N_("AHCI configuration error: \"ATAPIProductId\" is longer than 16 bytes"));
+            return PDMDEV_SET_ERROR(pDevIns, rc,
+                    N_("AHCI configuration error: failed to read \"ATAPIProductId\" as string"));
+        }
+
+        rc = CFGMR3QueryStringDef(pCfgNode, "ATAPIRevision", pAhciPort->szInquiryRevision, sizeof(pAhciPort->szInquiryRevision),
+                                  "1.0");
+        if (RT_FAILURE(rc))
+        {
+            if (rc == VERR_CFGM_NOT_ENOUGH_SPACE)
+                return PDMDEV_SET_ERROR(pDevIns, VERR_INVALID_PARAMETER,
+                                N_("AHCI configuration error: \"ATAPIRevision\" is longer than 4 bytes"));
+            return PDMDEV_SET_ERROR(pDevIns, rc,
+                    N_("AHCI configuration error: failed to read \"ATAPIRevision\" as string"));
+        }
+    }
+
+    return rc;
+}
+
 
 /**
  * Detach notification.
@@ -7936,7 +8061,11 @@ static DECLCALLBACK(void) ahciR3Detach(PPDMDEVINS pDevIns, unsigned iLUN, uint32
          * Inform the guest about the removed device.
          */
         pAhciPort->regSSTS = 0;
-        ASMAtomicAndU32(&pAhciPort->regCMD, ~AHCI_PORT_CMD_CPS);
+        /*
+         * Clear CR bit too to prevent submission of new commands when CI is written
+         * (AHCI Spec 1.2: 7.4 Interaction of the Command List and Port Change Status).
+         */
+        ASMAtomicAndU32(&pAhciPort->regCMD, ~(AHCI_PORT_CMD_CPS | AHCI_PORT_CMD_CR));
         ASMAtomicOrU32(&pAhciPort->regIS, AHCI_PORT_IS_CPDS | AHCI_PORT_IS_PRCS);
         ASMAtomicOrU32(&pAhciPort->regSERR, AHCI_PORT_SERR_N);
         if (   (pAhciPort->regIE & AHCI_PORT_IE_CPDE)
@@ -8018,6 +8147,9 @@ static DECLCALLBACK(int)  ahciR3Attach(PPDMDEVINS pDevIns, unsigned iLUN, uint32
 
         if (RT_SUCCESS(rc))
         {
+            char szName[24];
+            RTStrPrintf(szName, sizeof(szName), "Port%d", iLUN);
+
             if (   pAhciPort->pDrvBlockAsync
                 && !pAhciPort->fATAPI)
             {
@@ -8025,9 +8157,6 @@ static DECLCALLBACK(int)  ahciR3Attach(PPDMDEVINS pDevIns, unsigned iLUN, uint32
             }
             else
             {
-                char szName[24];
-                RTStrPrintf(szName, sizeof(szName), "Port%d", iLUN);
-
                 pAhciPort->fAsyncInterface = false;
 
                 /* Create event semaphore. */
@@ -8048,8 +8177,11 @@ static DECLCALLBACK(int)  ahciR3Attach(PPDMDEVINS pDevIns, unsigned iLUN, uint32
                 }
             }
 
-            if (RT_SUCCESS(rc) && pAhciPort->fATAPI)
-                ahciMediumInserted(pAhciPort);
+            /*
+             * Init vendor product data.
+             */
+            if (RT_SUCCESS(rc))
+                rc = ahciR3VpdInit(pDevIns, pAhciPort, szName);
 
             /* Inform the guest about the added device in case of hotplugging. */
             if (   RT_SUCCESS(rc)
@@ -8061,6 +8193,15 @@ static DECLCALLBACK(int)  ahciR3Attach(PPDMDEVINS pDevIns, unsigned iLUN, uint32
                 ASMAtomicOrU32(&pAhciPort->regCMD, AHCI_PORT_CMD_CPS);
                 ASMAtomicOrU32(&pAhciPort->regIS, AHCI_PORT_IS_CPDS | AHCI_PORT_IS_PRCS | AHCI_PORT_IS_PCS);
                 ASMAtomicOrU32(&pAhciPort->regSERR, AHCI_PORT_SERR_X | AHCI_PORT_SERR_N);
+
+                if (pAhciPort->fATAPI)
+                    pAhciPort->regSIG = AHCI_PORT_SIG_ATAPI;
+                else
+                    pAhciPort->regSIG = AHCI_PORT_SIG_DISK;
+                pAhciPort->regSSTS = (0x01 << 8) | /* Interface is active. */
+                                     (0x02 << 4) | /* Generation 2 (3.0GBps) speed. */
+                                     (0x03 << 0);  /* Device detected and communication established. */
+
                 if (   (pAhciPort->regIE & AHCI_PORT_IE_CPDE)
                     || (pAhciPort->regIE & AHCI_PORT_IE_PCE)
                     || (pAhciPort->regIE & AHCI_PORT_IE_PRCE))
@@ -8154,6 +8295,8 @@ static DECLCALLBACK(int) ahciR3Construct(PPDMDEVINS pDevIns, int iInstance, PCFG
     bool       fR0Enabled = false;
     uint32_t   cbTotalBufferSize = 0;
     PDMDEV_CHECK_VERSIONS_RETURN(pDevIns);
+
+    LogFlowFunc(("pThis=%#p\n", pThis));
 
     /*
      * Validate and read configuration.
@@ -8322,7 +8465,7 @@ static DECLCALLBACK(int) ahciR3Construct(PPDMDEVINS pDevIns, int iInstance, PCFG
         return PDMDEV_SET_ERROR(pDevIns, rc,
                                 N_("AHCI cannot register PCI memory region for registers"));
 
-    rc = PDMDevHlpCritSectInit(pDevIns, &pThis->lock, RT_SRC_POS, "AHCI%d", pDevIns->iInstance);
+    rc = PDMDevHlpCritSectInit(pDevIns, &pThis->lock, RT_SRC_POS, "AHCI#%u", iInstance);
     if (RT_FAILURE(rc))
     {
         Log(("%s: Failed to create critical section.\n", __FUNCTION__));
@@ -8330,11 +8473,8 @@ static DECLCALLBACK(int) ahciR3Construct(PPDMDEVINS pDevIns, int iInstance, PCFG
     }
 
     /* Create the timer for command completion coalescing feature. */
-    /** @todo r=bird: Using the virtual sync clock needs some justification.
-     *        Currently not an issue as this feature isn't used by any guest
-     *        yet. */
-    rc = PDMDevHlpTMTimerCreate(pDevIns, TMCLOCK_VIRTUAL_SYNC, ahciCccTimer, pThis,
-                                TMTIMER_FLAGS_DEFAULT_CRIT_SECT, "AHCI CCC Timer", &pThis->pHbaCccTimerR3);
+    rc = PDMDevHlpTMTimerCreate(pDevIns, TMCLOCK_VIRTUAL, ahciCccTimer, pThis,
+                                TMTIMER_FLAGS_NO_CRIT_SECT, "AHCI CCC Timer", &pThis->pHbaCccTimerR3);
     if (RT_FAILURE(rc))
     {
         AssertMsgFailed(("pfnTMTimerCreate -> %Rrc\n", rc));
@@ -8436,94 +8576,9 @@ static DECLCALLBACK(int) ahciR3Construct(PPDMDEVINS pDevIns, int iInstance, PCFG
             /*
              * Init vendor product data.
              */
-            /* Generate a default serial number. */
-            char szSerial[AHCI_SERIAL_NUMBER_LENGTH+1];
-            RTUUID Uuid;
-            if (pAhciPort->pDrvBlock)
-                rc = pAhciPort->pDrvBlock->pfnGetUuid(pAhciPort->pDrvBlock, &Uuid);
-            else
-                RTUuidClear(&Uuid);
-
-            if (RT_FAILURE(rc) || RTUuidIsNull(&Uuid))
-            {
-                /* Generate a predictable serial for drives which don't have a UUID. */
-                RTStrPrintf(szSerial, sizeof(szSerial), "VB%x-1a2b3c4d",
-                            pAhciPort->iLUN);
-            }
-            else
-                RTStrPrintf(szSerial, sizeof(szSerial), "VB%08x-%08x", Uuid.au32[0], Uuid.au32[3]);
-
-            /* Get user config if present using defaults otherwise. */
-            PCFGMNODE pCfgNode = CFGMR3GetChild(pCfg, szName);
-            rc = CFGMR3QueryStringDef(pCfgNode, "SerialNumber", pAhciPort->szSerialNumber, sizeof(pAhciPort->szSerialNumber),
-                                      szSerial);
+            rc = ahciR3VpdInit(pDevIns, pAhciPort, szName);
             if (RT_FAILURE(rc))
-            {
-                if (rc == VERR_CFGM_NOT_ENOUGH_SPACE)
-                    return PDMDEV_SET_ERROR(pDevIns, VERR_INVALID_PARAMETER,
-                                N_("AHCI configuration error: \"SerialNumber\" is longer than 20 bytes"));
-                return PDMDEV_SET_ERROR(pDevIns, rc,
-                            N_("AHCI configuration error: failed to read \"SerialNumber\" as string"));
-            }
-
-            rc = CFGMR3QueryStringDef(pCfgNode, "FirmwareRevision", pAhciPort->szFirmwareRevision, sizeof(pAhciPort->szFirmwareRevision),
-                                      "1.0");
-            if (RT_FAILURE(rc))
-            {
-                if (rc == VERR_CFGM_NOT_ENOUGH_SPACE)
-                    return PDMDEV_SET_ERROR(pDevIns, VERR_INVALID_PARAMETER,
-                                N_("AHCI configuration error: \"FirmwareRevision\" is longer than 8 bytes"));
-                return PDMDEV_SET_ERROR(pDevIns, rc,
-                            N_("AHCI configuration error: failed to read \"FirmwareRevision\" as string"));
-            }
-
-            rc = CFGMR3QueryStringDef(pCfgNode, "ModelNumber", pAhciPort->szModelNumber, sizeof(pAhciPort->szModelNumber),
-                                      pAhciPort->fATAPI ? "VBOX CD-ROM" : "VBOX HARDDISK");
-            if (RT_FAILURE(rc))
-            {
-                if (rc == VERR_CFGM_NOT_ENOUGH_SPACE)
-                    return PDMDEV_SET_ERROR(pDevIns, VERR_INVALID_PARAMETER,
-                               N_("AHCI configuration error: \"ModelNumber\" is longer than 40 bytes"));
-                return PDMDEV_SET_ERROR(pDevIns, rc,
-                            N_("AHCI configuration error: failed to read \"ModelNumber\" as string"));
-            }
-
-            /* There are three other identification strings for CD drives used for INQUIRY */
-            if (pAhciPort->fATAPI)
-            {
-                rc = CFGMR3QueryStringDef(pCfgNode, "ATAPIVendorId", pAhciPort->szInquiryVendorId, sizeof(pAhciPort->szInquiryVendorId),
-                                          "VBOX");
-                if (RT_FAILURE(rc))
-                {
-                    if (rc == VERR_CFGM_NOT_ENOUGH_SPACE)
-                        return PDMDEV_SET_ERROR(pDevIns, VERR_INVALID_PARAMETER,
-                                        N_("PIIX3 configuration error: \"ATAPIVendorId\" is longer than 16 bytes"));
-                    return PDMDEV_SET_ERROR(pDevIns, rc,
-                            N_("PIIX3 configuration error: failed to read \"ATAPIVendorId\" as string"));
-                }
-
-                rc = CFGMR3QueryStringDef(pCfgNode, "ATAPIProductId", pAhciPort->szInquiryProductId, sizeof(pAhciPort->szInquiryProductId),
-                                          "CD-ROM");
-                if (RT_FAILURE(rc))
-                {
-                    if (rc == VERR_CFGM_NOT_ENOUGH_SPACE)
-                        return PDMDEV_SET_ERROR(pDevIns, VERR_INVALID_PARAMETER,
-                                        N_("PIIX3 configuration error: \"ATAPIProductId\" is longer than 16 bytes"));
-                    return PDMDEV_SET_ERROR(pDevIns, rc,
-                            N_("PIIX3 configuration error: failed to read \"ATAPIProductId\" as string"));
-                }
-
-                rc = CFGMR3QueryStringDef(pCfgNode, "ATAPIRevision", pAhciPort->szInquiryRevision, sizeof(pAhciPort->szInquiryRevision),
-                                          "1.0");
-                if (RT_FAILURE(rc))
-                {
-                    if (rc == VERR_CFGM_NOT_ENOUGH_SPACE)
-                        return PDMDEV_SET_ERROR(pDevIns, VERR_INVALID_PARAMETER,
-                                        N_("PIIX3 configuration error: \"ATAPIRevision\" is longer than 4 bytes"));
-                    return PDMDEV_SET_ERROR(pDevIns, rc,
-                            N_("PIIX3 configuration error: failed to read \"ATAPIRevision\" as string"));
-                }
-            }
+                return rc;
 
             /*
              * If the new async interface is available we use a PDMQueue to transmit
@@ -8565,7 +8620,10 @@ static DECLCALLBACK(int) ahciR3Construct(PPDMDEVINS pDevIns, int iInstance, PCFG
      */
     rc = PDMDevHlpDriverAttach(pDevIns, PDM_STATUS_LUN, &pThis->IBase, &pBase, "Status Port");
     if (RT_SUCCESS(rc))
+    {
         pThis->pLedsConnector = PDMIBASE_QUERY_INTERFACE(pBase, PDMILEDCONNECTORS);
+        pThis->pMediaNotify = PDMIBASE_QUERY_INTERFACE(pBase, PDMIMEDIANOTIFY);
+    }
     else if (rc != VERR_PDM_NO_ATTACHED_DRIVER)
     {
         AssertMsgFailed(("Failed to attach to status driver. rc=%Rrc\n", rc));
@@ -8617,15 +8675,29 @@ static DECLCALLBACK(int) ahciR3Construct(PPDMDEVINS pDevIns, int iInstance, PCFG
 
             char szName[24];
             RTStrPrintf(szName, sizeof(szName), "EmulatedATA%d", i);
-            rc = ataControllerInit(pDevIns, pCtl,
+            rc = ataControllerInit(pDevIns, pCtl, pThis->pMediaNotify,
                                    iPortMaster, pThis->ahciPort[iPortMaster].pDrvBase,
                                    &pThis->ahciPort[iPortMaster].Led,
                                    &pThis->ahciPort[iPortMaster].StatBytesRead,
                                    &pThis->ahciPort[iPortMaster].StatBytesWritten,
+                                   pThis->ahciPort[iPortMaster].szSerialNumber,
+                                   pThis->ahciPort[iPortMaster].szFirmwareRevision,
+                                   pThis->ahciPort[iPortMaster].szModelNumber,
+                                   pThis->ahciPort[iPortMaster].szInquiryVendorId,
+                                   pThis->ahciPort[iPortMaster].szInquiryProductId,
+                                   pThis->ahciPort[iPortMaster].szInquiryRevision,
+                                   pThis->ahciPort[iPortMaster].fNonRotational,
                                    iPortSlave, pThis->ahciPort[iPortSlave].pDrvBase,
                                    &pThis->ahciPort[iPortSlave].Led,
                                    &pThis->ahciPort[iPortSlave].StatBytesRead,
                                    &pThis->ahciPort[iPortSlave].StatBytesWritten,
+                                   pThis->ahciPort[iPortSlave].szSerialNumber,
+                                   pThis->ahciPort[iPortSlave].szFirmwareRevision,
+                                   pThis->ahciPort[iPortSlave].szModelNumber,
+                                   pThis->ahciPort[iPortSlave].szInquiryVendorId,
+                                   pThis->ahciPort[iPortSlave].szInquiryProductId,
+                                   pThis->ahciPort[iPortSlave].szInquiryRevision,
+                                   pThis->ahciPort[iPortSlave].fNonRotational,
                                    &cbSSMState, szName);
             if (RT_FAILURE(rc))
                 return rc;

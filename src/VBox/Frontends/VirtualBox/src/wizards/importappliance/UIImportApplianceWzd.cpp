@@ -110,7 +110,7 @@ UIImportApplianceWzd::UIImportApplianceWzd(const QString &strFile /* = "" */, QW
     addPage(new UIImportApplianceWzdPage2);
     if (!strFile.isEmpty())
     {
-        VBoxImportApplianceWgt *applianceWidget = field("applianceWidget").value<ImportAppliancePointer>();
+        UIApplianceImportEditorWidget *applianceWidget = field("applianceWidget").value<ImportAppliancePointer>();
 
         if (!applianceWidget->setFile(strFile))
             return;
@@ -142,7 +142,7 @@ UIImportApplianceWzd::UIImportApplianceWzd(const QString &strFile /* = "" */, QW
 bool UIImportApplianceWzd::isValid() const
 {
     bool fResult = false;
-    if (VBoxImportApplianceWgt *applianceWidget = field("applianceWidget").value<ImportAppliancePointer>())
+    if (UIApplianceImportEditorWidget *applianceWidget = field("applianceWidget").value<ImportAppliancePointer>())
         fResult = applianceWidget->isValid();
 
     return fResult;
@@ -155,6 +155,7 @@ void UIImportApplianceWzd::retranslateUi()
 
     /* Translate 'Restore Defaults' button */
     setButtonText(QWizard::CustomButton1, tr("Restore Defaults"));
+    setButtonText(QWizard::FinishButton, tr("Import"));
 }
 
 void UIImportApplianceWzd::sltCurrentIdChanged(int iId)
@@ -209,7 +210,7 @@ bool UIImportApplianceWzdPage1::isComplete() const
 bool UIImportApplianceWzdPage1::validatePage()
 {
     AssertMsg(!field("applianceWidget").value<ImportAppliancePointer>().isNull(), ("Appliance Widget is not set!\n"));
-    VBoxImportApplianceWgt *applianceWidget = field("applianceWidget").value<ImportAppliancePointer>();
+    UIApplianceImportEditorWidget *applianceWidget = field("applianceWidget").value<ImportAppliancePointer>();
 
     /* Set the file path only if something had changed */
     if (m_pFileSelector->isModified())

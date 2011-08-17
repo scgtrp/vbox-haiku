@@ -21,21 +21,25 @@
 #include <VBox/vd.h>
 #include <VBox/version.h>
 
+#include "VBoxUtils.h"
 #include "VBoxDefs.h"
 #include "VBoxSelectorWnd.h"
-#include "VBoxProblemReporter.h"
+#include "UIMessageCenter.h"
 #include "QIMessageBox.h"
 #include "QIDialogButtonBox.h"
 #include "UIIconPool.h"
+#include "UIActionPoolSelector.h"
+#include "UIActionPoolRuntime.h"
 #include "UIExtraDataEventHandler.h"
 #include "QIFileDialog.h"
+#include "UINetworkManager.h"
+#include "UIUpdateManager.h"
 
 #include "UIMachine.h"
 #include "UISession.h"
 #ifdef VBOX_WITH_REGISTRATION
 # include "UIRegistrationWzd.h"
 #endif
-#include "VBoxUpdateDlg.h"
 #ifdef VBOX_WITH_VIDEOHWACCEL
 # include "VBoxFBOverlay.h"
 #endif /* VBOX_WITH_VIDEOHWACCEL */
@@ -63,6 +67,7 @@
 #include <QDir>
 #include <QHelpEvent>
 #include <QLocale>
+#include <QNetworkProxy>
 
 #ifdef VBOX_GUI_WITH_PIDFILE
 # include <QTextStream>
@@ -267,13 +272,16 @@ VBoxGlobal::VBoxGlobal()
 #ifdef VBOX_WITH_REGISTRATION
     , mRegDlg (NULL)
 #endif
-    , mUpdDlg (NULL)
 #ifdef VBOX_GUI_WITH_SYSTRAY
     , mIsTrayMenu (false)
     , mIncreasedWindowCounter (false)
 #endif
     , mMediaEnumThread (NULL)
     , mIsKWinManaged (false)
+    , mDisablePatm(false)
+    , mDisableCsam(false)
+    , mRecompileSupervisor(false)
+    , mRecompileUser(false)
     , mVerString ("1.0")
 {
 }
@@ -381,7 +389,7 @@ bool VBoxGlobal::setSettings (VBoxGlobalSettings &gs)
 
     if (!mVBox.isOk())
     {
-        vboxProblem().cannotSaveGlobalConfig (mVBox);
+        msgCenter().cannotSaveGlobalConfig (mVBox);
         return false;
     }
 
@@ -1238,6 +1246,24 @@ StorageSlot VBoxGlobal::toStorageSlot (const QString &aSlot) const
     return result;
 }
 
+QString VBoxGlobal::toString(KMediumVariant mediumVariant) const
+{
+    switch (mediumVariant)
+    {
+        case KMediumVariant_Standard:
+            return tr("Dynamically allocated storage");
+        case (KMediumVariant)(KMediumVariant_Standard | KMediumVariant_Fixed):
+            return tr("Fixed size storage");
+        case (KMediumVariant)(KMediumVariant_Standard | KMediumVariant_VmdkSplit2G):
+            return tr("Dynamically allocated storage split into files of less than 2GB");
+        case (KMediumVariant)(KMediumVariant_Standard | KMediumVariant_Fixed | KMediumVariant_VmdkSplit2G):
+            return tr("Fixed size storage split into files of less than 2GB");
+        default:
+            break;
+    }
+    return QString();
+}
+
 /**
  * Returns the list of all device types (VirtualBox::DeviceType COM enum).
  */
@@ -1631,6 +1657,9 @@ QString VBoxGlobal::detailsReport (const CMachine &aMachine, bool aWithLinks)
                      + QString (sSectionItemTpl2).arg (tr ("Processor(s)", "details report"),
                                                        tr ("<nobr>%1</nobr>", "details report"))
                        .arg (aMachine.GetCPUCount())
+                     + QString (sSectionItemTpl2).arg (tr ("Execution Cap", "details report"),
+                                                       tr ("<nobr>%1%</nobr>", "details report"))
+                       .arg (aMachine.GetCPUExecutionCap())
                      + QString (sSectionItemTpl2).arg (tr ("Boot Order", "details report"), bootOrder)
 #ifdef VBOX_WITH_FULL_DETAILS_REPORT
                      + QString (sSectionItemTpl2).arg (tr ("ACPI", "details report"), acpi)
@@ -1828,18 +1857,16 @@ QString VBoxGlobal::detailsReport (const CMachine &aMachine, bool aWithLinks)
                  * this name instead */
                 if (type == KNetworkAttachmentType_Bridged)
                     attType = attType.arg (tr ("Bridged adapter, %1",
-                        "details report (network)").arg (adapter.GetHostInterface()));
+                        "details report (network)").arg (adapter.GetBridgedInterface()));
                 else if (type == KNetworkAttachmentType_Internal)
                     attType = attType.arg (tr ("Internal network, '%1'",
                         "details report (network)").arg (adapter.GetInternalNetwork()));
                 else if (type == KNetworkAttachmentType_HostOnly)
                     attType = attType.arg (tr ("Host-only adapter, '%1'",
-                        "details report (network)").arg (adapter.GetHostInterface()));
-#ifdef VBOX_WITH_VDE
-                else if (type == KNetworkAttachmentType_VDE)
-                    attType = attType.arg (tr ("VDE network, '%1'",
-                        "details report (network)").arg (adapter.GetVDENetwork()));
-#endif
+                        "details report (network)").arg (adapter.GetHostOnlyInterface()));
+                else if (type == KNetworkAttachmentType_Generic)
+                    attType = attType.arg (tr ("Generic, '%1'",
+                        "details report (network)").arg (adapter.GetGenericDriver()));
                 else
                     attType = attType.arg (vboxGlobal().toString (type));
 
@@ -2156,7 +2183,7 @@ bool VBoxGlobal::showVirtualBoxLicense()
     /* Check the version again. */
     if (!versionNumber)
     {
-        vboxProblem().cannotFindLicenseFiles (path);
+        msgCenter().cannotFindLicenseFiles (path);
         return false;
     }
 
@@ -2196,7 +2223,7 @@ CSession VBoxGlobal::openSession(const QString &aId, bool aExisting /* = false *
     session.createInstance(CLSID_Session);
     if (session.isNull())
     {
-        vboxProblem().cannotOpenSession (session);
+        msgCenter().cannotOpenSession (session);
         return session;
     }
 
@@ -2218,7 +2245,7 @@ CSession VBoxGlobal::openSession(const QString &aId, bool aExisting /* = false *
 
     if (!mVBox.isOk())
     {
-        vboxProblem().cannotOpenSession(mVBox, foundMachine);
+        msgCenter().cannotOpenSession(mVBox, foundMachine);
         session.detach();
     }
 
@@ -2425,6 +2452,23 @@ void VBoxGlobal::startEnumeratingMedia()
     emit mediumEnumStarted();
 
     mMediaEnumThread->start();
+}
+
+void VBoxGlobal::reloadProxySettings()
+{
+    UIProxyManager proxyManager(settings().proxySettings());
+    if (proxyManager.proxyEnabled())
+    {
+        QNetworkProxy::setApplicationProxy(QNetworkProxy(QNetworkProxy::HttpProxy,
+                                                         proxyManager.proxyHost(),
+                                                         proxyManager.proxyPort().toInt(),
+                                                         proxyManager.authEnabled() ? proxyManager.authLogin() : QString(),
+                                                         proxyManager.authEnabled() ? proxyManager.authPassword() : QString()));
+    }
+    else
+    {
+        QNetworkProxy::setApplicationProxy(QNetworkProxy(QNetworkProxy::NoProxy));
+    }
 }
 
 VBoxDefs::MediumType VBoxGlobal::mediumTypeToLocal(KDeviceType globalType)
@@ -2737,7 +2781,7 @@ QString VBoxGlobal::openMedium(VBoxDefs::MediumType mediumType, QString strMediu
     vbox.SetExtraData(strRecentListKey, recentMediumList.join(";"));
 
     /* Open corresponding medium: */
-    CMedium comMedium = vbox.OpenMedium(strMediumLocation, mediumTypeToGlobal(mediumType), KAccessMode_ReadWrite);
+    CMedium comMedium = vbox.OpenMedium(strMediumLocation, mediumTypeToGlobal(mediumType), KAccessMode_ReadWrite, false);
 
     if (vbox.isOk())
     {
@@ -2756,7 +2800,7 @@ QString VBoxGlobal::openMedium(VBoxDefs::MediumType mediumType, QString strMediu
         return vboxMedium.id();
     }
     else
-        vboxProblem().cannotOpenMedium(pParent, vbox, mediumType, strMediumLocation);
+        msgCenter().cannotOpenMedium(pParent, vbox, mediumType, strMediumLocation);
 
     return QString();
 }
@@ -2968,10 +3012,8 @@ void VBoxGlobal::retranslateUi()
         tr ("Internal Network", "NetworkAttachmentType");
     mNetworkAttachmentTypes [KNetworkAttachmentType_HostOnly] =
         tr ("Host-only Adapter", "NetworkAttachmentType");
-#ifdef VBOX_WITH_VDE
-    mNetworkAttachmentTypes [KNetworkAttachmentType_VDE] =
-        tr ("VDE Adapter", "NetworkAttachmentType");
-#endif
+    mNetworkAttachmentTypes [KNetworkAttachmentType_Generic] =
+        tr ("Generic Driver", "NetworkAttachmentType");
 
     mNetworkAdapterPromiscModePolicyTypes [KNetworkAdapterPromiscModePolicy_Deny] =
         tr ("Deny", "NetworkAdapterPromiscModePolicyType");
@@ -3172,7 +3214,7 @@ void VBoxGlobal::loadLanguage (const QString &aLangId)
              * case, if no explicit language file exists, we will simply
              * fall-back to English (built-in). */
             if (!aLangId.isNull() && langId != "en")
-                vboxProblem().cannotFindLanguage (langId, nlsPath);
+                msgCenter().cannotFindLanguage (langId, nlsPath);
             /* selectedLangId remains built-in here */
             AssertReturnVoid (selectedLangId == gVBoxBuiltInLangName);
         }
@@ -3210,7 +3252,7 @@ void VBoxGlobal::loadLanguage (const QString &aLangId)
         sLoadedLangId = selectedLangId;
     else
     {
-        vboxProblem().cannotLoadLanguage (languageFileName);
+        msgCenter().cannotLoadLanguage (languageFileName);
         sLoadedLangId = gVBoxBuiltInLangName;
     }
 
@@ -3247,7 +3289,7 @@ void VBoxGlobal::loadLanguage (const QString &aLangId)
          * but the load failure is so rare here that it's not worth a separate
          * message (but still, having something is better than having none) */
         if (!loadOk && !aLangId.isNull())
-            vboxProblem().cannotLoadLanguage (languageFileName);
+            msgCenter().cannotLoadLanguage (languageFileName);
     }
     if (fResetToC)
         sLoadedLangId = "C";
@@ -3804,27 +3846,12 @@ QString VBoxGlobal::formatSize (quint64 aSize, uint aDecimal /* = 2 */,
     return QString ("%1 %2").arg (number).arg (Suffixes [suffix]);
 }
 
-/* static */
-bool VBoxGlobal::shouldWarnAboutToLowVRAM(const CMachine *pMachine /* = 0 */)
-{
-    static QStringList osList = QStringList()
-        << "Other" << "DOS" << "Netware" << "L4" << "QNX" << "JRockitVE";
-
-    bool fResult = true;
-    if (   pMachine
-        && !pMachine->isNull()
-        && osList.contains(pMachine->GetOSTypeId()))
-        fResult = false;
-
-    return fResult;
-}
-
 /**
  *  Returns the required video memory in bytes for the current desktop
  *  resolution at maximum possible screen depth in bpp.
  */
 /* static */
-quint64 VBoxGlobal::requiredVideoMemory (CMachine *aMachine /* = 0 */, int cMonitors /* = 1 */)
+quint64 VBoxGlobal::requiredVideoMemory(const QString &strGuestOSTypeId, int cMonitors /* = 1 */)
 {
     QSize desktopRes = QApplication::desktop()->screenGeometry().size();
     QDesktopWidget *pDW = QApplication::desktop();
@@ -3862,23 +3889,19 @@ quint64 VBoxGlobal::requiredVideoMemory (CMachine *aMachine /* = 0 */, int cMoni
     quint64 needMBytes = needBits % (8 * _1M) ? needBits / (8 * _1M) + 1 :
                          needBits / (8 * _1M) /* convert to megabytes */;
 
-    if (aMachine && !aMachine->isNull())
+    if (strGuestOSTypeId.startsWith("Windows"))
     {
-       QString typeId = aMachine->GetOSTypeId();
-       if (typeId.startsWith("Windows"))
-       {
-           /* Windows guests need offscreen VRAM too for graphics acceleration features. */
+       /* Windows guests need offscreen VRAM too for graphics acceleration features: */
 #ifdef VBOX_WITH_CRHGSMI
-           if (typeId == "WindowsVista" || typeId == "Windows7")
-           {
-               /* wddm mode, there are two surfaces for each screen: shadow & primary */
-               needMBytes *= 3;
-           }
-           else
-#endif
-           {
-               needMBytes *= 2;
-           }
+       if (isWddmCompatibleOsType(strGuestOSTypeId))
+       {
+           /* wddm mode, there are two surfaces for each screen: shadow & primary */
+           needMBytes *= 3;
+       }
+       else
+#endif /* VBOX_WITH_CRHGSMI */
+       {
+           needMBytes *= 2;
        }
     }
 
@@ -4433,14 +4456,20 @@ quint64 VBoxGlobal::required2DOffscreenVideoMemory()
 
 #ifdef VBOX_WITH_CRHGSMI
 /* static */
-quint64 VBoxGlobal::required3DWddmOffscreenVideoMemory(CMachine *aMachine /* = 0 */, int cMonitors /* = 1 */)
+quint64 VBoxGlobal::required3DWddmOffscreenVideoMemory(const QString &strGuestOSTypeId, int cMonitors /* = 1 */)
 {
     cMonitors = RT_MAX(cMonitors, 1);
-    quint64 cbSize = VBoxGlobal::requiredVideoMemory(aMachine, 1); /* why not cMonitors? */
+    quint64 cbSize = VBoxGlobal::requiredVideoMemory(strGuestOSTypeId, 1); /* why not cMonitors? */
     cbSize += 64 * _1M;
     return cbSize;
 }
-#endif
+
+/* static */
+bool VBoxGlobal::isWddmCompatibleOsType(const QString &strGuestOSTypeId)
+{
+    return strGuestOSTypeId.startsWith("WindowsVista") || strGuestOSTypeId.startsWith("Windows7") || strGuestOSTypeId.startsWith("Windows2008");
+}
+#endif /* VBOX_WITH_CRHGSMI */
 
 #ifdef Q_WS_MAC
 bool VBoxGlobal::isSheetWindowsAllowed(QWidget *pParent) const
@@ -4533,7 +4562,7 @@ bool VBoxGlobal::openURL (const QString &aURL)
     bool result = client.result();
 
     if (!result)
-        vboxProblem().cannotOpenURL (aURL);
+        msgCenter().cannotOpenURL (aURL);
 
     return result;
 }
@@ -4541,8 +4570,8 @@ bool VBoxGlobal::openURL (const QString &aURL)
 /**
  * Shows the VirtualBox registration dialog.
  *
- * @note that this method is not part of VBoxProblemReporter (like e.g.
- *       VBoxProblemReporter::showHelpAboutDialog()) because it is tied to
+ * @note that this method is not part of UIMessageCenter (like e.g.
+ *       UIMessageCenter::sltShowHelpAboutDialog()) because it is tied to
  *       VBoxCallback::OnExtraDataChange() handling performed by VBoxGlobal.
  *
  * @param aForce
@@ -4584,70 +4613,15 @@ void VBoxGlobal::showRegistrationDialog (bool aForce)
 #endif
 }
 
-/**
- * Shows the VirtualBox version check & update dialog.
- *
- * @note that this method is not part of VBoxProblemReporter (like e.g.
- *       VBoxProblemReporter::showHelpAboutDialog()) because it is tied to
- *       VBoxCallback::OnExtraDataChange() handling performed by VBoxGlobal.
- *
- * @param aForce
- */
-void VBoxGlobal::showUpdateDialog (bool aForce)
-{
-    /* Silently check in one day after current time-stamp */
-    QTimer::singleShot (24 /* hours */   * 60   /* minutes */ *
-                        60 /* seconds */ * 1000 /* milliseconds */,
-                        this, SLOT (perDayNewVersionNotifier()));
-
-    bool isNecessary = VBoxUpdateDlg::isNecessary();
-
-    if (!aForce && !isNecessary)
-        return;
-
-    if (mUpdDlg)
-    {
-        if (!mUpdDlg->isHidden())
-        {
-            mUpdDlg->setWindowState (mUpdDlg->windowState() & ~Qt::WindowMinimized);
-            mUpdDlg->raise();
-            mUpdDlg->activateWindow();
-        }
-    }
-    else
-    {
-        /* Store the ID of the main window to ensure that only one
-         * update dialog is shown at a time. Due to manipulations with
-         * OnExtraDataCanChange() and OnExtraDataChange() signals, this extra
-         * data item acts like an inter-process mutex, so the first process
-         * that attempts to set it will win, the rest will get a failure from
-         * the SetExtraData() call. */
-        mVBox.SetExtraData (VBoxDefs::GUI_UpdateDlgWinID,
-                            QString ("%1").arg ((qulonglong) mMainWindow->winId()));
-
-        if (mVBox.isOk())
-        {
-            /* We've got the "mutex", create a new update dialog */
-            VBoxUpdateDlg *dlg = new VBoxUpdateDlg (&mUpdDlg, aForce, 0);
-            dlg->setAttribute (Qt::WA_DeleteOnClose);
-            Assert (dlg == mUpdDlg);
-
-            /* Update dialog always in background mode for now.
-             * if (!aForce && isAutomatic) */
-            mUpdDlg->search();
-            /* else mUpdDlg->show(); */
-        }
-    }
-}
-
-void VBoxGlobal::perDayNewVersionNotifier()
-{
-    showUpdateDialog (false /* force show? */);
-}
-
 void VBoxGlobal::sltGUILanguageChange(QString strLang)
 {
     loadLanguage(strLang);
+}
+
+void VBoxGlobal::sltProcessGlobalSettingChange()
+{
+    /* Reload proxy settings: */
+    reloadProxySettings();
 }
 
 // Protected members
@@ -4665,7 +4639,7 @@ bool VBoxGlobal::event (QEvent *e)
             {
                 if (ev->mMedium.state() == KMediumState_Inaccessible &&
                     !ev->mMedium.result().isOk())
-                    vboxProblem().cannotGetMediaAccessibility (ev->mMedium);
+                    msgCenter().cannotGetMediaAccessibility (ev->mMedium);
                 Assert (ev->mIterator != mMediaList.end());
                 *(ev->mIterator) = ev->mMedium;
                 emit mediumEnumerated (*ev->mIterator);
@@ -4794,14 +4768,14 @@ void VBoxGlobal::init()
     HRESULT rc = COMBase::InitializeCOM(true);
     if (FAILED (rc))
     {
-        vboxProblem().cannotInitCOM (rc);
+        msgCenter().cannotInitCOM (rc);
         return;
     }
 
     mVBox.createInstance (CLSID_VirtualBox);
     if (!mVBox.isOk())
     {
-        vboxProblem().cannotCreateVirtualBox (mVBox);
+        msgCenter().cannotCreateVirtualBox (mVBox);
         return;
     }
 
@@ -4812,7 +4786,7 @@ void VBoxGlobal::init()
     gset.load (mVBox);
     if (!mVBox.isOk() || !gset)
     {
-        vboxProblem().cannotLoadGlobalConfig (mVBox, gset.lastError());
+        msgCenter().cannotLoadGlobalConfig (mVBox, gset.lastError());
         return;
     }
 
@@ -5096,11 +5070,19 @@ void VBoxGlobal::init()
         {
             mShowStartVMErrors = false;
         }
+        else if (!::strcmp(arg, "--disable-patm"))
+            mDisablePatm = true;
+        else if (!::strcmp(arg, "--disable-csam"))
+            mDisableCsam = true;
+        else if (!::strcmp(arg, "--recompile-supervisor"))
+            mRecompileSupervisor = true;
+        else if (!::strcmp(arg, "--recompile-user"))
+            mRecompileUser = true;
+        else if (!::strcmp(arg, "--recompile-all"))
+            mDisablePatm = mDisableCsam = mRecompileSupervisor = mRecompileUser = true;
 #ifdef VBOX_WITH_DEBUGGER_GUI
         else if (!::strcmp (arg, "-dbg") || !::strcmp (arg, "--dbg"))
-        {
             setDebuggerVar(&mDbgEnabled, true);
-        }
         else if (!::strcmp( arg, "-debug") || !::strcmp (arg, "--debug"))
         {
             setDebuggerVar(&mDbgEnabled, true);
@@ -5132,13 +5114,9 @@ void VBoxGlobal::init()
         }
         /* Not quite debug options, but they're only useful with the debugger bits. */
         else if (!::strcmp (arg, "--start-paused"))
-        {
             mStartPaused = true;
-        }
         else if (!::strcmp (arg, "--start-running"))
-        {
             mStartPaused = false;
-        }
 #endif
         /** @todo add an else { msgbox(syntax error); exit(1); } here, pretty please... */
         i++;
@@ -5157,7 +5135,7 @@ void VBoxGlobal::init()
             if (m.isNull())
             {
                 if (showStartVMErrors())
-                    vboxProblem().cannotFindMachineByName (mVBox, vmNameOrUuid);
+                    msgCenter().cannotFindMachineByName (mVBox, vmNameOrUuid);
                 return;
             }
             vmUuid = m.GetId();
@@ -5200,6 +5178,24 @@ void VBoxGlobal::init()
      * but this method should be run anyway just to enumerate null VBoxMedium object,
      * used by some VBox smart widgets, like VBoxMediaComboBox: */
     vboxGlobal().startEnumeratingMedia();
+
+    /* Prepare global settings change handler: */
+    connect(&settings(), SIGNAL(propertyChanged(const char*, const char*)),
+            this, SLOT(sltProcessGlobalSettingChange()));
+    /* Handle global settings change for the first time: */
+    sltProcessGlobalSettingChange();
+
+    /* Create action pool: */
+    if (isVMConsoleProcess())
+        UIActionPoolRuntime::create();
+    else
+        UIActionPoolSelector::create();
+
+    /* Create network manager: */
+    UINetworkManager::create();
+
+    /* Schedule update manager: */
+    UIUpdateManager::schedule();
 }
 
 
@@ -5210,6 +5206,18 @@ void VBoxGlobal::init()
  */
 void VBoxGlobal::cleanup()
 {
+    /* Shutdown update manager: */
+    UIUpdateManager::shutdown();
+
+    /* Destroy network manager: */
+    UINetworkManager::destroy();
+
+    /* Destroy action pool: */
+    if (isVMConsoleProcess())
+        UIActionPoolRuntime::destroy();
+    else
+        UIActionPoolSelector::destroy();
+
     /* sanity check */
     if (!sVBoxGlobalInCleanup)
     {
@@ -5618,7 +5626,7 @@ bool VBoxGlobal::switchToMachine(CMachine &machine)
 #endif
 }
 
-bool VBoxGlobal::launchMachine(CMachine &machine)
+bool VBoxGlobal::launchMachine(CMachine &machine, bool fHeadless /* = false */)
 {
     if (machine.CanShowConsoleWindow())
         return VBoxGlobal::switchToMachine(machine);
@@ -5635,7 +5643,7 @@ bool VBoxGlobal::launchMachine(CMachine &machine)
     session.createInstance(CLSID_Session);
     if (session.isNull())
     {
-        vboxProblem().cannotOpenSession(session);
+        msgCenter().cannotOpenSession(session);
         return false;
     }
 
@@ -5654,21 +5662,22 @@ bool VBoxGlobal::launchMachine(CMachine &machine)
     if (xauth)
         env.append(QString("XAUTHORITY=%1\n").arg(xauth));
 #endif
+    const QString strType = fHeadless ? "headless" : "GUI/Qt";
 
-    CProgress progress = machine.LaunchVMProcess(session, "GUI/Qt", env);
+    CProgress progress = machine.LaunchVMProcess(session, strType, env);
     if (   !vbox.isOk()
         || progress.isNull())
     {
-        vboxProblem().cannotOpenSession(vbox, machine);
+        msgCenter().cannotOpenSession(vbox, machine);
         return false;
     }
 
     /* Hide the "VM spawning" progress dialog */
     /* I hope 1 minute will be enough to spawn any running VM silently, isn't it? */
     int iSpawningDuration = 60000;
-    vboxProblem().showModalProgressDialog(progress, machine.GetName(), "", 0, false, iSpawningDuration);
+    msgCenter().showModalProgressDialog(progress, machine.GetName(), "", 0, false, iSpawningDuration);
     if (progress.GetResultCode() != 0)
-        vboxProblem().cannotOpenSession(vbox, machine, progress);
+        msgCenter().cannotOpenSession(vbox, machine, progress);
 
     session.UnlockMachine();
 

@@ -150,11 +150,11 @@ extern bool is3DAccelerationSupported();
 #undef GS
 
 #include <VBox/usb.h>
-#include <VBox/x86.h>
 #include <VBox/vmm/hwacc_svm.h>
 #include <VBox/err.h>
 #include <VBox/settings.h>
 #include <VBox/sup.h>
+#include <iprt/x86.h>
 
 #include "VBox/com/MultiResult.h"
 
@@ -240,6 +240,7 @@ void Host::FinalRelease()
  */
 HRESULT Host::init(VirtualBox *aParent)
 {
+    HRESULT hrc;
     LogFlowThisFunc(("aParent=%p\n", aParent));
 
     /* Enclose the state transition NotReady->InInit->Ready */
@@ -269,7 +270,7 @@ HRESULT Host::init(VirtualBox *aParent)
 # else
     m->pUSBProxyService = new USBProxyService(this);
 # endif
-    HRESULT hrc = m->pUSBProxyService->init();
+    hrc = m->pUSBProxyService->init();
     AssertComRCReturn(hrc, hrc);
 #endif /* VBOX_WITH_USB */
 
@@ -1100,7 +1101,35 @@ STDMETHODIMP Host::CreateHostOnlyNetworkInterface(IHostNetworkInterface **aHostN
 
     int r = NetIfCreateHostOnlyNetworkInterface(m->pParent, aHostNetworkInterface, aProgress);
     if (RT_SUCCESS(r))
+    {
+#if !defined(RT_OS_WINDOWS)
+        Bstr tmpAddr, tmpMask, tmpName;
+        HRESULT hrc;
+        hrc = (*aHostNetworkInterface)->COMGETTER(Name)(tmpName.asOutParam());
+        ComAssertComRCRet(hrc, hrc);
+        hrc = (*aHostNetworkInterface)->COMGETTER(IPAddress)(tmpAddr.asOutParam());
+        ComAssertComRCRet(hrc, hrc);
+        hrc = (*aHostNetworkInterface)->COMGETTER(NetworkMask)(tmpMask.asOutParam());
+        ComAssertComRCRet(hrc, hrc);
+        /*
+         * We need to write the default IP address and mask to extra data now,
+         * so the interface gets re-created after vboxnetadp.ko reload.
+         * Note that we avoid calling EnableStaticIpConfig since it would
+         * change the address on host's interface as well and we want to
+         * postpone the change until VM actually starts.
+         */
+        hrc = m->pParent->SetExtraData(BstrFmt("HostOnly/%ls/IPAddress",
+                                               tmpName.raw()).raw(),
+                                       tmpAddr.raw());
+        ComAssertComRCRet(hrc, hrc);
+
+        hrc = m->pParent->SetExtraData(BstrFmt("HostOnly/%ls/IPNetMask",
+                                               tmpName.raw()).raw(),
+                                       tmpMask.raw());
+        ComAssertComRCRet(hrc, hrc);
+#endif
         return S_OK;
+    }
 
     return r == VERR_NOT_IMPLEMENTED ? E_NOTIMPL : E_FAIL;
 #else

@@ -2137,7 +2137,7 @@ AuthResult ConsoleVRDPServer::Authenticate(const Guid &uuid, AuthGuestJudgement 
 
         if (RT_SUCCESS(rc))
         {
-            typedef struct AuthEntryInfo
+            typedef struct AuthEntryInfoStruct
             {
                 const char *pszName;
                 void **ppvAddress;
@@ -2769,6 +2769,23 @@ void ConsoleVRDPServer::SendAudioInputEnd(void *pvUserCtx)
         }
     }
 }
+
+#ifdef VBOX_WITH_USB_VIDEO
+int ConsoleVRDPServer::GetVideoFrameDimensions(uint16_t *pu16Heigh, uint16_t *pu16Width)
+{
+    *pu16Heigh = 640;
+    *pu16Width = 480;
+    return VINF_SUCCESS;
+}
+
+int ConsoleVRDPServer::SendVideoSreamOn(bool fFetch)
+{
+    /* Here we inform server that guest is starting/stopping
+     * the stream
+     */
+    return VINF_SUCCESS;
+}
+#endif
 
 
 

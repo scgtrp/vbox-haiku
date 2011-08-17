@@ -87,6 +87,12 @@ DECLHIDDEN(void) rtThreadNativeDestroy(PRTTHREADINT pThread)
 {
     if (pThread == (PRTTHREADINT)TlsGetValue(g_dwSelfTLS))
         TlsSetValue(g_dwSelfTLS, NULL);
+
+    if ((HANDLE)pThread->hThread != INVALID_HANDLE_VALUE)
+    {
+        CloseHandle((HANDLE)pThread->hThread);
+        pThread->hThread = (uintptr_t)INVALID_HANDLE_VALUE;
+    }
 }
 
 
@@ -230,32 +236,6 @@ RTDECL(RTTHREAD) RTThreadSelf(void)
     PRTTHREADINT pThread = (PRTTHREADINT)TlsGetValue(g_dwSelfTLS);
     /** @todo import alien threads ? */
     return pThread;
-}
-
-
-RTDECL(RTNATIVETHREAD) RTThreadNativeSelf(void)
-{
-    return (RTNATIVETHREAD)GetCurrentThreadId();
-}
-
-
-RTR3DECL(int)   RTThreadSleep(RTMSINTERVAL cMillies)
-{
-    LogFlow(("RTThreadSleep: cMillies=%d\n", cMillies));
-    Sleep(cMillies);
-    LogFlow(("RTThreadSleep: returning %Rrc (cMillies=%d)\n", VINF_SUCCESS, cMillies));
-    return VINF_SUCCESS;
-}
-
-
-RTR3DECL(bool) RTThreadYield(void)
-{
-    uint64_t u64TS = ASMReadTSC();
-    Sleep(0);
-    u64TS = ASMReadTSC() - u64TS;
-    bool fRc = u64TS > 1500;
-    LogFlow(("RTThreadYield: returning %d (%llu ticks)\n", fRc, u64TS));
-    return fRc;
 }
 
 

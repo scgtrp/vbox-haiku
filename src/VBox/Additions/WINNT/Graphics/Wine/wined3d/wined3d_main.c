@@ -94,10 +94,22 @@ IWineD3D * WINAPI WineDirect3DCreate(UINT version, IUnknown *parent)
     IWineD3DImpl *object;
     HRESULT hr;
 
+#ifdef VBOX_WITH_WDDM
+    hr = VBoxExtCheckInit();
+    if (FAILED(hr))
+    {
+        ERR("VBoxExtCheckInit failed, hr (0x%x)\n", hr);
+        return NULL;
+    }
+#endif
+
     object = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*object));
     if (!object)
     {
         ERR("Failed to allocate wined3d object memory.\n");
+#ifdef VBOX_WITH_WDDM
+        VBoxExtCheckTerm();
+#endif
         return NULL;
     }
 
@@ -106,6 +118,9 @@ IWineD3D * WINAPI WineDirect3DCreate(UINT version, IUnknown *parent)
     {
         WARN("Failed to initialize wined3d object, hr %#x.\n", hr);
         HeapFree(GetProcessHeap(), 0, object);
+#ifdef VBOX_WITH_WDDM
+        VBoxExtCheckTerm();
+#endif
         return NULL;
     }
 
@@ -387,6 +402,7 @@ void WINAPI wined3d_mutex_unlock(void)
     LeaveCriticalSection(&wined3d_cs);
 }
 
+#ifndef VBOX_WITH_WDDM
 static struct wined3d_wndproc *wined3d_find_wndproc(HWND window)
 {
     unsigned int i;
@@ -484,7 +500,7 @@ void wined3d_unregister_window(HWND window)
 
     ERR("Window %p is not registered with wined3d.\n", window);
 }
-
+#endif
 /* At process attach */
 BOOL WINAPI DllMain(HINSTANCE hInstDLL, DWORD fdwReason, LPVOID lpv)
 {

@@ -16,6 +16,7 @@
  */
 
 #include "GuestImpl.h"
+#include "GuestCtrlImplPrivate.h"
 
 #include "Global.h"
 #include "ConsoleImpl.h"
@@ -39,814 +40,6 @@
 #include <VBox/vmm/pgm.h>
 
 #include <memory>
-
-struct Guest::TaskGuest
-{
-    enum TaskType
-    {
-        /** Copies a file to the guest. */
-        CopyFile = 50,
-
-        /** Update Guest Additions by directly copying the required installer
-         *  off the .ISO file, transfer it to the guest and execute the installer
-         *  with system privileges. */
-        UpdateGuestAdditions = 100
-    };
-
-    TaskGuest(TaskType aTaskType, Guest *aThat, Progress *aProgress)
-        : taskType(aTaskType),
-          pGuest(aThat),
-          progress(aProgress),
-          rc(S_OK)
-    {}
-    ~TaskGuest() {}
-
-    int startThread();
-    static int taskThread(RTTHREAD aThread, void *pvUser);
-    static int uploadProgress(unsigned uPercent, void *pvUser);
-
-    static HRESULT setProgressErrorInfo(HRESULT hr, ComObjPtr<Progress> pProgress, const char * pszText, ...);
-    static HRESULT setProgressErrorInfo(HRESULT hr, ComObjPtr<Progress> pProgress, ComObjPtr<Guest> pGuest);
-
-    TaskType taskType;
-    Guest *pGuest;
-    ComObjPtr<Progress> progress;
-    HRESULT rc;
-
-    /* Task data. */
-    Utf8Str strSource;
-    Utf8Str strDest;
-    Utf8Str strUserName;
-    Utf8Str strPassword;
-    ULONG   uFlags;
-};
-
-int Guest::TaskGuest::startThread()
-{
-    int vrc = RTThreadCreate(NULL, Guest::TaskGuest::taskThread, this,
-                             0, RTTHREADTYPE_MAIN_HEAVY_WORKER, 0,
-                             "Guest::Task");
-
-    if (RT_FAILURE(vrc))
-        return Guest::setErrorStatic(E_FAIL, Utf8StrFmt("Could not create taskThreadGuest (%Rrc)\n", vrc));
-
-    return vrc;
-}
-
-/* static */
-DECLCALLBACK(int) Guest::TaskGuest::taskThread(RTTHREAD /* aThread */, void *pvUser)
-{
-    std::auto_ptr<TaskGuest> task(static_cast<TaskGuest*>(pvUser));
-    AssertReturn(task.get(), VERR_GENERAL_FAILURE);
-
-    Guest *pGuest = task->pGuest;
-
-    LogFlowFuncEnter();
-    LogFlowFunc(("Guest %p\n", pGuest));
-
-    HRESULT rc = S_OK;
-
-    switch (task->taskType)
-    {
-#ifdef VBOX_WITH_GUEST_CONTROL
-        case TaskGuest::CopyFile:
-        {
-            rc = pGuest->taskCopyFile(task.get());
-            break;
-        }
-        case TaskGuest::UpdateGuestAdditions:
-        {
-            rc = pGuest->taskUpdateGuestAdditions(task.get());
-            break;
-        }
-#endif
-        default:
-            AssertMsgFailed(("Invalid task type %u specified!\n", task->taskType));
-            break;
-    }
-
-    LogFlowFunc(("rc=%Rhrc\n", rc));
-    LogFlowFuncLeave();
-
-    return VINF_SUCCESS;
-}
-
-/* static */
-int Guest::TaskGuest::uploadProgress(unsigned uPercent, void *pvUser)
-{
-    Guest::TaskGuest *pTask = *(Guest::TaskGuest**)pvUser;
-
-    if (pTask &&
-        !pTask->progress.isNull())
-    {
-        BOOL fCanceled;
-        pTask->progress->COMGETTER(Canceled)(&fCanceled);
-        if (fCanceled)
-            return -1;
-        pTask->progress->SetCurrentOperationProgress(uPercent);
-    }
-    return VINF_SUCCESS;
-}
-
-/* static */
-HRESULT Guest::TaskGuest::setProgressErrorInfo(HRESULT hr, ComObjPtr<Progress> pProgress, const char *pszText, ...)
-{
-    BOOL fCanceled;
-    BOOL fCompleted;
-    if (   SUCCEEDED(pProgress->COMGETTER(Canceled(&fCanceled)))
-        && !fCanceled
-        && SUCCEEDED(pProgress->COMGETTER(Completed(&fCompleted)))
-        && !fCompleted)
-    {
-        va_list va;
-        va_start(va, pszText);
-        HRESULT hr2 = pProgress->notifyCompleteV(hr,
-                                                 COM_IIDOF(IGuest),
-                                                 Guest::getStaticComponentName(),
-                                                 pszText,
-                                                 va);
-        va_end(va);
-        if (hr2 == S_OK) /* If unable to retrieve error, return input error. */
-            hr2 = hr;
-        return hr2;
-    }
-    return S_OK;
-}
-
-/* static */
-HRESULT Guest::TaskGuest::setProgressErrorInfo(HRESULT hr, ComObjPtr<Progress> pProgress, ComObjPtr<Guest> pGuest)
-{
-    return setProgressErrorInfo(hr, pProgress,
-                                Utf8Str(com::ErrorInfo((IGuest*)pGuest, COM_IIDOF(IGuest)).getText()).c_str());
-}
-
-#ifdef VBOX_WITH_GUEST_CONTROL
-HRESULT Guest::taskCopyFile(TaskGuest *aTask)
-{
-    LogFlowFuncEnter();
-
-    AutoCaller autoCaller(this);
-    if (FAILED(autoCaller.rc())) return autoCaller.rc();
-
-    /*
-     * Do *not* take a write lock here since we don't (and won't)
-     * touch any class-specific data (of IGuest) here - only the member functions
-     * which get called here can do that.
-     */
-
-    HRESULT rc = S_OK;
-
-    try
-    {
-        Guest *pGuest = aTask->pGuest;
-        AssertPtr(pGuest);
-
-        /* Does our source file exist? */
-        if (!RTFileExists(aTask->strSource.c_str()))
-        {
-            rc = TaskGuest::setProgressErrorInfo(VBOX_E_IPRT_ERROR, aTask->progress,
-                                                 Guest::tr("Source file \"%s\" does not exist, or is not a file"),
-                                                 aTask->strSource.c_str());
-        }
-        else
-        {
-            RTFILE fileSource;
-            int vrc = RTFileOpen(&fileSource, aTask->strSource.c_str(),
-                                 RTFILE_O_OPEN | RTFILE_O_READ | RTFILE_O_DENY_WRITE);
-            if (RT_FAILURE(vrc))
-            {
-                rc = TaskGuest::setProgressErrorInfo(VBOX_E_IPRT_ERROR, aTask->progress,
-                                                     Guest::tr("Could not open source file \"%s\" for reading (%Rrc)"),
-                                                     aTask->strSource.c_str(),  vrc);
-            }
-            else
-            {
-                uint64_t cbSize;
-                vrc = RTFileGetSize(fileSource, &cbSize);
-                if (RT_FAILURE(vrc))
-                {
-                    rc = TaskGuest::setProgressErrorInfo(VBOX_E_IPRT_ERROR, aTask->progress,
-                                                         Guest::tr("Could not query file size of \"%s\" (%Rrc)"),
-                                                         aTask->strSource.c_str(), vrc);
-                }
-                else
-                {
-                    com::SafeArray<IN_BSTR> args;
-                    com::SafeArray<IN_BSTR> env;
-
-                    /*
-                     * Prepare tool command line.
-                     */
-                    char szOutput[RTPATH_MAX];
-                    if (RTStrPrintf(szOutput, sizeof(szOutput), "--output=%s", aTask->strDest.c_str()) <= sizeof(szOutput) - 1)
-                    {
-                        /*
-                         * Normalize path slashes, based on the detected guest.
-                         */
-                        Utf8Str osType = mData.mOSTypeId;
-                        if (   osType.contains("Microsoft", Utf8Str::CaseInsensitive)
-                            || osType.contains("Windows", Utf8Str::CaseInsensitive))
-                        {
-                            /* We have a Windows guest. */
-                            RTPathChangeToDosSlashes(szOutput, true /* Force conversion. */);
-                        }
-                        else /* ... or something which isn't from Redmond ... */
-                        {
-                            RTPathChangeToUnixSlashes(szOutput, true /* Force conversion. */);
-                        }
-
-                        args.push_back(Bstr(szOutput).raw());             /* We want to write a file ... */
-                    }
-                    else
-                    {
-                        rc = TaskGuest::setProgressErrorInfo(VBOX_E_IPRT_ERROR, aTask->progress,
-                                                             Guest::tr("Error preparing command line"));
-                    }
-
-                    ComPtr<IProgress> execProgress;
-                    ULONG uPID;
-                    if (SUCCEEDED(rc))
-                    {
-                        LogRel(("Copying file \"%s\" to guest \"%s\" (%u bytes) ...\n",
-                                aTask->strSource.c_str(), aTask->strDest.c_str(), cbSize));
-                        /*
-                         * Okay, since we gathered all stuff we need until now to start the
-                         * actual copying, start the guest part now.
-                         */
-                        rc = pGuest->ExecuteProcess(Bstr(VBOXSERVICE_TOOL_CAT).raw(),
-                                                      ExecuteProcessFlag_Hidden
-                                                    | ExecuteProcessFlag_WaitForProcessStartOnly,
-                                                    ComSafeArrayAsInParam(args),
-                                                    ComSafeArrayAsInParam(env),
-                                                    Bstr(aTask->strUserName).raw(),
-                                                    Bstr(aTask->strPassword).raw(),
-                                                    5 * 1000 /* Wait 5s for getting the process started. */,
-                                                    &uPID, execProgress.asOutParam());
-                        if (FAILED(rc))
-                            rc = TaskGuest::setProgressErrorInfo(rc, aTask->progress, pGuest);
-                    }
-
-                    if (SUCCEEDED(rc))
-                    {
-                        BOOL fCompleted = FALSE;
-                        BOOL fCanceled = FALSE;
-
-                        size_t cbToRead = cbSize;
-                        size_t cbTransfered = 0;
-                        size_t cbRead;
-                        SafeArray<BYTE> aInputData(_64K);
-                        while (   SUCCEEDED(execProgress->COMGETTER(Completed(&fCompleted)))
-                               && !fCompleted)
-                        {
-                            if (!cbToRead)
-                                cbRead = 0;
-                            else
-                            {
-                                vrc = RTFileRead(fileSource, (uint8_t*)aInputData.raw(),
-                                                 RT_MIN(cbToRead, _64K), &cbRead);
-                                /*
-                                 * Some other error occured? There might be a chance that RTFileRead
-                                 * could not resolve/map the native error code to an IPRT code, so just
-                                 * print a generic error.
-                                 */
-                                if (RT_FAILURE(vrc))
-                                {
-                                    rc = TaskGuest::setProgressErrorInfo(VBOX_E_IPRT_ERROR, aTask->progress,
-                                                                         Guest::tr("Could not read from file \"%s\" (%Rrc)"),
-                                                                         aTask->strSource.c_str(), vrc);
-                                    break;
-                                }
-                            }
-
-                            /* Resize buffer to reflect amount we just have read.
-                             * Size 0 is allowed! */
-                            aInputData.resize(cbRead);
-
-                            ULONG uFlags = ProcessInputFlag_None;
-                            /* Did we reach the end of the content we want to transfer (last chunk)? */
-                            if (   (cbRead < _64K)
-                                /* Did we reach the last block which is exactly _64K? */
-                                || (cbToRead - cbRead == 0)
-                                /* ... or does the user want to cancel? */
-                                || (   SUCCEEDED(aTask->progress->COMGETTER(Canceled(&fCanceled)))
-                                    && fCanceled)
-                               )
-                            {
-                                uFlags |= ProcessInputFlag_EndOfFile;
-                            }
-
-                            /* Transfer the current chunk ... */
-                            ULONG uBytesWritten;
-                            rc = pGuest->SetProcessInput(uPID, uFlags,
-                                                         10 * 1000 /* Wait 10s for getting the input data transfered. */,
-                                                         ComSafeArrayAsInParam(aInputData), &uBytesWritten);
-                            if (FAILED(rc))
-                            {
-                                rc = TaskGuest::setProgressErrorInfo(rc, aTask->progress, pGuest);
-                                break;
-                            }
-
-                            Assert(cbRead <= cbToRead);
-                            Assert(cbToRead >= cbRead);
-                            cbToRead -= cbRead;
-
-                            cbTransfered += uBytesWritten;
-                            Assert(cbTransfered <= cbSize);
-                            aTask->progress->SetCurrentOperationProgress(cbTransfered / (cbSize / 100.0));
-
-                            /* End of file reached? */
-                            if (cbToRead == 0)
-                                break;
-
-                            /* Did the user cancel the operation above? */
-                            if (fCanceled)
-                                break;
-
-                            /* Progress canceled by Main API? */
-                            if (   SUCCEEDED(execProgress->COMGETTER(Canceled(&fCanceled)))
-                                && fCanceled)
-                            {
-                                rc = TaskGuest::setProgressErrorInfo(VBOX_E_IPRT_ERROR, aTask->progress,
-                                                                     Guest::tr("Copy operation of file \"%s\" was canceled on guest side"),
-                                                                     aTask->strSource.c_str());
-                                break;
-                            }
-                        }
-
-                        if (SUCCEEDED(rc))
-                        {
-                            /*
-                             * If we got here this means the started process either was completed,
-                             * canceled or we simply got all stuff transferred.
-                             */
-                            ExecuteProcessStatus_T retStatus;
-                            ULONG uRetExitCode;
-                            rc = pGuest->waitForProcessStatusChange(uPID, &retStatus, &uRetExitCode, 10 * 1000 /* 10s timeout. */);
-                            if (FAILED(rc))
-                            {
-                                rc = TaskGuest::setProgressErrorInfo(rc, aTask->progress, pGuest);
-                            }
-                            else
-                            {
-                                if (   uRetExitCode != 0
-                                    || retStatus    != ExecuteProcessStatus_TerminatedNormally)
-                                {
-                                    rc = TaskGuest::setProgressErrorInfo(VBOX_E_IPRT_ERROR, aTask->progress,
-                                                                         Guest::tr("Guest reported error %u while copying file \"%s\" to \"%s\""),
-                                                                         uRetExitCode, aTask->strSource.c_str(), aTask->strDest.c_str());
-                                }
-                            }
-                        }
-
-                        if (SUCCEEDED(rc))
-                        {
-                            if (fCanceled)
-                            {
-                                /*
-                                 * In order to make the progress object to behave nicely, we also have to
-                                 * notify the object with a complete event when it's canceled.
-                                 */
-                                aTask->progress->notifyComplete(VBOX_E_IPRT_ERROR,
-                                                                COM_IIDOF(IGuest),
-                                                                Guest::getStaticComponentName(),
-                                                                Guest::tr("Copying file \"%s\" canceled"), aTask->strSource.c_str());
-                            }
-                            else
-                            {
-                                /*
-                                 * Even if we succeeded until here make sure to check whether we really transfered
-                                 * everything.
-                                 */
-                                if (   cbSize > 0
-                                    && cbTransfered == 0)
-                                {
-                                    /* If nothing was transfered but the file size was > 0 then "vbox_cat" wasn't able to write
-                                     * to the destination -> access denied. */
-                                    rc = TaskGuest::setProgressErrorInfo(VBOX_E_IPRT_ERROR, aTask->progress,
-                                                                         Guest::tr("Access denied when copying file \"%s\" to \"%s\""),
-                                                                         aTask->strSource.c_str(), aTask->strDest.c_str());
-                                }
-                                else if (cbTransfered < cbSize)
-                                {
-                                    /* If we did not copy all let the user know. */
-                                    rc = TaskGuest::setProgressErrorInfo(VBOX_E_IPRT_ERROR, aTask->progress,
-                                                                         Guest::tr("Copying file \"%s\" failed (%u/%u bytes transfered)"),
-                                                                         aTask->strSource.c_str(), cbTransfered, cbSize);
-                                }
-                                else /* Yay, all went fine! */
-                                    aTask->progress->notifyComplete(S_OK);
-                            }
-                        }
-                    }
-                }
-                RTFileClose(fileSource);
-            }
-        }
-    }
-    catch (HRESULT aRC)
-    {
-        rc = aRC;
-    }
-
-    /* Clean up */
-    aTask->rc = rc;
-
-    LogFlowFunc(("rc=%Rhrc\n", rc));
-    LogFlowFuncLeave();
-
-    return VINF_SUCCESS;
-}
-
-HRESULT Guest::taskUpdateGuestAdditions(TaskGuest *aTask)
-{
-    LogFlowFuncEnter();
-
-    AutoCaller autoCaller(this);
-    if (FAILED(autoCaller.rc())) return autoCaller.rc();
-
-    /*
-     * Do *not* take a write lock here since we don't (and won't)
-     * touch any class-specific data (of IGuest) here - only the member functions
-     * which get called here can do that.
-     */
-
-    HRESULT rc = S_OK;
-    BOOL fCompleted;
-    BOOL fCanceled;
-
-    try
-    {
-        Guest *pGuest = aTask->pGuest;
-        AssertPtr(pGuest);
-
-        aTask->progress->SetCurrentOperationProgress(10);
-
-        /*
-         * Determine guest OS type and the required installer image.
-         * At the moment only Windows guests are supported.
-         */
-        Utf8Str installerImage;
-        Bstr osTypeId;
-        if (   SUCCEEDED(pGuest->COMGETTER(OSTypeId(osTypeId.asOutParam())))
-            && !osTypeId.isEmpty())
-        {
-            Utf8Str osTypeIdUtf8(osTypeId); /* Needed for .contains(). */
-            if (   osTypeIdUtf8.contains("Microsoft", Utf8Str::CaseInsensitive)
-                || osTypeIdUtf8.contains("Windows", Utf8Str::CaseInsensitive))
-            {
-                if (osTypeIdUtf8.contains("64", Utf8Str::CaseInsensitive))
-                    installerImage = "VBOXWINDOWSADDITIONS_AMD64.EXE";
-                else
-                    installerImage = "VBOXWINDOWSADDITIONS_X86.EXE";
-                /* Since the installers are located in the root directory,
-                 * no further path processing needs to be done (yet). */
-            }
-            else /* Everything else is not supported (yet). */
-                throw TaskGuest::setProgressErrorInfo(VBOX_E_NOT_SUPPORTED, aTask->progress,
-                                                      Guest::tr("Detected guest OS (%s) does not support automatic Guest Additions updating, please update manually"),
-                                                      osTypeIdUtf8.c_str());
-        }
-        else
-            throw TaskGuest::setProgressErrorInfo(VBOX_E_NOT_SUPPORTED, aTask->progress,
-                                                  Guest::tr("Could not detected guest OS type/version, please update manually"));
-        Assert(!installerImage.isEmpty());
-
-        /*
-         * Try to open the .ISO file and locate the specified installer.
-         */
-        RTISOFSFILE iso;
-        int vrc = RTIsoFsOpen(&iso, aTask->strSource.c_str());
-        if (RT_FAILURE(vrc))
-        {
-            rc = TaskGuest::setProgressErrorInfo(VBOX_E_FILE_ERROR, aTask->progress,
-                                                 Guest::tr("Invalid installation medium detected: \"%s\""),
-                                                 aTask->strSource.c_str());
-        }
-        else
-        {
-            uint32_t cbOffset;
-            size_t cbLength;
-            vrc = RTIsoFsGetFileInfo(&iso, installerImage.c_str(), &cbOffset, &cbLength);
-            if (   RT_SUCCESS(vrc)
-                && cbOffset
-                && cbLength)
-            {
-                vrc = RTFileSeek(iso.file, cbOffset, RTFILE_SEEK_BEGIN, NULL);
-                if (RT_FAILURE(vrc))
-                    rc = TaskGuest::setProgressErrorInfo(VBOX_E_IPRT_ERROR, aTask->progress,
-                                                         Guest::tr("Could not seek to setup file on installation medium \"%s\" (%Rrc)"),
-                                                         aTask->strSource.c_str(), vrc);
-            }
-            else
-            {
-                switch (vrc)
-                {
-                    case VERR_FILE_NOT_FOUND:
-                        rc = TaskGuest::setProgressErrorInfo(VBOX_E_IPRT_ERROR, aTask->progress,
-                                                             Guest::tr("Setup file was not found on installation medium \"%s\""),
-                                                             aTask->strSource.c_str());
-                        break;
-
-                    default:
-                        rc = TaskGuest::setProgressErrorInfo(VBOX_E_IPRT_ERROR, aTask->progress,
-                                                             Guest::tr("An unknown error (%Rrc) occured while retrieving information of setup file on installation medium \"%s\""),
-                                                             vrc, aTask->strSource.c_str());
-                        break;
-                }
-            }
-
-            /* Specify the ouput path on the guest side. */
-            Utf8Str strInstallerPath = "%TEMP%\\VBoxWindowsAdditions.exe";
-
-            if (RT_SUCCESS(vrc))
-            {
-                /* Okay, we're ready to start our copy routine on the guest! */
-                aTask->progress->SetCurrentOperationProgress(15);
-
-                /* Prepare command line args. */
-                com::SafeArray<IN_BSTR> args;
-                com::SafeArray<IN_BSTR> env;
-
-                args.push_back(Bstr("--output").raw());               /* We want to write a file ... */
-                args.push_back(Bstr(strInstallerPath.c_str()).raw()); /* ... with this path. */
-
-                if (SUCCEEDED(rc))
-                {
-                    ComPtr<IProgress> progressCat;
-                    ULONG uPID;
-
-                    /*
-                     * Start built-in "vbox_cat" tool (inside VBoxService) to
-                     * copy over/pipe the data into a file on the guest (with
-                     * system rights, no username/password specified).
-                     */
-                    rc = pGuest->executeProcessInternal(Bstr(VBOXSERVICE_TOOL_CAT).raw(),
-                                                          ExecuteProcessFlag_Hidden
-                                                        | ExecuteProcessFlag_WaitForProcessStartOnly,
-                                                        ComSafeArrayAsInParam(args),
-                                                        ComSafeArrayAsInParam(env),
-                                                        Bstr("").raw() /* Username. */,
-                                                        Bstr("").raw() /* Password */,
-                                                        5 * 1000 /* Wait 5s for getting the process started. */,
-                                                        &uPID, progressCat.asOutParam(), &vrc);
-                    if (FAILED(rc))
-                    {
-                        /* Errors which return VBOX_E_NOT_SUPPORTED can be safely skipped by the caller
-                         * to silently fall back to "normal" (old) .ISO mounting. */
-
-                        /* Due to a very limited COM error range we use vrc for a more detailed error
-                         * lookup to figure out what went wrong. */
-                        switch (vrc)
-                        {
-                            /* Guest execution service is not (yet) ready. This basically means that either VBoxService
-                             * is not running (yet) or that the Guest Additions are too old (because VBoxService does not
-                             * support the guest execution feature in this version). */
-                            case VERR_NOT_FOUND:
-                                LogRel(("Guest Additions seem not to be installed yet\n"));
-                                rc = TaskGuest::setProgressErrorInfo(VBOX_E_NOT_SUPPORTED, aTask->progress,
-                                                                     Guest::tr("Guest Additions seem not to be installed or are not ready to update yet"));
-                                break;
-
-                            /* Getting back a VERR_INVALID_PARAMETER indicates that the installed Guest Additions are supporting the guest
-                             * execution but not the built-in "vbox_cat" tool of VBoxService (< 4.0). */
-                            case VERR_INVALID_PARAMETER:
-                                LogRel(("Guest Additions are installed but don't supported automatic updating\n"));
-                                rc = TaskGuest::setProgressErrorInfo(VBOX_E_NOT_SUPPORTED, aTask->progress,
-                                                                     Guest::tr("Installed Guest Additions do not support automatic updating"));
-                                break;
-
-                            case VERR_TIMEOUT:
-                                LogRel(("Guest was unable to start copying the Guest Additions setup within time\n"));
-                                rc = TaskGuest::setProgressErrorInfo(E_FAIL, aTask->progress,
-                                                                     Guest::tr("Guest was unable to start copying the Guest Additions setup within time"));
-                                break;
-
-                            default:
-                                rc = TaskGuest::setProgressErrorInfo(E_FAIL, aTask->progress,
-                                                                     Guest::tr("Error copying Guest Additions setup file to guest path \"%s\" (%Rrc)"),
-                                                                     strInstallerPath.c_str(), vrc);
-                                break;
-                        }
-                    }
-                    else
-                    {
-                        LogRel(("Automatic update of Guest Additions started, using \"%s\"\n", aTask->strSource.c_str()));
-                        LogRel(("Copying Guest Additions installer \"%s\" to \"%s\" on guest ...\n",
-                                installerImage.c_str(), strInstallerPath.c_str()));
-                        aTask->progress->SetCurrentOperationProgress(20);
-
-                        /* Wait for process to exit ... */
-                        SafeArray<BYTE> aInputData(_64K);
-                        while (   SUCCEEDED(progressCat->COMGETTER(Completed(&fCompleted)))
-                               && !fCompleted)
-                        {
-                            size_t cbRead;
-                            /* cbLength contains remaining bytes of our installer file
-                             * opened above to read. */
-                            size_t cbToRead = RT_MIN(cbLength, _64K);
-                            if (cbToRead)
-                            {
-                                vrc = RTFileRead(iso.file, (uint8_t*)aInputData.raw(), cbToRead, &cbRead);
-                                if (   cbRead
-                                    && RT_SUCCESS(vrc))
-                                {
-                                    /* Resize buffer to reflect amount we just have read. */
-                                    if (cbRead > 0)
-                                        aInputData.resize(cbRead);
-
-                                    /* Did we reach the end of the content we want to transfer (last chunk)? */
-                                    ULONG uFlags = ProcessInputFlag_None;
-                                    if (   (cbRead < _64K)
-                                        /* Did we reach the last block which is exactly _64K? */
-                                        || (cbToRead - cbRead == 0)
-                                        /* ... or does the user want to cancel? */
-                                        || (   SUCCEEDED(aTask->progress->COMGETTER(Canceled(&fCanceled)))
-                                            && fCanceled)
-                                       )
-                                    {
-                                        uFlags |= ProcessInputFlag_EndOfFile;
-                                    }
-
-                                    /* Transfer the current chunk ... */
-                                #ifdef DEBUG_andy
-                                    LogRel(("Copying Guest Additions (%u bytes left) ...\n", cbLength));
-                                #endif
-                                    ULONG uBytesWritten;
-                                    rc = pGuest->SetProcessInput(uPID, uFlags,
-                                                                 10 * 1000 /* Wait 10s for getting the input data transfered. */,
-                                                                 ComSafeArrayAsInParam(aInputData), &uBytesWritten);
-                                    if (FAILED(rc))
-                                    {
-                                        rc = TaskGuest::setProgressErrorInfo(rc, aTask->progress, pGuest);
-                                        break;
-                                    }
-
-                                    /* If task was canceled above also cancel the process execution. */
-                                    if (fCanceled)
-                                        progressCat->Cancel();
-
-                                #ifdef DEBUG_andy
-                                    LogRel(("Copying Guest Additions (%u bytes written) ...\n", uBytesWritten));
-                                #endif
-                                    Assert(cbLength >= uBytesWritten);
-                                    cbLength -= uBytesWritten;
-                                }
-                                else if (RT_FAILURE(vrc))
-                                {
-                                    rc = TaskGuest::setProgressErrorInfo(VBOX_E_IPRT_ERROR, aTask->progress,
-                                                                         Guest::tr("Error while reading setup file \"%s\" (To read: %u, Size: %u) from installation medium (%Rrc)"),
-                                                                         installerImage.c_str(), cbToRead, cbLength, vrc);
-                                }
-                            }
-
-                            /* Internal progress canceled? */
-                            if (   SUCCEEDED(progressCat->COMGETTER(Canceled(&fCanceled)))
-                                && fCanceled)
-                            {
-                                aTask->progress->Cancel();
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-            RTIsoFsClose(&iso);
-
-            if (   SUCCEEDED(rc)
-                && (   SUCCEEDED(aTask->progress->COMGETTER(Canceled(&fCanceled)))
-                    && !fCanceled
-                   )
-               )
-            {
-                /*
-                 * Installer was transferred successfully, so let's start it
-                 * (with system rights).
-                 */
-                LogRel(("Preparing to execute Guest Additions update ...\n"));
-                aTask->progress->SetCurrentOperationProgress(66);
-
-                /* Prepare command line args for installer. */
-                com::SafeArray<IN_BSTR> installerArgs;
-                com::SafeArray<IN_BSTR> installerEnv;
-
-                /** @todo Only Windows! */
-                installerArgs.push_back(Bstr(strInstallerPath).raw()); /* The actual (internal) installer image (as argv[0]). */
-                /* Note that starting at Windows Vista the lovely session 0 separation applies:
-                 * This means that if we run an application with the profile/security context
-                 * of VBoxService (system rights!) we're not able to show any UI. */
-                installerArgs.push_back(Bstr("/S").raw());      /* We want to install in silent mode. */
-                installerArgs.push_back(Bstr("/l").raw());      /* ... and logging enabled. */
-                /* Don't quit VBoxService during upgrade because it still is used for this
-                 * piece of code we're in right now (that is, here!) ... */
-                installerArgs.push_back(Bstr("/no_vboxservice_exit").raw());
-                /* Tell the installer to report its current installation status
-                 * using a running VBoxTray instance via balloon messages in the
-                 * Windows taskbar. */
-                installerArgs.push_back(Bstr("/post_installstatus").raw());
-
-                /*
-                 * Start the just copied over installer with system rights
-                 * in silent mode on the guest. Don't use the hidden flag since there
-                 * may be pop ups the user has to process.
-                 */
-                ComPtr<IProgress> progressInstaller;
-                ULONG uPID;
-                rc = pGuest->executeProcessInternal(Bstr(strInstallerPath).raw(),
-                                                    ExecuteProcessFlag_WaitForProcessStartOnly,
-                                                    ComSafeArrayAsInParam(installerArgs),
-                                                    ComSafeArrayAsInParam(installerEnv),
-                                                    Bstr("").raw() /* Username */,
-                                                    Bstr("").raw() /* Password */,
-                                                    10 * 1000 /* Wait 10s for getting the process started */,
-                                                    &uPID, progressInstaller.asOutParam(), &vrc);
-                if (SUCCEEDED(rc))
-                {
-                    LogRel(("Guest Additions update is running ...\n"));
-
-                    /* If the caller does not want to wait for out guest update process to end,
-                     * complete the progress object now so that the caller can do other work. */
-                    if (aTask->uFlags & AdditionsUpdateFlag_WaitForUpdateStartOnly)
-                        aTask->progress->notifyComplete(S_OK);
-                    else
-                        aTask->progress->SetCurrentOperationProgress(70);
-
-                    /* Wait until the Guest Additions installer finishes ... */
-                    while (   SUCCEEDED(progressInstaller->COMGETTER(Completed(&fCompleted)))
-                           && !fCompleted)
-                    {
-                        if (   SUCCEEDED(aTask->progress->COMGETTER(Canceled(&fCanceled)))
-                            && fCanceled)
-                        {
-                            progressInstaller->Cancel();
-                            break;
-                        }
-                        /* Progress canceled by Main API? */
-                        if (   SUCCEEDED(progressInstaller->COMGETTER(Canceled(&fCanceled)))
-                            && fCanceled)
-                        {
-                            break;
-                        }
-                        RTThreadSleep(100);
-                    }
-
-                    ExecuteProcessStatus_T retStatus;
-                    ULONG uRetExitCode, uRetFlags;
-                    rc = pGuest->GetProcessStatus(uPID, &uRetExitCode, &uRetFlags, &retStatus);
-                    if (SUCCEEDED(rc))
-                    {
-                        if (fCompleted)
-                        {
-                            if (uRetExitCode == 0)
-                            {
-                                LogRel(("Guest Additions update successful!\n"));
-                                if (   SUCCEEDED(aTask->progress->COMGETTER(Completed(&fCompleted)))
-                                    && !fCompleted)
-                                    aTask->progress->notifyComplete(S_OK);
-                            }
-                            else
-                            {
-                                LogRel(("Guest Additions update failed (Exit code=%u, Status=%u, Flags=%u)\n",
-                                        uRetExitCode, retStatus, uRetFlags));
-                                rc = TaskGuest::setProgressErrorInfo(VBOX_E_IPRT_ERROR, aTask->progress,
-                                                                     Guest::tr("Guest Additions update failed with exit code=%u (status=%u, flags=%u)"),
-                                                                     uRetExitCode, retStatus, uRetFlags);
-                            }
-                        }
-                        else if (   SUCCEEDED(progressInstaller->COMGETTER(Canceled(&fCanceled)))
-                                 && fCanceled)
-                        {
-                            LogRel(("Guest Additions update was canceled\n"));
-                            rc = TaskGuest::setProgressErrorInfo(VBOX_E_IPRT_ERROR, aTask->progress,
-                                                                 Guest::tr("Guest Additions update was canceled by the guest with exit code=%u (status=%u, flags=%u)"),
-                                                                 uRetExitCode, retStatus, uRetFlags);
-                        }
-                        else
-                        {
-                            LogRel(("Guest Additions update was canceled by the user\n"));
-                        }
-                    }
-                    else
-                        rc = TaskGuest::setProgressErrorInfo(rc, aTask->progress, pGuest);
-                }
-                else
-                    rc = TaskGuest::setProgressErrorInfo(rc, aTask->progress, pGuest);
-            }
-        }
-    }
-    catch (HRESULT aRC)
-    {
-        rc = aRC;
-    }
-
-    /* Clean up */
-    aTask->rc = rc;
-
-    LogFlowFunc(("rc=%Rhrc\n", rc));
-    LogFlowFuncLeave();
-
-    return VINF_SUCCESS;
-}
-#endif
 
 // public methods only for internal purposes
 /////////////////////////////////////////////////////////////////////////////
@@ -909,6 +102,486 @@ int Guest::prepareExecuteEnv(const char *pszEnv, void **ppvList, uint32_t *pcbLi
 }
 
 /**
+ * Adds a callback with a user provided data block and an optional progress object
+ * to the callback map. A callback is identified by a unique context ID which is used
+ * to identify a callback from the guest side.
+ *
+ * @return  IPRT status code.
+ * @param   pCallback
+ * @param   puContextID
+ */
+int Guest::callbackAdd(const PVBOXGUESTCTRL_CALLBACK pCallback, uint32_t *puContextID)
+{
+    AssertPtrReturn(pCallback, VERR_INVALID_PARAMETER);
+    /* puContextID is optional. */
+
+    int rc;
+
+    /* Create a new context ID and assign it. */
+    uint32_t uNewContextID = 0;
+    for (;;)
+    {
+        /* Create a new context ID ... */
+        uNewContextID = ASMAtomicIncU32(&mNextContextID);
+        if (uNewContextID == UINT32_MAX)
+            ASMAtomicUoWriteU32(&mNextContextID, 1000);
+        /* Is the context ID already used?  Try next ID ... */
+        if (!callbackExists(uNewContextID))
+        {
+            /* Callback with context ID was not found. This means
+             * we can use this context ID for our new callback we want
+             * to add below. */
+            rc = VINF_SUCCESS;
+            break;
+        }
+    }
+
+    if (RT_SUCCESS(rc))
+    {
+        AutoWriteLock alock(this COMMA_LOCKVAL_SRC_POS);
+
+        /* Add callback with new context ID to our callback map. */
+        mCallbackMap[uNewContextID] = *pCallback;
+        Assert(mCallbackMap.size());
+
+        /* Report back new context ID. */
+        if (puContextID)
+            *puContextID = uNewContextID;
+    }
+
+    return rc;
+}
+
+/**
+ * Does not do locking!
+ *
+ * @param   uContextID
+ */
+void Guest::callbackDestroy(uint32_t uContextID)
+{
+    AssertReturnVoid(uContextID);
+
+    LogFlowFunc(("Destroying callback with CID=%u ...\n", uContextID));
+
+    /* Notify callback (if necessary). */
+    int rc = callbackNotifyEx(uContextID, VERR_CANCELLED,
+                              Guest::tr("VM is shutting down, canceling uncompleted guest requests ..."));
+    AssertRC(rc);
+
+    CallbackMapIter it = mCallbackMap.find(uContextID);
+    if (it != mCallbackMap.end())
+    {
+        if (it->second.pvData)
+        {
+            callbackFreeUserData(it->second.pvData);
+            it->second.cbData = 0;
+        }
+
+        /* Remove callback context (not used anymore). */
+        mCallbackMap.erase(it);
+    }
+}
+
+bool Guest::callbackExists(uint32_t uContextID)
+{
+    AssertReturn(uContextID, false);
+
+    AutoReadLock alock(this COMMA_LOCKVAL_SRC_POS);
+
+    CallbackMapIter it = mCallbackMap.find(uContextID);
+    return (it == mCallbackMap.end()) ? false : true;
+}
+
+void Guest::callbackFreeUserData(void *pvData)
+{
+    if (pvData)
+    {
+        RTMemFree(pvData);
+        pvData = NULL;
+    }
+}
+
+int Guest::callbackGetUserData(uint32_t uContextID, eVBoxGuestCtrlCallbackType *pEnmType,
+                               void **ppvData, size_t *pcbData)
+{
+    AssertReturn(uContextID, VERR_INVALID_PARAMETER);
+    /* pEnmType is optional. */
+    AssertPtrReturn(ppvData, VERR_INVALID_PARAMETER);
+    /* pcbData is optional. */
+
+    AutoReadLock alock(this COMMA_LOCKVAL_SRC_POS);
+
+    CallbackMapIterConst it = mCallbackMap.find(uContextID);
+    if (it != mCallbackMap.end())
+    {
+        if (pEnmType)
+            *pEnmType = it->second.mType;
+
+        void *pvData = RTMemAlloc(it->second.cbData);
+        AssertPtrReturn(pvData, VERR_NO_MEMORY);
+        memcpy(pvData, it->second.pvData, it->second.cbData);
+        *ppvData = pvData;
+
+        if (pcbData)
+            *pcbData = it->second.cbData;
+
+        return VINF_SUCCESS;
+    }
+
+    return VERR_NOT_FOUND;
+}
+
+/* Does not do locking! Caller has to take care of it because the caller needs to
+ * modify the data ...*/
+void* Guest::callbackGetUserDataMutableRaw(uint32_t uContextID, size_t *pcbData)
+{
+    AssertReturn(uContextID, NULL);
+    /* pcbData is optional. */
+
+    CallbackMapIterConst it = mCallbackMap.find(uContextID);
+    if (it != mCallbackMap.end())
+    {
+        if (pcbData)
+            *pcbData = it->second.cbData;
+        return it->second.pvData;
+    }
+
+    return NULL;
+}
+
+int Guest::callbackInit(PVBOXGUESTCTRL_CALLBACK pCallback, eVBoxGuestCtrlCallbackType enmType,
+                        ComPtr<Progress> pProgress)
+{
+    AssertPtrReturn(pCallback, VERR_INVALID_POINTER);
+    /* Everything else is optional. */
+
+    int rc = VINF_SUCCESS;
+    switch (enmType)
+    {
+        case VBOXGUESTCTRLCALLBACKTYPE_EXEC_START:
+        {
+            PCALLBACKDATAEXECSTATUS pData = (PCALLBACKDATAEXECSTATUS)RTMemAlloc(sizeof(CALLBACKDATAEXECSTATUS));
+            AssertPtrReturn(pData, VERR_NO_MEMORY);
+            RT_BZERO(pData, sizeof(CALLBACKDATAEXECSTATUS));
+            pCallback->cbData = sizeof(CALLBACKDATAEXECSTATUS);
+            pCallback->pvData = pData;
+            break;
+        }
+
+        case VBOXGUESTCTRLCALLBACKTYPE_EXEC_OUTPUT:
+        {
+            PCALLBACKDATAEXECOUT pData = (PCALLBACKDATAEXECOUT)RTMemAlloc(sizeof(CALLBACKDATAEXECOUT));
+            AssertPtrReturn(pData, VERR_NO_MEMORY);
+            RT_BZERO(pData, sizeof(CALLBACKDATAEXECOUT));
+            pCallback->cbData = sizeof(CALLBACKDATAEXECOUT);
+            pCallback->pvData = pData;
+            break;
+        }
+
+        case VBOXGUESTCTRLCALLBACKTYPE_EXEC_INPUT_STATUS:
+        {
+            PCALLBACKDATAEXECINSTATUS pData = (PCALLBACKDATAEXECINSTATUS)RTMemAlloc(sizeof(CALLBACKDATAEXECINSTATUS));
+            AssertPtrReturn(pData, VERR_NO_MEMORY);
+            RT_BZERO(pData, sizeof(PCALLBACKDATAEXECINSTATUS));
+            pCallback->cbData = sizeof(PCALLBACKDATAEXECINSTATUS);
+            pCallback->pvData = pData;
+            break;
+        }
+
+        default:
+            rc = VERR_INVALID_PARAMETER;
+            break;
+    }
+
+    if (RT_SUCCESS(rc))
+    {
+        /* Init/set common stuff. */
+        pCallback->mType  = enmType;
+        pCallback->pProgress = pProgress;
+    }
+
+    return rc;
+}
+
+bool Guest::callbackIsCanceled(uint32_t uContextID)
+{
+    AssertReturn(uContextID, true);
+
+    Progress *pProgress = NULL;
+    {
+        AutoReadLock alock(this COMMA_LOCKVAL_SRC_POS);
+
+        CallbackMapIterConst it = mCallbackMap.find(uContextID);
+        if (it != mCallbackMap.end())
+            pProgress = it->second.pProgress;
+    }
+
+    if (pProgress)
+    {
+        BOOL fCanceled = FALSE;
+        HRESULT hRC = pProgress->COMGETTER(Canceled)(&fCanceled);
+        if (   SUCCEEDED(hRC)
+            && !fCanceled)
+        {
+            return false;
+        }
+    }
+
+    return true; /* No progress / error means canceled. */
+}
+
+bool Guest::callbackIsComplete(uint32_t uContextID)
+{
+    AssertReturn(uContextID, true);
+
+    Progress *pProgress = NULL;
+    {
+        AutoReadLock alock(this COMMA_LOCKVAL_SRC_POS);
+
+        CallbackMapIterConst it = mCallbackMap.find(uContextID);
+        if (it != mCallbackMap.end())
+            pProgress = it->second.pProgress;
+    }
+
+    if (pProgress)
+    {
+        BOOL fCompleted = FALSE;
+        HRESULT hRC = pProgress->COMGETTER(Completed)(&fCompleted);
+        if (   SUCCEEDED(hRC)
+            && fCompleted)
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+int Guest::callbackMoveForward(uint32_t uContextID, const char *pszMessage)
+{
+    AssertReturn(uContextID, VERR_INVALID_PARAMETER);
+    AssertPtrReturn(pszMessage, VERR_INVALID_PARAMETER);
+
+    Progress *pProgress = NULL;
+    {
+        AutoReadLock alock(this COMMA_LOCKVAL_SRC_POS);
+
+        CallbackMapIterConst it = mCallbackMap.find(uContextID);
+        if (it != mCallbackMap.end())
+            pProgress = it->second.pProgress;
+    }
+
+    if (pProgress)
+    {
+        HRESULT hr = pProgress->SetNextOperation(Bstr(pszMessage).raw(), 1 /* Weight */);
+        if (FAILED(hr))
+            return VERR_CANCELLED;
+
+        return VINF_SUCCESS;
+    }
+
+    return VERR_NOT_FOUND;
+}
+
+/**
+ * TODO
+ *
+ * @return  IPRT status code.
+ * @param   uContextID
+ * @param   iRC
+ * @param   pszMessage
+ */
+int Guest::callbackNotifyEx(uint32_t uContextID, int iRC, const char *pszMessage)
+{
+    AssertReturn(uContextID, VERR_INVALID_PARAMETER);
+
+    LogFlowFunc(("Notifying callback with CID=%u, iRC=%d, pszMsg=%s ...\n",
+                 uContextID, iRC, pszMessage ? pszMessage : "<No message given>"));
+
+    Progress *pProgress = NULL;
+    {
+        AutoReadLock alock(this COMMA_LOCKVAL_SRC_POS);
+
+        CallbackMapIterConst it = mCallbackMap.find(uContextID);
+        if (it != mCallbackMap.end())
+            pProgress = it->second.pProgress;
+    }
+
+#if 0
+    BOOL fCanceled = FALSE;
+    HRESULT hRC = pProgress->COMGETTER(Canceled)(&fCanceled);
+    if (   SUCCEEDED(hRC)
+        && fCanceled)
+    {
+        /* If progress already canceled do nothing here. */
+        return VINF_SUCCESS;
+    }
+#endif
+
+    if (pProgress)
+    {
+        /*
+         * Assume we didn't complete to make sure we clean up even if the
+         * following call fails.
+         */
+        BOOL fCompleted = FALSE;
+        HRESULT hRC = pProgress->COMGETTER(Completed)(&fCompleted);
+        if (   SUCCEEDED(hRC)
+            && !fCompleted)
+        {
+            /*
+             * To get waitForCompletion completed (unblocked) we have to notify it if necessary (only
+             * cancel won't work!). This could happen if the client thread (e.g. VBoxService, thread of a spawned process)
+             * is disconnecting without having the chance to sending a status message before, so we
+             * have to abort here to make sure the host never hangs/gets stuck while waiting for the
+             * progress object to become signalled.
+             */
+            if (   RT_SUCCESS(iRC)
+                && !pszMessage)
+            {
+                hRC = pProgress->notifyComplete(S_OK);
+            }
+            else
+            {
+                AssertPtrReturn(pszMessage, VERR_INVALID_PARAMETER);
+                hRC = pProgress->notifyComplete(VBOX_E_IPRT_ERROR /* Must not be S_OK. */,
+                                                COM_IIDOF(IGuest),
+                                                Guest::getStaticComponentName(),
+                                                pszMessage);
+            }
+        }
+        ComAssertComRC(hRC);
+
+        /*
+         * Do *not* NULL pProgress here, because waiting function like executeProcess()
+         * will still rely on this object for checking whether they have to give up!
+         */
+    }
+    /* If pProgress is not found (anymore) that's fine.
+     * Might be destroyed already. */
+    return S_OK;
+}
+
+/**
+ * TODO
+ *
+ * @return  IPRT status code.
+ * @param   uPID
+ * @param   iRC
+ * @param   pszMessage
+ */
+int Guest::callbackNotifyAllForPID(uint32_t uPID, int iRC, const char *pszMessage)
+{
+    AssertReturn(uPID, VERR_INVALID_PARAMETER);
+
+    int vrc = VINF_SUCCESS;
+
+    AutoReadLock alock(this COMMA_LOCKVAL_SRC_POS);
+
+    CallbackMapIter it;
+    for (it = mCallbackMap.begin(); it != mCallbackMap.end(); it++)
+    {
+        switch (it->second.mType)
+        {
+            case VBOXGUESTCTRLCALLBACKTYPE_EXEC_START:
+                break;
+
+            /* When waiting for process output while the process is destroyed,
+             * make sure we also destroy the actual waiting operation (internal progress object)
+             * in order to not block the caller. */
+            case VBOXGUESTCTRLCALLBACKTYPE_EXEC_OUTPUT:
+            {
+                PCALLBACKDATAEXECOUT pItData = (PCALLBACKDATAEXECOUT)it->second.pvData;
+                AssertPtr(pItData);
+                if (pItData->u32PID == uPID)
+                    vrc = callbackNotifyEx(it->first, iRC, pszMessage);
+                break;
+            }
+
+            /* When waiting for injecting process input while the process is destroyed,
+             * make sure we also destroy the actual waiting operation (internal progress object)
+             * in order to not block the caller. */
+            case VBOXGUESTCTRLCALLBACKTYPE_EXEC_INPUT_STATUS:
+            {
+                PCALLBACKDATAEXECINSTATUS pItData = (PCALLBACKDATAEXECINSTATUS)it->second.pvData;
+                AssertPtr(pItData);
+                if (pItData->u32PID == uPID)
+                    vrc = callbackNotifyEx(it->first, iRC, pszMessage);
+                break;
+            }
+
+            default:
+                vrc = VERR_INVALID_PARAMETER;
+                AssertMsgFailed(("Unknown callback type %d, iRC=%d, message=%s\n",
+                                 it->second.mType, iRC, pszMessage ? pszMessage : "<No message given>"));
+                break;
+        }
+
+        if (RT_FAILURE(vrc))
+            break;
+    }
+
+    return vrc;
+}
+
+int Guest::callbackNotifyComplete(uint32_t uContextID)
+{
+    return callbackNotifyEx(uContextID, S_OK, NULL /* No message */);
+}
+
+/**
+ * Waits for a callback (using its context ID) to complete.
+ *
+ * @return  IPRT status code.
+ * @param   uContextID              Context ID to wait for.
+ * @param   lStage                  Stage to wait for. Specify -1 if no staging is present/required.
+ *                                  Specifying a stage is only needed if there's a multi operation progress
+ *                                  object to wait for.
+ * @param   lTimeout                Timeout (in ms) to wait for.
+ */
+int Guest::callbackWaitForCompletion(uint32_t uContextID, LONG lStage, LONG lTimeout)
+{
+    AssertReturn(uContextID, VERR_INVALID_PARAMETER);
+
+    /*
+     * Wait for the HGCM low level callback until the process
+     * has been started (or something went wrong). This is necessary to
+     * get the PID.
+     */
+
+    int vrc = VINF_SUCCESS;
+    Progress *pProgress = NULL;
+    {
+        AutoReadLock alock(this COMMA_LOCKVAL_SRC_POS);
+
+        CallbackMapIterConst it = mCallbackMap.find(uContextID);
+        if (it != mCallbackMap.end())
+            pProgress = it->second.pProgress;
+        else
+            vrc = VERR_NOT_FOUND;
+    }
+
+    if (RT_SUCCESS(vrc))
+    {
+        HRESULT rc;
+        if (lStage < 0)
+            rc = pProgress->WaitForCompletion(lTimeout);
+        else
+            rc = pProgress->WaitForOperationCompletion((ULONG)lStage, lTimeout);
+        if (SUCCEEDED(rc))
+        {
+            if (!callbackIsComplete(uContextID))
+                vrc = callbackIsCanceled(uContextID)
+                    ? VERR_CANCELLED : VINF_SUCCESS;
+        }
+        else
+            vrc = VERR_TIMEOUT;
+    }
+
+    return vrc;
+}
+
+/**
  * Static callback function for receiving updates on guest control commands
  * from the guest. Acts as a dispatcher for the actual class instance.
  *
@@ -917,10 +590,10 @@ int Guest::prepareExecuteEnv(const char *pszEnv, void **ppvList, uint32_t *pcbLi
  * @todo
  *
  */
-DECLCALLBACK(int) Guest::doGuestCtrlNotification(void    *pvExtension,
-                                                 uint32_t u32Function,
-                                                 void    *pvParms,
-                                                 uint32_t cbParms)
+DECLCALLBACK(int) Guest::notifyCtrlDispatcher(void    *pvExtension,
+                                              uint32_t u32Function,
+                                              void    *pvParms,
+                                              uint32_t cbParms)
 {
     using namespace guestControl;
 
@@ -944,7 +617,7 @@ DECLCALLBACK(int) Guest::doGuestCtrlNotification(void    *pvExtension,
             PCALLBACKDATACLIENTDISCONNECTED pCBData = reinterpret_cast<PCALLBACKDATACLIENTDISCONNECTED>(pvParms);
             AssertPtr(pCBData);
             AssertReturn(sizeof(CALLBACKDATACLIENTDISCONNECTED) == cbParms, VERR_INVALID_PARAMETER);
-            AssertReturn(CALLBACKDATAMAGICCLIENTDISCONNECTED == pCBData->hdr.u32Magic, VERR_INVALID_PARAMETER);
+            AssertReturn(CALLBACKDATAMAGIC_CLIENT_DISCONNECTED == pCBData->hdr.u32Magic, VERR_INVALID_PARAMETER);
 
             rc = pGuest->notifyCtrlClientDisconnected(u32Function, pCBData);
             break;
@@ -957,7 +630,7 @@ DECLCALLBACK(int) Guest::doGuestCtrlNotification(void    *pvExtension,
             PCALLBACKDATAEXECSTATUS pCBData = reinterpret_cast<PCALLBACKDATAEXECSTATUS>(pvParms);
             AssertPtr(pCBData);
             AssertReturn(sizeof(CALLBACKDATAEXECSTATUS) == cbParms, VERR_INVALID_PARAMETER);
-            AssertReturn(CALLBACKDATAMAGICEXECSTATUS == pCBData->hdr.u32Magic, VERR_INVALID_PARAMETER);
+            AssertReturn(CALLBACKDATAMAGIC_EXEC_STATUS == pCBData->hdr.u32Magic, VERR_INVALID_PARAMETER);
 
             rc = pGuest->notifyCtrlExecStatus(u32Function, pCBData);
             break;
@@ -970,7 +643,7 @@ DECLCALLBACK(int) Guest::doGuestCtrlNotification(void    *pvExtension,
             PCALLBACKDATAEXECOUT pCBData = reinterpret_cast<PCALLBACKDATAEXECOUT>(pvParms);
             AssertPtr(pCBData);
             AssertReturn(sizeof(CALLBACKDATAEXECOUT) == cbParms, VERR_INVALID_PARAMETER);
-            AssertReturn(CALLBACKDATAMAGICEXECOUT == pCBData->hdr.u32Magic, VERR_INVALID_PARAMETER);
+            AssertReturn(CALLBACKDATAMAGIC_EXEC_OUT == pCBData->hdr.u32Magic, VERR_INVALID_PARAMETER);
 
             rc = pGuest->notifyCtrlExecOut(u32Function, pCBData);
             break;
@@ -983,7 +656,7 @@ DECLCALLBACK(int) Guest::doGuestCtrlNotification(void    *pvExtension,
             PCALLBACKDATAEXECINSTATUS pCBData = reinterpret_cast<PCALLBACKDATAEXECINSTATUS>(pvParms);
             AssertPtr(pCBData);
             AssertReturn(sizeof(CALLBACKDATAEXECINSTATUS) == cbParms, VERR_INVALID_PARAMETER);
-            AssertReturn(CALLBACKDATAMAGICEXECINSTATUS == pCBData->hdr.u32Magic, VERR_INVALID_PARAMETER);
+            AssertReturn(CALLBACKDATAMAGIC_EXEC_IN_STATUS == pCBData->hdr.u32Magic, VERR_INVALID_PARAMETER);
 
             rc = pGuest->notifyCtrlExecInStatus(u32Function, pCBData);
             break;
@@ -998,197 +671,167 @@ DECLCALLBACK(int) Guest::doGuestCtrlNotification(void    *pvExtension,
 }
 
 /* Function for handling the execution start/termination notification. */
+/* Callback can be called several times. */
 int Guest::notifyCtrlExecStatus(uint32_t                u32Function,
                                 PCALLBACKDATAEXECSTATUS pData)
 {
-    int vrc = VINF_SUCCESS;
+    AssertReturn(u32Function, VERR_INVALID_PARAMETER);
+    AssertPtrReturn(pData, VERR_INVALID_PARAMETER);
 
-    AutoWriteLock alock(this COMMA_LOCKVAL_SRC_POS);
+    uint32_t uContextID = pData->hdr.u32ContextID;
+    Assert(uContextID);
 
-    AssertPtr(pData);
-    CallbackMapIter it = getCtrlCallbackContextByID(pData->hdr.u32ContextID);
-
-    /* Callback can be called several times. */
-    if (it != mCallbackMap.end())
+    /* Scope write locks as much as possible. */
     {
-        PCALLBACKDATAEXECSTATUS pCBData = (PCALLBACKDATAEXECSTATUS)it->second.pvData;
-        AssertPtr(pCBData);
+        AutoWriteLock alock(this COMMA_LOCKVAL_SRC_POS);
 
-        pCBData->u32PID = pData->u32PID;
-        pCBData->u32Status = pData->u32Status;
-        pCBData->u32Flags = pData->u32Flags;
-        /** @todo Copy void* buffer contents! */
-
-        Utf8Str errMsg;
-
-        /* Was progress canceled before? */
-        BOOL fCanceled;
-        ComAssert(!it->second.pProgress.isNull());
-        if (   SUCCEEDED(it->second.pProgress->COMGETTER(Canceled)(&fCanceled))
-            && !fCanceled)
+        PCALLBACKDATAEXECSTATUS pCallbackData =
+            (PCALLBACKDATAEXECSTATUS)callbackGetUserDataMutableRaw(uContextID, NULL /* cbData */);
+        if (pCallbackData)
         {
-            /* Do progress handling. */
-            HRESULT hr;
-            switch (pData->u32Status)
-            {
-                case PROC_STS_STARTED:
-                    LogRel(("Guest process (PID %u) started\n", pCBData->u32PID)); /** @todo Add process name */
-                    hr = it->second.pProgress->SetNextOperation(Bstr(tr("Waiting for process to exit ...")).raw(), 1 /* Weight */);
-                    AssertComRC(hr);
-                    break;
-
-                case PROC_STS_TEN: /* Terminated normally. */
-                    LogRel(("Guest process (PID %u) exited normally\n", pCBData->u32PID)); /** @todo Add process name */
-                    if (!it->second.pProgress->getCompleted())
-                    {
-                        hr = it->second.pProgress->notifyComplete(S_OK);
-                        AssertComRC(hr);
-
-                        LogFlowFunc(("Process (CID=%u, status=%u) terminated successfully\n",
-                                     pData->hdr.u32ContextID, pData->u32Status));
-                    }
-                    break;
-
-                case PROC_STS_TEA: /* Terminated abnormally. */
-                    LogRel(("Guest process (PID %u) terminated abnormally with exit code = %u\n",
-                            pCBData->u32PID, pCBData->u32Flags)); /** @todo Add process name */
-                    errMsg = Utf8StrFmt(Guest::tr("Process terminated abnormally with status '%u'"),
-                                        pCBData->u32Flags);
-                    break;
-
-                case PROC_STS_TES: /* Terminated through signal. */
-                    LogRel(("Guest process (PID %u) terminated through signal with exit code = %u\n",
-                            pCBData->u32PID, pCBData->u32Flags)); /** @todo Add process name */
-                    errMsg = Utf8StrFmt(Guest::tr("Process terminated via signal with status '%u'"),
-                                        pCBData->u32Flags);
-                    break;
-
-                case PROC_STS_TOK:
-                    LogRel(("Guest process (PID %u) timed out and was killed\n", pCBData->u32PID)); /** @todo Add process name */
-                    errMsg = Utf8StrFmt(Guest::tr("Process timed out and was killed"));
-                    break;
-
-                case PROC_STS_TOA:
-                    LogRel(("Guest process (PID %u) timed out and could not be killed\n", pCBData->u32PID)); /** @todo Add process name */
-                    errMsg = Utf8StrFmt(Guest::tr("Process timed out and could not be killed"));
-                    break;
-
-                case PROC_STS_DWN:
-                    LogRel(("Guest process (PID %u) killed because system is shutting down\n", pCBData->u32PID)); /** @todo Add process name */
-                    /*
-                     * If u32Flags has ExecuteProcessFlag_IgnoreOrphanedProcesses set, we don't report an error to
-                     * our progress object. This is helpful for waiters which rely on the success of our progress object
-                     * even if the executed process was killed because the system/VBoxService is shutting down.
-                     *
-                     * In this case u32Flags contains the actual execution flags reached in via Guest::ExecuteProcess().
-                     */
-                    if (pData->u32Flags & ExecuteProcessFlag_IgnoreOrphanedProcesses)
-                    {
-                        if (!it->second.pProgress->getCompleted())
-                        {
-                            hr = it->second.pProgress->notifyComplete(S_OK);
-                            AssertComRC(hr);
-                        }
-                    }
-                    else
-                    {
-                        errMsg = Utf8StrFmt(Guest::tr("Process killed because system is shutting down"));
-                    }
-                    break;
-
-                case PROC_STS_ERROR:
-                    LogRel(("Guest process (PID %u) could not be started because of rc=%Rrc\n",
-                            pCBData->u32PID, pCBData->u32Flags)); /** @todo Add process name */
-                    errMsg = Utf8StrFmt(Guest::tr("Process execution failed with rc=%Rrc"), pCBData->u32Flags);
-                    break;
-
-                default:
-                    vrc = VERR_INVALID_PARAMETER;
-                    break;
-            }
-
-            /* Handle process map. */
-            /** @todo What happens on/deal with PID reuse? */
-            /** @todo How to deal with multiple updates at once? */
-            if (pCBData->u32PID > 0)
-            {
-                GuestProcessMapIter it_proc = getProcessByPID(pCBData->u32PID);
-                if (it_proc == mGuestProcessMap.end())
-                {
-                    /* Not found, add to map. */
-                    GuestProcess newProcess;
-                    newProcess.mStatus = (ExecuteProcessStatus_T)pCBData->u32Status;
-                    newProcess.mExitCode = pCBData->u32Flags; /* Contains exit code. */
-                    newProcess.mFlags = 0;
-
-                    mGuestProcessMap[pCBData->u32PID] = newProcess;
-                }
-                else /* Update map. */
-                {
-                    it_proc->second.mStatus = (ExecuteProcessStatus_T)pCBData->u32Status;
-                    it_proc->second.mExitCode = pCBData->u32Flags; /* Contains exit code. */
-                    it_proc->second.mFlags = 0;
-                }
-            }
+            pCallbackData->u32PID = pData->u32PID;
+            pCallbackData->u32Status = pData->u32Status;
+            pCallbackData->u32Flags = pData->u32Flags;
+            /** @todo Copy void* buffer contents? */
         }
         else
-            errMsg = Utf8StrFmt(Guest::tr("Process execution canceled"));
+            AssertReleaseMsgFailed(("Process status (PID=%u, CID=%u) does not have allocated callback data!\n",
+                                    pData->u32PID, uContextID));
+    }
 
-        if (!it->second.pProgress->getCompleted())
+    int vrc = VINF_SUCCESS;
+    Utf8Str errMsg;
+
+    /* Was progress canceled before? */
+    bool fCbCanceled = callbackIsCanceled(uContextID);
+    if (!fCbCanceled)
+    {
+        /* Do progress handling. */
+        switch (pData->u32Status)
         {
-            if (   errMsg.length()
-                || fCanceled) /* If canceled we have to report E_FAIL! */
-            {
-                /* Destroy all callbacks which are still waiting on something
-                 * which is related to the current PID. */
-                CallbackMapIter it2;
-                for (it2 = mCallbackMap.begin(); it2 != mCallbackMap.end(); it2++)
+            case PROC_STS_STARTED:
+                vrc = callbackMoveForward(uContextID, Guest::tr("Waiting for process to exit ..."));
+                LogRel(("Guest process (PID %u) started\n", pData->u32PID)); /** @todo Add process name */
+                break;
+
+            case PROC_STS_TEN: /* Terminated normally. */
+                vrc = callbackNotifyComplete(uContextID);
+                LogRel(("Guest process (PID %u) exited normally\n", pData->u32PID)); /** @todo Add process name */
+                break;
+
+            case PROC_STS_TEA: /* Terminated abnormally. */
+                LogRel(("Guest process (PID %u) terminated abnormally with exit code = %u\n",
+                        pData->u32PID, pData->u32Flags)); /** @todo Add process name */
+                errMsg = Utf8StrFmt(Guest::tr("Process terminated abnormally with status '%u'"),
+                                    pData->u32Flags);
+                break;
+
+            case PROC_STS_TES: /* Terminated through signal. */
+                LogRel(("Guest process (PID %u) terminated through signal with exit code = %u\n",
+                        pData->u32PID, pData->u32Flags)); /** @todo Add process name */
+                errMsg = Utf8StrFmt(Guest::tr("Process terminated via signal with status '%u'"),
+                                    pData->u32Flags);
+                break;
+
+            case PROC_STS_TOK:
+                LogRel(("Guest process (PID %u) timed out and was killed\n", pData->u32PID)); /** @todo Add process name */
+                errMsg = Utf8StrFmt(Guest::tr("Process timed out and was killed"));
+                break;
+
+            case PROC_STS_TOA:
+                LogRel(("Guest process (PID %u) timed out and could not be killed\n", pData->u32PID)); /** @todo Add process name */
+                errMsg = Utf8StrFmt(Guest::tr("Process timed out and could not be killed"));
+                break;
+
+            case PROC_STS_DWN:
+                LogRel(("Guest process (PID %u) killed because system is shutting down\n", pData->u32PID)); /** @todo Add process name */
+                /*
+                 * If u32Flags has ExecuteProcessFlag_IgnoreOrphanedProcesses set, we don't report an error to
+                 * our progress object. This is helpful for waiters which rely on the success of our progress object
+                 * even if the executed process was killed because the system/VBoxService is shutting down.
+                 *
+                 * In this case u32Flags contains the actual execution flags reached in via Guest::ExecuteProcess().
+                 */
+                if (pData->u32Flags & ExecuteProcessFlag_IgnoreOrphanedProcesses)
                 {
-                    switch (it2->second.mType)
-                    {
-                        case VBOXGUESTCTRLCALLBACKTYPE_EXEC_START:
-                            break;
-
-                        /* When waiting for process output while the process is destroyed,
-                         * make sure we also destroy the actual waiting operation (internal progress object)
-                         * in order to not block the caller. */
-                        case VBOXGUESTCTRLCALLBACKTYPE_EXEC_OUTPUT:
-                        {
-                            PCALLBACKDATAEXECOUT pItData = (PCALLBACKDATAEXECOUT)it2->second.pvData;
-                            AssertPtr(pItData);
-                            if (pItData->u32PID == pCBData->u32PID)
-                                notifyCtrlCallbackContext(it2, errMsg.c_str());
-                            break;
-                        }
-
-                        /* When waiting for injecting process input while the process is destroyed,
-                         * make sure we also destroy the actual waiting operation (internal progress object)
-                         * in order to not block the caller. */
-                        case VBOXGUESTCTRLCALLBACKTYPE_EXEC_INPUT_STATUS:
-                        {
-                            PCALLBACKDATAEXECINSTATUS pItData = (PCALLBACKDATAEXECINSTATUS)it2->second.pvData;
-                            AssertPtr(pItData);
-                            if (pItData->u32PID == pCBData->u32PID)
-                                notifyCtrlCallbackContext(it2, errMsg.c_str());
-                            break;
-                        }
-
-                        default:
-                            AssertMsgFailed(("Unknown callback type %d\n", it2->second.mType));
-                            break;
-                    }
+                    vrc = callbackNotifyComplete(uContextID);
                 }
+                else
+                    errMsg = Utf8StrFmt(Guest::tr("Process killed because system is shutting down"));
+                break;
 
-                /* Let the caller know what went wrong ... */
-                notifyCtrlCallbackContext(it, errMsg.c_str());
+            case PROC_STS_ERROR:
+                LogRel(("Guest process (PID %u) could not be started because of rc=%Rrc\n",
+                        pData->u32PID, pData->u32Flags)); /** @todo Add process name */
+                errMsg = Utf8StrFmt(Guest::tr("Process execution failed with rc=%Rrc"), pData->u32Flags);
+                break;
 
-                LogFlowFunc(("Process (CID=%u, status=%u) reported error: %s\n",
-                             pData->hdr.u32ContextID, pData->u32Status, errMsg.c_str()));
+            default:
+                vrc = VERR_INVALID_PARAMETER;
+                break;
+        }
+
+        /* Handle process map. */
+        /** @todo What happens on/deal with PID reuse? */
+        /** @todo How to deal with multiple updates at once? */
+        if (pData->u32PID)
+        {
+            VBOXGUESTCTRL_PROCESS process;
+            vrc = processGetByPID(pData->u32PID, &process);
+            if (vrc == VERR_NOT_FOUND)
+            {
+                /* Not found, add to map. */
+                vrc = processAdd(pData->u32PID,
+                                 (ExecuteProcessStatus_T)pData->u32Status,
+                                 pData->u32Flags /* Contains exit code. */,
+                                 0 /*Flags. */);
+                AssertRC(vrc);
             }
+            else if (RT_SUCCESS(vrc))
+            {
+                /* Process found, update process map. */
+                vrc = processSetStatus(pData->u32PID,
+                                       (ExecuteProcessStatus_T)pData->u32Status,
+                                       pData->u32Flags /* Contains exit code. */,
+                                       0 /*Flags. */);
+                AssertRC(vrc);
+            }
+            else
+                AssertReleaseMsgFailed(("Process was neither found nor absent!?\n"));
         }
     }
     else
-        LogFlowFunc(("Unexpected callback (magic=%u, CID=%u) arrived\n", pData->hdr.u32Magic, pData->hdr.u32ContextID));
+        errMsg = Utf8StrFmt(Guest::tr("Process execution canceled"));
+
+    if (!callbackIsComplete(uContextID))
+    {
+        if (   errMsg.length()
+            || fCbCanceled) /* If canceled we have to report E_FAIL! */
+        {
+            /* Notify all callbacks which are still waiting on something
+             * which is related to the current PID. */
+            if (pData->u32PID)
+            {
+                vrc = callbackNotifyAllForPID(pData->u32PID, VERR_GENERAL_FAILURE, errMsg.c_str());
+                if (RT_FAILURE(vrc))
+                    LogFlowFunc(("Failed to notify other callbacks for PID=%u\n",
+                                 pData->u32PID));
+            }
+
+            /* Let the caller know what went wrong ... */
+            int rc2 = callbackNotifyEx(uContextID, VERR_GENERAL_FAILURE, errMsg.c_str());
+            if (RT_FAILURE(rc2))
+            {
+                LogFlowFunc(("Failed to notify callback CID=%u for PID=%u\n",
+                             uContextID, pData->u32PID));
+
+                if (RT_SUCCESS(vrc))
+                    vrc = rc2;
+            }
+            LogFlowFunc(("Process (CID=%u, status=%u) reported error: %s\n",
+                         uContextID, pData->u32Status, errMsg.c_str()));
+        }
+    }
     LogFlowFunc(("Returned with rc=%Rrc\n", vrc));
     return vrc;
 }
@@ -1197,278 +840,208 @@ int Guest::notifyCtrlExecStatus(uint32_t                u32Function,
 int Guest::notifyCtrlExecOut(uint32_t             u32Function,
                              PCALLBACKDATAEXECOUT pData)
 {
-    int rc = VINF_SUCCESS;
+    AssertReturn(u32Function, VERR_INVALID_PARAMETER);
+    AssertPtrReturn(pData, VERR_INVALID_PARAMETER);
 
-    AutoWriteLock alock(this COMMA_LOCKVAL_SRC_POS);
+    uint32_t uContextID = pData->hdr.u32ContextID;
+    Assert(uContextID);
 
-    AssertPtr(pData);
-    CallbackMapIter it = getCtrlCallbackContextByID(pData->hdr.u32ContextID);
-    if (it != mCallbackMap.end())
+    /* Scope write locks as much as possible. */
     {
-        PCALLBACKDATAEXECOUT pCBData = (PCALLBACKDATAEXECOUT)it->second.pvData;
-        AssertPtr(pCBData);
+        AutoWriteLock alock(this COMMA_LOCKVAL_SRC_POS);
 
-        pCBData->u32PID = pData->u32PID;
-        pCBData->u32HandleId = pData->u32HandleId;
-        pCBData->u32Flags = pData->u32Flags;
+        PCALLBACKDATAEXECOUT pCallbackData =
+            (PCALLBACKDATAEXECOUT)callbackGetUserDataMutableRaw(uContextID, NULL /* cbData */);
+        if (pCallbackData)
+        {
+            pCallbackData->u32PID = pData->u32PID;
+            pCallbackData->u32HandleId = pData->u32HandleId;
+            pCallbackData->u32Flags = pData->u32Flags;
 
-        /* Make sure we really got something! */
-        if (   pData->cbData
-            && pData->pvData)
-        {
-            /* Allocate data buffer and copy it */
-            pCBData->pvData = RTMemAlloc(pData->cbData);
-            pCBData->cbData = pData->cbData;
-
-            AssertReturn(pCBData->pvData, VERR_NO_MEMORY);
-            memcpy(pCBData->pvData, pData->pvData, pData->cbData);
-        }
-        else
-        {
-            pCBData->pvData = NULL;
-            pCBData->cbData = 0;
-        }
-
-        /* Was progress canceled before? */
-        BOOL fCanceled;
-        ComAssert(!it->second.pProgress.isNull());
-        if (SUCCEEDED(it->second.pProgress->COMGETTER(Canceled)(&fCanceled)) && fCanceled)
-        {
-            it->second.pProgress->notifyComplete(VBOX_E_IPRT_ERROR,
-                                                 COM_IIDOF(IGuest),
-                                                 Guest::getStaticComponentName(),
-                                                 Guest::tr("The output operation was canceled"));
-        }
-        else
-        {
-            BOOL fCompleted;
-            if (   SUCCEEDED(it->second.pProgress->COMGETTER(Completed)(&fCompleted))
-                && !fCompleted)
+            /* Make sure we really got something! */
+            if (   pData->cbData
+                && pData->pvData)
             {
-                /* If we previously got completed notification, don't trigger again. */
-                it->second.pProgress->notifyComplete(S_OK);
+                callbackFreeUserData(pCallbackData->pvData);
+
+                /* Allocate data buffer and copy it */
+                pCallbackData->pvData = RTMemAlloc(pData->cbData);
+                pCallbackData->cbData = pData->cbData;
+
+                AssertReturn(pCallbackData->pvData, VERR_NO_MEMORY);
+                memcpy(pCallbackData->pvData, pData->pvData, pData->cbData);
+            }
+            else /* Nothing received ... */
+            {
+                pCallbackData->pvData = NULL;
+                pCallbackData->cbData = 0;
             }
         }
+        else
+            AssertReleaseMsgFailed(("Process output status (PID=%u, CID=%u) does not have allocated callback data!\n",
+                                    pData->u32PID, uContextID));
+    }
+
+    int vrc;
+    if (callbackIsCanceled(pData->u32PID))
+    {
+        vrc = callbackNotifyEx(uContextID, VERR_CANCELLED,
+                               Guest::tr("The output operation was canceled"));
     }
     else
-        LogFlowFunc(("Unexpected callback (magic=%u, CID=%u) arrived\n", pData->hdr.u32Magic, pData->hdr.u32ContextID));
-    return rc;
+        vrc = callbackNotifyComplete(uContextID);
+
+    return vrc;
 }
 
 /* Function for handling the execution input status notification. */
 int Guest::notifyCtrlExecInStatus(uint32_t                  u32Function,
                                   PCALLBACKDATAEXECINSTATUS pData)
 {
-    int rc = VINF_SUCCESS;
+    AssertReturn(u32Function, VERR_INVALID_PARAMETER);
+    AssertPtrReturn(pData, VERR_INVALID_PARAMETER);
 
-    AutoWriteLock alock(this COMMA_LOCKVAL_SRC_POS);
+    uint32_t uContextID = pData->hdr.u32ContextID;
+    Assert(uContextID);
 
-    AssertPtr(pData);
-    CallbackMapIter it = getCtrlCallbackContextByID(pData->hdr.u32ContextID);
-    if (it != mCallbackMap.end())
+    /* Scope write locks as much as possible. */
     {
-        PCALLBACKDATAEXECINSTATUS pCBData = (PCALLBACKDATAEXECINSTATUS)it->second.pvData;
-        AssertPtr(pCBData);
+        AutoWriteLock alock(this COMMA_LOCKVAL_SRC_POS);
 
-        /* Save bytes processed. */
-        pCBData->cbProcessed = pData->cbProcessed;
-        pCBData->u32Status = pData->u32Status;
-        pCBData->u32Flags = pData->u32Flags;
-        pCBData->u32PID = pData->u32PID;
-
-        /* Only trigger completion once. */
-        BOOL fCompleted;
-        if (   SUCCEEDED(it->second.pProgress->COMGETTER(Completed)(&fCompleted))
-            && !fCompleted)
+        PCALLBACKDATAEXECINSTATUS pCallbackData =
+            (PCALLBACKDATAEXECINSTATUS)callbackGetUserDataMutableRaw(uContextID, NULL /* cbData */);
+        if (pCallbackData)
         {
-            it->second.pProgress->notifyComplete(S_OK);
+            /* Save bytes processed. */
+            pCallbackData->cbProcessed = pData->cbProcessed;
+            pCallbackData->u32Status = pData->u32Status;
+            pCallbackData->u32Flags = pData->u32Flags;
+            pCallbackData->u32PID = pData->u32PID;
         }
+        else
+            AssertReleaseMsgFailed(("Process input status (PID=%u, CID=%u) does not have allocated callback data!\n",
+                                    pData->u32PID, uContextID));
     }
-    else
-        LogFlowFunc(("Unexpected callback (magic=%u, CID=%u) arrived\n", pData->hdr.u32Magic, pData->hdr.u32ContextID));
-    return rc;
+
+    return callbackNotifyComplete(uContextID);
 }
 
 int Guest::notifyCtrlClientDisconnected(uint32_t                        u32Function,
                                         PCALLBACKDATACLIENTDISCONNECTED pData)
 {
-    int rc = VINF_SUCCESS;
+    /* u32Function is 0. */
+    AssertPtrReturn(pData, VERR_INVALID_PARAMETER);
+
+    uint32_t uContextID = pData->hdr.u32ContextID;
+    Assert(uContextID);
+
+    return callbackNotifyEx(uContextID, S_OK,
+                            Guest::tr("Client disconnected"));
+}
+
+int Guest::processAdd(uint32_t u32PID, ExecuteProcessStatus_T enmStatus,
+                      uint32_t uExitCode, uint32_t uFlags)
+{
+    AssertReturn(u32PID, VERR_INVALID_PARAMETER);
 
     AutoWriteLock alock(this COMMA_LOCKVAL_SRC_POS);
-    CallbackMapIter it = getCtrlCallbackContextByID(pData->hdr.u32ContextID);
-    if (it != mCallbackMap.end())
+
+    GuestProcessMapIterConst it = mGuestProcessMap.find(u32PID);
+    if (it == mGuestProcessMap.end())
     {
-        LogFlowFunc(("Client with CID=%u disconnected\n", it->first));
-        notifyCtrlCallbackContext(it, Guest::tr("Client disconnected"));
+        VBOXGUESTCTRL_PROCESS process;
+
+        process.mStatus = enmStatus;
+        process.mExitCode = uExitCode;
+        process.mFlags = uFlags;
+
+        mGuestProcessMap[u32PID] = process;
+
+        return VINF_SUCCESS;
     }
-    return rc;
+
+    return VERR_ALREADY_EXISTS;
 }
 
-Guest::CallbackMapIter Guest::getCtrlCallbackContextByID(uint32_t u32ContextID)
+int Guest::processGetByPID(uint32_t u32PID, PVBOXGUESTCTRL_PROCESS pProcess)
 {
+    AssertReturn(u32PID, VERR_INVALID_PARAMETER);
+    AssertPtrReturn(pProcess, VERR_INVALID_PARAMETER);
+
     AutoReadLock alock(this COMMA_LOCKVAL_SRC_POS);
-    return mCallbackMap.find(u32ContextID);
+
+    GuestProcessMapIterConst it = mGuestProcessMap.find(u32PID);
+    if (it != mGuestProcessMap.end())
+    {
+        pProcess->mStatus = it->second.mStatus;
+        pProcess->mExitCode = it->second.mExitCode;
+        pProcess->mFlags = it->second.mFlags;
+
+        return VINF_SUCCESS;
+    }
+
+    return VERR_NOT_FOUND;
 }
 
-Guest::GuestProcessMapIter Guest::getProcessByPID(uint32_t u32PID)
+int Guest::processSetStatus(uint32_t u32PID, ExecuteProcessStatus_T enmStatus, uint32_t uExitCode, uint32_t uFlags)
 {
+    AssertReturn(u32PID, VERR_INVALID_PARAMETER);
+
     AutoReadLock alock(this COMMA_LOCKVAL_SRC_POS);
-    return mGuestProcessMap.find(u32PID);
+
+    GuestProcessMapIter it = mGuestProcessMap.find(u32PID);
+    if (it != mGuestProcessMap.end())
+    {
+        it->second.mStatus = enmStatus;
+        it->second.mExitCode = uExitCode;
+        it->second.mFlags = uFlags;
+
+        return VINF_SUCCESS;
+    }
+
+    return VERR_NOT_FOUND;
 }
 
-/* No locking here; */
-void Guest::destroyCtrlCallbackContext(Guest::CallbackMapIter it)
+HRESULT Guest::handleErrorCompletion(int rc)
 {
-    LogFlowFunc(("Destroying callback with CID=%u ...\n", it->first));
-
-    if (it->second.pvData)
-    {
-        RTMemFree(it->second.pvData);
-        it->second.pvData = NULL;
-        it->second.cbData = 0;
-    }
-
-    /* Remove callback context (not used anymore). */
-    mCallbackMap.erase(it);
-}
-
-/* No locking here; */
-void Guest::notifyCtrlCallbackContext(Guest::CallbackMapIter it, const char *pszText)
-{
-    AssertPtr(pszText);
-    LogFlowFunc(("Handling callback with CID=%u ...\n", it->first));
-
-    /* Notify outstanding waits for progress ... */
-    if (    it->second.pProgress
-         && !it->second.pProgress.isNull())
-    {
-        LogFlowFunc(("Notifying progress for CID=%u (Reason: %s) ...\n",
-                     it->first, pszText));
-
-        /*
-         * Assume we didn't complete to make sure we clean up even if the
-         * following call fails.
-         */
-        BOOL fCompleted = FALSE;
-        it->second.pProgress->COMGETTER(Completed)(&fCompleted);
-        if (!fCompleted)
-        {
-            /*
-             * To get waitForCompletion completed (unblocked) we have to notify it if necessary (only
-             * cancel won't work!). This could happen if the client thread (e.g. VBoxService, thread of a spawned process)
-             * is disconnecting without having the chance to sending a status message before, so we
-             * have to abort here to make sure the host never hangs/gets stuck while waiting for the
-             * progress object to become signalled.
-             */
-            it->second.pProgress->notifyComplete(VBOX_E_IPRT_ERROR,
-                                                 COM_IIDOF(IGuest),
-                                                 Guest::getStaticComponentName(),
-                                                 pszText);
-        }
-        /*
-         * Do *not* NULL pProgress here, because waiting function like executeProcess()
-         * will still rely on this object for checking whether they have to give up!
-         */
-    }
-}
-
-/* Adds a callback with a user provided data block and an optional progress object
- * to the callback map. A callback is identified by a unique context ID which is used
- * to identify a callback from the guest side. */
-uint32_t Guest::addCtrlCallbackContext(eVBoxGuestCtrlCallbackType enmType, void *pvData, uint32_t cbData, Progress *pProgress)
-{
-    AssertPtr(pProgress);
-
-    /** @todo Put this stuff into a constructor! */
-    CallbackContext context;
-    context.mType = enmType;
-    context.pvData = pvData;
-    context.cbData = cbData;
-    context.pProgress = pProgress;
-
-    /* Create a new context ID and assign it. */
-    CallbackMapIter it;
-    uint32_t uNewContext = 0;
-    do
-    {
-        /* Create a new context ID ... */
-        uNewContext = ASMAtomicIncU32(&mNextContextID);
-        if (uNewContext == UINT32_MAX)
-            ASMAtomicUoWriteU32(&mNextContextID, 1000);
-        /* Is the context ID already used? */
-        it = getCtrlCallbackContextByID(uNewContext);
-    } while(it != mCallbackMap.end());
-
-    uint32_t nCallbacks = 0;
-    if (   it == mCallbackMap.end()
-        && uNewContext > 0)
-    {
-        /* We apparently got an unused context ID, let's use it! */
-        AutoWriteLock alock(this COMMA_LOCKVAL_SRC_POS);
-        mCallbackMap[uNewContext] = context;
-        nCallbacks = mCallbackMap.size();
-    }
-    else
-    {
-        /* Should never happen ... */
-        {
-            AutoReadLock alock(this COMMA_LOCKVAL_SRC_POS);
-            nCallbacks = mCallbackMap.size();
-        }
-        AssertReleaseMsg(uNewContext, ("No free context ID found! uNewContext=%u, nCallbacks=%u", uNewContext, nCallbacks));
-    }
-
-#if 0
-    if (nCallbacks > 256) /* Don't let the container size get too big! */
-    {
-        Guest::CallbackListIter it = mCallbackList.begin();
-        destroyCtrlCallbackContext(it);
-        {
-            AutoWriteLock alock(this COMMA_LOCKVAL_SRC_POS);
-            mCallbackList.erase(it);
-        }
-    }
-#endif
-    return uNewContext;
-}
-
-HRESULT Guest::waitForProcessStatusChange(ULONG uPID, ExecuteProcessStatus_T *pRetStatus, ULONG *puRetExitCode, ULONG uTimeoutMS)
-{
-    AssertPtr(pRetStatus);
-    AssertPtr(puRetExitCode);
-
-    if (uTimeoutMS == 0)
-        uTimeoutMS = UINT32_MAX;
-
-    uint64_t u64StartMS = RTTimeMilliTS();
-
     HRESULT hRC;
-    ULONG uRetFlagsIgnored;
-    do
-    {
-        /*
-         * Do some busy waiting within the specified time period (if any).
-         */
-        if (   uTimeoutMS != UINT32_MAX
-            && RTTimeMilliTS() - u64StartMS > uTimeoutMS)
-        {
-            hRC = setError(VBOX_E_IPRT_ERROR,
-                           tr("The process (PID %u) did not change its status within time (%ums)"),
-                           uPID, uTimeoutMS);
-            break;
-        }
-        hRC = GetProcessStatus(uPID, puRetExitCode, &uRetFlagsIgnored, pRetStatus);
-        if (FAILED(hRC))
-            break;
-        RTThreadSleep(100);
-    } while(*pRetStatus == ExecuteProcessStatus_Started && SUCCEEDED(hRC));
+    if (rc == VERR_NOT_FOUND)
+        hRC = setErrorNoLog(VBOX_E_VM_ERROR,
+                            tr("VMM device is not available (is the VM running?)"));
+    else if (rc == VERR_CANCELLED)
+        hRC = setErrorNoLog(VBOX_E_IPRT_ERROR,
+                            tr("Process execution has been canceled"));
+    else if (rc == VERR_TIMEOUT)
+        hRC= setErrorNoLog(VBOX_E_IPRT_ERROR,
+                            tr("The guest did not respond within time"));
+    else
+        hRC = setErrorNoLog(E_UNEXPECTED,
+                            tr("Waiting for completion failed with error %Rrc"), rc);
+    return hRC;
+}
+
+HRESULT Guest::handleErrorHGCM(int rc)
+{
+    HRESULT hRC;
+    if (rc == VERR_INVALID_VM_HANDLE)
+        hRC = setErrorNoLog(VBOX_E_VM_ERROR,
+                            tr("VMM device is not available (is the VM running?)"));
+    else if (rc == VERR_NOT_FOUND)
+        hRC = setErrorNoLog(VBOX_E_IPRT_ERROR,
+                            tr("The guest execution service is not ready (yet)"));
+    else if (rc == VERR_HGCM_SERVICE_NOT_FOUND)
+        hRC= setErrorNoLog(VBOX_E_IPRT_ERROR,
+                            tr("The guest execution service is not available"));
+    else /* HGCM call went wrong. */
+        hRC = setErrorNoLog(E_UNEXPECTED,
+                            tr("The HGCM call failed with error %Rrc"), rc);
     return hRC;
 }
 #endif /* VBOX_WITH_GUEST_CONTROL */
 
 STDMETHODIMP Guest::ExecuteProcess(IN_BSTR aCommand, ULONG aFlags,
                                    ComSafeArrayIn(IN_BSTR, aArguments), ComSafeArrayIn(IN_BSTR, aEnvironment),
-                                   IN_BSTR aUserName, IN_BSTR aPassword,
+                                   IN_BSTR aUsername, IN_BSTR aPassword,
                                    ULONG aTimeoutMS, ULONG *aPID, IProgress **aProgress)
 {
 /** @todo r=bird: Eventually we should clean up all the timeout parameters
@@ -1483,28 +1056,399 @@ STDMETHODIMP Guest::ExecuteProcess(IN_BSTR aCommand, ULONG aFlags,
     CheckComArgOutPointerValid(aProgress);
 
     /* Do not allow anonymous executions (with system rights). */
-    if (RT_UNLIKELY((aUserName) == NULL || *(aUserName) == '\0'))
+    if (RT_UNLIKELY((aUsername) == NULL || *(aUsername) == '\0'))
         return setError(E_INVALIDARG, tr("No user name specified"));
 
     LogRel(("Executing guest process \"%s\" as user \"%s\" ...\n",
-            Utf8Str(aCommand).c_str(), Utf8Str(aUserName).c_str()));
+            Utf8Str(aCommand).c_str(), Utf8Str(aUsername).c_str()));
 
     return executeProcessInternal(aCommand, aFlags, ComSafeArrayInArg(aArguments),
                                   ComSafeArrayInArg(aEnvironment),
-                                  aUserName, aPassword, aTimeoutMS, aPID, aProgress, NULL /* rc */);
+                                  aUsername, aPassword, aTimeoutMS, aPID, aProgress, NULL /* rc */);
 #endif
 }
 
+#ifdef VBOX_WITH_GUEST_CONTROL
+/**
+ * Executes and waits for an internal tool (that is, a tool which is integrated into
+ * VBoxService, beginning with "vbox_" (e.g. "vbox_ls")) to finish its operation.
+ *
+ * @return  HRESULT
+ * @param   aTool                   Name of tool to execute.
+ * @param   aDescription            Friendly description of the operation.
+ * @param   aFlags                  Execution flags.
+ * @param   aUsername               Username to execute tool under.
+ * @param   aPassword               The user's password.
+ * @param   aProgress               Pointer which receives the tool's progress object. Optional.
+ * @param   aPID                    Pointer which receives the tool's PID. Optional.
+ */
+HRESULT Guest::executeAndWaitForTool(IN_BSTR aTool, IN_BSTR aDescription,
+                                     ComSafeArrayIn(IN_BSTR, aArguments), ComSafeArrayIn(IN_BSTR, aEnvironment),
+                                     IN_BSTR aUsername, IN_BSTR aPassword,
+                                     IProgress **aProgress, ULONG *aPID)
+{
+    ComPtr<IProgress> progressTool;
+    ULONG uPID;
+
+    HRESULT rc = ExecuteProcess(aTool,
+                                ExecuteProcessFlag_Hidden,
+                                ComSafeArrayInArg(aArguments),
+                                ComSafeArrayInArg(aEnvironment),
+                                aUsername, aPassword,
+                                5 * 1000 /* Wait 5s for getting the process started. */,
+                                &uPID, progressTool.asOutParam());
+    if (SUCCEEDED(rc))
+    {
+        /* Wait for process to exit ... */
+        rc = progressTool->WaitForCompletion(-1);
+        if (FAILED(rc)) return rc;
+
+        BOOL fCompleted = FALSE;
+        BOOL fCanceled = FALSE;
+        progressTool->COMGETTER(Completed)(&fCompleted);
+        if (!fCompleted)
+            progressTool->COMGETTER(Canceled)(&fCanceled);
+
+        if (fCompleted)
+        {
+            ExecuteProcessStatus_T retStatus;
+            ULONG uRetExitCode, uRetFlags;
+            if (SUCCEEDED(rc))
+            {
+                rc = GetProcessStatus(uPID, &uRetExitCode, &uRetFlags, &retStatus);
+                if (SUCCEEDED(rc))
+                {
+                    if (uRetExitCode != 0) /* Not equal 0 means some error occured. */
+                    {
+                        /** @todo IPRT exit code to string! */
+                        rc = setError(VBOX_E_IPRT_ERROR,
+                                      tr("%s: Error %u occured"),
+                                      Utf8Str(aDescription).c_str(), uRetExitCode);
+                    }
+                    else /* Return code 0, success. */
+                    {
+                        if (aProgress)
+                        {
+                            /* Return the progress to the caller. */
+                            progressTool.queryInterfaceTo(aProgress);
+                        }
+                        if (aPID)
+                            *aPID = uPID;
+                    }
+                }
+            }
+        }
+        else if (fCanceled)
+        {
+            rc = setError(VBOX_E_IPRT_ERROR,
+                          tr("%s was aborted"), aDescription);
+        }
+        else
+            AssertReleaseMsgFailed(("%s: Operation neither completed nor canceled!?\n",
+                                    Utf8Str(aDescription).c_str()));
+    }
+
+    return rc;
+}
+
+HRESULT Guest::executeProcessResult(const char *pszCommand, const char *pszUser, ULONG ulTimeout,
+                                    PCALLBACKDATAEXECSTATUS pExecStatus, ULONG *puPID)
+{
+    AssertPtrReturn(pExecStatus, E_INVALIDARG);
+    AssertPtrReturn(puPID, E_INVALIDARG);
+
+    HRESULT rc = S_OK;
+
+    /* Did we get some status? */
+    switch (pExecStatus->u32Status)
+    {
+        case PROC_STS_STARTED:
+            /* Process is (still) running; get PID. */
+            *puPID = pExecStatus->u32PID;
+            break;
+
+        /* In any other case the process either already
+         * terminated or something else went wrong, so no PID ... */
+        case PROC_STS_TEN: /* Terminated normally. */
+        case PROC_STS_TEA: /* Terminated abnormally. */
+        case PROC_STS_TES: /* Terminated through signal. */
+        case PROC_STS_TOK:
+        case PROC_STS_TOA:
+        case PROC_STS_DWN:
+            /*
+             * Process (already) ended, but we want to get the
+             * PID anyway to retrieve the output in a later call.
+             */
+            *puPID = pExecStatus->u32PID;
+            break;
+
+        case PROC_STS_ERROR:
+            {
+                int vrc = pExecStatus->u32Flags; /* u32Flags member contains IPRT error code. */
+                if (vrc == VERR_FILE_NOT_FOUND) /* This is the most likely error. */
+                    rc = setErrorNoLog(VBOX_E_IPRT_ERROR,
+                                       tr("The file '%s' was not found on guest"), pszCommand);
+                else if (vrc == VERR_PATH_NOT_FOUND)
+                    rc = setErrorNoLog(VBOX_E_IPRT_ERROR,
+                                       tr("The path to file '%s' was not found on guest"), pszCommand);
+                else if (vrc == VERR_BAD_EXE_FORMAT)
+                    rc = setErrorNoLog(VBOX_E_IPRT_ERROR,
+                                       tr("The file '%s' is not an executable format on guest"), pszCommand);
+                else if (vrc == VERR_AUTHENTICATION_FAILURE)
+                    rc = setErrorNoLog(VBOX_E_IPRT_ERROR,
+                                       tr("The specified user '%s' was not able to logon on guest"), pszUser);
+                else if (vrc == VERR_TIMEOUT)
+                    rc = setErrorNoLog(VBOX_E_IPRT_ERROR,
+                                       tr("The guest did not respond within time (%ums)"), ulTimeout);
+                else if (vrc == VERR_CANCELLED)
+                    rc = setErrorNoLog(VBOX_E_IPRT_ERROR,
+                                       tr("The execution operation was canceled"));
+                else if (vrc == VERR_PERMISSION_DENIED)
+                    rc = setErrorNoLog(VBOX_E_IPRT_ERROR,
+                                       tr("Invalid user/password credentials"));
+                else if (vrc == VERR_MAX_PROCS_REACHED)
+                    rc = setErrorNoLog(VBOX_E_IPRT_ERROR,
+                                       tr("Concurrent guest process limit is reached"));
+                else
+                {
+                    if (pExecStatus && pExecStatus->u32Status == PROC_STS_ERROR)
+                        rc = setErrorNoLog(VBOX_E_IPRT_ERROR,
+                                           tr("Process could not be started: %Rrc"), pExecStatus->u32Flags);
+                    else
+                        rc = setErrorNoLog(E_UNEXPECTED,
+                                           tr("The service call failed with error %Rrc"), vrc);
+                }
+            }
+            break;
+
+        case PROC_STS_UNDEFINED: /* . */
+            rc = setErrorNoLog(VBOX_E_IPRT_ERROR,
+                               tr("The operation did not complete within time"));
+            break;
+
+        default:
+            AssertReleaseMsgFailed(("Process (PID %u) reported back an undefined state!\n",
+                                    pExecStatus->u32PID));
+            rc = E_UNEXPECTED;
+            break;
+    }
+
+    return rc;
+}
+
+/**
+ * TODO
+ *
+ * @return  HRESULT
+ * @param   aObjName
+ * @param   pStreamBlock
+ * @param   pObjInfo
+ * @param   enmAddAttribs
+ */
+HRESULT Guest::executeStreamQueryFsObjInfo(IN_BSTR aObjName,
+                                           GuestProcessStreamBlock &streamBlock,
+                                           PRTFSOBJINFO pObjInfo,
+                                           RTFSOBJATTRADD enmAddAttribs)
+{
+    HRESULT rc = S_OK;
+    Utf8Str Utf8ObjName(aObjName);
+
+    int64_t iVal;
+    int vrc = streamBlock.GetInt64Ex("st_size", &iVal);
+    if (RT_SUCCESS(vrc))
+        pObjInfo->cbObject = iVal;
+    else
+        rc = setError(VBOX_E_IPRT_ERROR,
+                      tr("Unable to retrieve size for \"%s\" (%Rrc)"),
+                      Utf8ObjName.c_str(), vrc);
+    /** @todo Add more stuff! */
+    return rc;
+}
+
+/**
+ * Tries to drain the guest's output (from stdout) and fill it into
+ * a guest process stream object for later usage.
+ *
+ * @return  IPRT status code.
+ * @param   aPID                    PID of process to get the output from.
+ * @param   stream                  Reference to guest process stream to fill.
+ */
+int Guest::executeStreamDrain(ULONG aPID, GuestProcessStream &stream)
+{
+    AssertReturn(aPID, VERR_INVALID_PARAMETER);
+
+    /** @todo Should we try to drain the stream harder? */
+
+    int rc = VINF_SUCCESS;
+    for (;;)
+    {
+        SafeArray<BYTE> aOutputData;
+        HRESULT hr = GetProcessOutput(aPID, ProcessOutputFlag_None /* Stdout */,
+                                      10 * 1000 /* Timeout in ms */,
+                                      _64K, ComSafeArrayAsOutParam(aOutputData));
+        if (   SUCCEEDED(hr)
+            && aOutputData.size())
+        {
+            rc = stream.AddData(aOutputData.raw(), aOutputData.size());
+            if (RT_UNLIKELY(RT_FAILURE(rc)))
+                break;
+        }
+        else /* No more output and/or error! */
+            break;
+    }
+
+    return rc;
+}
+
+/**
+ * Tries to get the next upcoming value block from a started guest process
+ * by first draining its output and then processing the received guest stream.
+ *
+ * @return  IPRT status code.
+ * @param   aPID                    PID of process to get/parse the output from.
+ * @param   stream                  Reference to process stream object to use.
+ * @param   streamBlock             Reference that receives the next stream block data.
+ *
+ */
+int Guest::executeStreamGetNextBlock(ULONG aPID, GuestProcessStream &stream,
+                                     GuestProcessStreamBlock &streamBlock)
+{
+    int rc = executeStreamDrain(aPID, stream);
+    if (RT_SUCCESS(rc))
+    {
+        do
+        {
+            rc = stream.ParseBlock(streamBlock);
+            if (streamBlock.GetCount())
+                break; /* We got a block, bail out! */
+        } while (RT_SUCCESS(rc));
+
+        /* In case this was the last block, VERR_NO_DATA is returned.
+         * Overwrite this to get a proper return value for the last block. */
+        if(    streamBlock.GetCount()
+            && rc == VERR_NO_DATA)
+        {
+            rc = VINF_SUCCESS;
+        }
+    }
+
+    return rc;
+}
+
+/**
+ * Gets output from a formerly started guest process, tries to parse all of its guest
+ * stream (as long as data is available) and returns a stream object which can contain
+ * multiple stream blocks (which in turn then can contain key=value pairs).
+ *
+ * @return  HRESULT
+ * @param   aPID                    PID of process to get/parse the output from.
+ * @param   streamObjects           Reference to a guest stream object structure for
+ *                                  storing the parsed data.
+ */
+HRESULT Guest::executeStreamParse(ULONG aPID, GuestCtrlStreamObjects &streamObjects)
+{
+    GuestProcessStream guestStream;
+    HRESULT hr = executeStreamDrain(aPID, guestStream);
+    if (SUCCEEDED(hr))
+    {
+        for (;;)
+        {
+            /* Try to parse the stream output we gathered until now. If we still need more
+             * data the parsing routine will tell us and we just do another poll round. */
+            GuestProcessStreamBlock curBlock;
+            int vrc = guestStream.ParseBlock(curBlock);
+            if (RT_SUCCESS(vrc))
+            {
+                if (curBlock.GetCount())
+                {
+                    streamObjects.push_back(curBlock);
+                }
+                else
+                    break; /* No more data. */
+            }
+            else /* Everything else would be an error! */
+                hr = setError(VBOX_E_IPRT_ERROR,
+                              tr("Error while parsing guest output (%Rrc)"), vrc);
+        }
+    }
+
+    /** @todo Add check if there now are any sream objects at all! */
+
+    return hr;
+}
+
+/**
+ * Does busy waiting on a formerly started guest process.
+ *
+ * @return  HRESULT
+ * @param   uPID                    PID of guest process to wait for.
+ * @param   uTimeoutMS              Waiting timeout (in ms). Specify 0 for an infinite timeout.
+ * @param   pRetStatus              Pointer which receives current process status after the change.
+ *                                  Optional.
+ * @param   puRetExitCode           Pointer which receives the final exit code in case of guest process
+ *                                  termination. Optional.
+ */
+HRESULT Guest::executeWaitForStatusChange(ULONG uPID, ULONG uTimeoutMS,
+                                          ExecuteProcessStatus_T *pRetStatus, ULONG *puRetExitCode)
+{
+    if (uTimeoutMS == 0)
+        uTimeoutMS = UINT32_MAX;
+
+    uint64_t u64StartMS = RTTimeMilliTS();
+
+    HRESULT hRC;
+    ULONG uExitCode, uRetFlags;
+    ExecuteProcessStatus_T curStatus;
+    hRC = GetProcessStatus(uPID, &uExitCode, &uRetFlags, &curStatus);
+    if (FAILED(hRC))
+        return hRC;
+
+    do
+    {
+        if (   uTimeoutMS != UINT32_MAX
+            && RTTimeMilliTS() - u64StartMS > uTimeoutMS)
+        {
+            hRC = setError(VBOX_E_IPRT_ERROR,
+                           tr("The process (PID %u) did not change its status within time (%ums)"),
+                           uPID, uTimeoutMS);
+            break;
+        }
+        hRC = GetProcessStatus(uPID, &uExitCode, &uRetFlags, &curStatus);
+        if (FAILED(hRC))
+            break;
+        RTThreadSleep(100);
+    } while(*pRetStatus == curStatus);
+
+    if (SUCCEEDED(hRC))
+    {
+        if (pRetStatus)
+            *pRetStatus = curStatus;
+        if (puRetExitCode)
+            *puRetExitCode = uExitCode;
+    }
+    return hRC;
+}
+
+/**
+ * Does the actual guest process execution, internal function.
+ *
+ * @return  HRESULT
+ * @param   aCommand                Command line to execute.
+ * @param   aFlags                  Execution flags.
+ * @param   Username                Username to execute the process with.
+ * @param   aPassword               The user's password.
+ * @param   aTimeoutMS              Timeout (in ms) to wait for the execution operation.
+ * @param   aPID                    Pointer that receives the guest process' PID.
+ * @param   aProgress               Pointer that receives the guest process' progress object.
+ * @param   pRC                     Pointer that receives the internal IPRT return code. Optional.
+ */
 HRESULT Guest::executeProcessInternal(IN_BSTR aCommand, ULONG aFlags,
                                       ComSafeArrayIn(IN_BSTR, aArguments), ComSafeArrayIn(IN_BSTR, aEnvironment),
-                                      IN_BSTR aUserName, IN_BSTR aPassword,
+                                      IN_BSTR aUsername, IN_BSTR aPassword,
                                       ULONG aTimeoutMS, ULONG *aPID, IProgress **aProgress, int *pRC)
 {
 /** @todo r=bird: Eventually we should clean up all the timeout parameters
  *        in the API and have the same way of specifying infinite waits!  */
-#ifndef VBOX_WITH_GUEST_CONTROL
-    ReturnComNotImplemented();
-#else  /* VBOX_WITH_GUEST_CONTROL */
     using namespace guestControl;
 
     AutoCaller autoCaller(this);
@@ -1515,7 +1459,8 @@ HRESULT Guest::executeProcessInternal(IN_BSTR aCommand, ULONG aFlags,
     {
         if (   !(aFlags & ExecuteProcessFlag_IgnoreOrphanedProcesses)
             && !(aFlags & ExecuteProcessFlag_WaitForProcessStartOnly)
-            && !(aFlags & ExecuteProcessFlag_Hidden))
+            && !(aFlags & ExecuteProcessFlag_Hidden)
+            && !(aFlags & ExecuteProcessFlag_NoProfile))
         {
             if (pRC)
                 *pRC = VERR_INVALID_PARAMETER;
@@ -1536,15 +1481,15 @@ HRESULT Guest::executeProcessInternal(IN_BSTR aCommand, ULONG aFlags,
          * started and exited normally. In any other case an error/exception
          * occurred.
          */
-        ComObjPtr <Progress> progress;
-        rc = progress.createObject();
+        ComObjPtr <Progress> pProgress;
+        rc = pProgress.createObject();
         if (SUCCEEDED(rc))
         {
-            rc = progress->init(static_cast<IGuest*>(this),
-                                Bstr(tr("Executing process")).raw(),
-                                TRUE,
-                                2,                                          /* Number of operations. */
-                                Bstr(tr("Starting process ...")).raw());    /* Description of first stage. */
+            rc = pProgress->init(static_cast<IGuest*>(this),
+                                 Bstr(tr("Executing process")).raw(),
+                                 TRUE,
+                                 2,                                          /* Number of operations. */
+                                 Bstr(tr("Starting process ...")).raw());    /* Description of first stage. */
         }
         ComAssertComRC(rc);
 
@@ -1573,7 +1518,7 @@ HRESULT Guest::executeProcessInternal(IN_BSTR aCommand, ULONG aFlags,
             papszArgv[uNumArgs] = NULL;
         }
 
-        Utf8Str Utf8UserName(aUserName);
+        Utf8Str Utf8UserName(aUsername);
         Utf8Str Utf8Password(aPassword);
         if (RT_SUCCESS(vrc))
         {
@@ -1604,205 +1549,127 @@ HRESULT Guest::executeProcessInternal(IN_BSTR aCommand, ULONG aFlags,
 
                 if (RT_SUCCESS(vrc))
                 {
-                    PCALLBACKDATAEXECSTATUS pData = (PCALLBACKDATAEXECSTATUS)RTMemAlloc(sizeof(CALLBACKDATAEXECSTATUS));
-                    AssertReturn(pData, VBOX_E_IPRT_ERROR);
-                    RT_ZERO(*pData);
-                    uContextID = addCtrlCallbackContext(VBOXGUESTCTRLCALLBACKTYPE_EXEC_START,
-                                                        pData, sizeof(CALLBACKDATAEXECSTATUS), progress);
-                    Assert(uContextID > 0);
-
-                    VBOXHGCMSVCPARM paParms[15];
-                    int i = 0;
-                    paParms[i++].setUInt32(uContextID);
-                    paParms[i++].setPointer((void*)Utf8Command.c_str(), (uint32_t)Utf8Command.length() + 1);
-                    paParms[i++].setUInt32(aFlags);
-                    paParms[i++].setUInt32(uNumArgs);
-                    paParms[i++].setPointer((void*)pszArgs, cbArgs);
-                    paParms[i++].setUInt32(uNumEnv);
-                    paParms[i++].setUInt32(cbEnv);
-                    paParms[i++].setPointer((void*)pvEnv, cbEnv);
-                    paParms[i++].setPointer((void*)Utf8UserName.c_str(), (uint32_t)Utf8UserName.length() + 1);
-                    paParms[i++].setPointer((void*)Utf8Password.c_str(), (uint32_t)Utf8Password.length() + 1);
-
-                    /*
-                     * If the WaitForProcessStartOnly flag is set, we only want to define and wait for a timeout
-                     * until the process was started - the process itself then gets an infinite timeout for execution.
-                     * This is handy when we want to start a process inside a worker thread within a certain timeout
-                     * but let the started process perform lengthly operations then.
-                     */
-                    if (aFlags & ExecuteProcessFlag_WaitForProcessStartOnly)
-                        paParms[i++].setUInt32(UINT32_MAX /* Infinite timeout */);
-                    else
-                        paParms[i++].setUInt32(aTimeoutMS);
-
-                    VMMDev *vmmDev;
+                    VBOXGUESTCTRL_CALLBACK callback;
+                    vrc = callbackInit(&callback, VBOXGUESTCTRLCALLBACKTYPE_EXEC_START, pProgress);
+                    if (RT_SUCCESS(vrc))
                     {
-                        /* Make sure mParent is valid, so set the read lock while using.
-                         * Do not keep this lock while doing the actual call, because in the meanwhile
-                         * another thread could request a write lock which would be a bad idea ... */
-                        AutoReadLock alock(this COMMA_LOCKVAL_SRC_POS);
-
-                        /* Forward the information to the VMM device. */
-                        AssertPtr(mParent);
-                        vmmDev = mParent->getVMMDev();
+                        /* Allocate and assign payload. */
+                        callback.cbData = sizeof(CALLBACKDATAEXECSTATUS);
+                        PCALLBACKDATAEXECSTATUS pData = (PCALLBACKDATAEXECSTATUS)RTMemAlloc(callback.cbData);
+                        AssertReturn(pData, E_OUTOFMEMORY);
+                        RT_BZERO(pData, callback.cbData);
+                        callback.pvData = pData;
                     }
 
-                    if (vmmDev)
+                    if (RT_SUCCESS(vrc))
+                        vrc = callbackAdd(&callback, &uContextID);
+
+                    if (RT_SUCCESS(vrc))
                     {
-                        LogFlowFunc(("hgcmHostCall numParms=%d\n", i));
-                        vrc = vmmDev->hgcmHostCall("VBoxGuestControlSvc", HOST_EXEC_CMD,
-                                                   i, paParms);
+                        VBOXHGCMSVCPARM paParms[15];
+                        int i = 0;
+                        paParms[i++].setUInt32(uContextID);
+                        paParms[i++].setPointer((void*)Utf8Command.c_str(), (uint32_t)Utf8Command.length() + 1);
+                        paParms[i++].setUInt32(aFlags);
+                        paParms[i++].setUInt32(uNumArgs);
+                        paParms[i++].setPointer((void*)pszArgs, cbArgs);
+                        paParms[i++].setUInt32(uNumEnv);
+                        paParms[i++].setUInt32(cbEnv);
+                        paParms[i++].setPointer((void*)pvEnv, cbEnv);
+                        paParms[i++].setPointer((void*)Utf8UserName.c_str(), (uint32_t)Utf8UserName.length() + 1);
+                        paParms[i++].setPointer((void*)Utf8Password.c_str(), (uint32_t)Utf8Password.length() + 1);
+
+                        /*
+                         * If the WaitForProcessStartOnly flag is set, we only want to define and wait for a timeout
+                         * until the process was started - the process itself then gets an infinite timeout for execution.
+                         * This is handy when we want to start a process inside a worker thread within a certain timeout
+                         * but let the started process perform lengthly operations then.
+                         */
+                        if (aFlags & ExecuteProcessFlag_WaitForProcessStartOnly)
+                            paParms[i++].setUInt32(UINT32_MAX /* Infinite timeout */);
+                        else
+                            paParms[i++].setUInt32(aTimeoutMS);
+
+                        VMMDev *pVMMDev = NULL;
+                        {
+                            /* Make sure mParent is valid, so set the read lock while using.
+                             * Do not keep this lock while doing the actual call, because in the meanwhile
+                             * another thread could request a write lock which would be a bad idea ... */
+                            AutoReadLock alock(this COMMA_LOCKVAL_SRC_POS);
+
+                            /* Forward the information to the VMM device. */
+                            AssertPtr(mParent);
+                            pVMMDev = mParent->getVMMDev();
+                        }
+
+                        if (pVMMDev)
+                        {
+                            LogFlowFunc(("hgcmHostCall numParms=%d\n", i));
+                            vrc = pVMMDev->hgcmHostCall("VBoxGuestControlSvc", HOST_EXEC_CMD,
+                                                       i, paParms);
+                        }
+                        else
+                            vrc = VERR_INVALID_VM_HANDLE;
                     }
-                    else
-                        vrc = VERR_INVALID_VM_HANDLE;
                     RTMemFree(pvEnv);
                 }
                 RTStrFree(pszArgs);
             }
+
             if (RT_SUCCESS(vrc))
             {
-                LogFlowFunc(("Waiting for HGCM callback (timeout=%ldms) ...\n", aTimeoutMS));
+                LogFlowFunc(("Waiting for HGCM callback (timeout=%dms) ...\n", aTimeoutMS));
 
                 /*
                  * Wait for the HGCM low level callback until the process
                  * has been started (or something went wrong). This is necessary to
                  * get the PID.
                  */
-                CallbackMapIter it = getCtrlCallbackContextByID(uContextID);
-                BOOL fCanceled = FALSE;
-                if (it != mCallbackMap.end())
+
+                PCALLBACKDATAEXECSTATUS pExecStatus = NULL;
+
+                 /*
+                 * Wait for the first stage (=0) to complete (that is starting the process).
+                 */
+                vrc = callbackWaitForCompletion(uContextID, 0 /* Stage */, aTimeoutMS);
+                if (RT_SUCCESS(vrc))
                 {
-                    ComAssert(!it->second.pProgress.isNull());
-
-                    /*
-                     * Wait for the first stage (=0) to complete (that is starting the process).
-                     */
-                    PCALLBACKDATAEXECSTATUS pData = NULL;
-                    rc = it->second.pProgress->WaitForOperationCompletion(0, aTimeoutMS);
-                    if (SUCCEEDED(rc))
+                    vrc = callbackGetUserData(uContextID, NULL /* We know the type. */,
+                                              (void**)&pExecStatus, NULL /* Don't need the size. */);
+                    if (RT_SUCCESS(vrc))
                     {
-                        /* Was the operation canceled by one of the parties? */
-                        rc = it->second.pProgress->COMGETTER(Canceled)(&fCanceled);
-                        if (FAILED(rc)) throw rc;
-
-                        if (!fCanceled)
-                        {
-                            AutoReadLock alock(this COMMA_LOCKVAL_SRC_POS);
-
-                            pData = (PCALLBACKDATAEXECSTATUS)it->second.pvData;
-                            Assert(it->second.cbData == sizeof(CALLBACKDATAEXECSTATUS));
-                            AssertPtr(pData);
-
-                            /* Did we get some status? */
-                            switch (pData->u32Status)
-                            {
-                                case PROC_STS_STARTED:
-                                    /* Process is (still) running; get PID. */
-                                    *aPID = pData->u32PID;
-                                    break;
-
-                                /* In any other case the process either already
-                                 * terminated or something else went wrong, so no PID ... */
-                                case PROC_STS_TEN: /* Terminated normally. */
-                                case PROC_STS_TEA: /* Terminated abnormally. */
-                                case PROC_STS_TES: /* Terminated through signal. */
-                                case PROC_STS_TOK:
-                                case PROC_STS_TOA:
-                                case PROC_STS_DWN:
-                                    /*
-                                     * Process (already) ended, but we want to get the
-                                     * PID anyway to retrieve the output in a later call.
-                                     */
-                                    *aPID = pData->u32PID;
-                                    break;
-
-                                case PROC_STS_ERROR:
-                                    vrc = pData->u32Flags; /* u32Flags member contains IPRT error code. */
-                                    break;
-
-                                case PROC_STS_UNDEFINED:
-                                    vrc = VERR_TIMEOUT;    /* Operation did not complete within time. */
-                                    break;
-
-                                default:
-                                    vrc = VERR_INVALID_PARAMETER; /* Unknown status, should never happen! */
-                                    break;
-                            }
-                        }
-                        else /* Operation was canceled. */
-                            vrc = VERR_CANCELLED;
+                        rc = executeProcessResult(Utf8Command.c_str(), Utf8UserName.c_str(), aTimeoutMS,
+                                                  pExecStatus, aPID);
+                        callbackFreeUserData(pExecStatus);
                     }
-                    else /* Operation did not complete within time. */
-                        vrc = VERR_TIMEOUT;
-
-                    /*
-                     * Do *not* remove the callback yet - we might wait with the IProgress object on something
-                     * else (like end of process) ...
-                     */
-                    if (RT_FAILURE(vrc))
+                    else
                     {
-                        if (vrc == VERR_FILE_NOT_FOUND) /* This is the most likely error. */
-                            rc = setErrorNoLog(VBOX_E_IPRT_ERROR,
-                                               tr("The file '%s' was not found on guest"), Utf8Command.c_str());
-                        else if (vrc == VERR_PATH_NOT_FOUND)
-                            rc = setErrorNoLog(VBOX_E_IPRT_ERROR,
-                                               tr("The path to file '%s' was not found on guest"), Utf8Command.c_str());
-                        else if (vrc == VERR_BAD_EXE_FORMAT)
-                            rc = setErrorNoLog(VBOX_E_IPRT_ERROR,
-                                               tr("The file '%s' is not an executable format on guest"), Utf8Command.c_str());
-                        else if (vrc == VERR_AUTHENTICATION_FAILURE)
-                            rc = setErrorNoLog(VBOX_E_IPRT_ERROR,
-                                               tr("The specified user '%s' was not able to logon on guest"), Utf8UserName.c_str());
-                        else if (vrc == VERR_TIMEOUT)
-                            rc = setErrorNoLog(VBOX_E_IPRT_ERROR,
-                                               tr("The guest did not respond within time (%ums)"), aTimeoutMS);
-                        else if (vrc == VERR_CANCELLED)
-                            rc = setErrorNoLog(VBOX_E_IPRT_ERROR,
-                                               tr("The execution operation was canceled"));
-                        else if (vrc == VERR_PERMISSION_DENIED)
-                            rc = setErrorNoLog(VBOX_E_IPRT_ERROR,
-                                               tr("Invalid user/password credentials"));
-                        else
-                        {
-                            if (pData && pData->u32Status == PROC_STS_ERROR)
-                                rc = setErrorNoLog(VBOX_E_IPRT_ERROR,
-                                                   tr("Process could not be started: %Rrc"), pData->u32Flags);
-                            else
-                                rc = setErrorNoLog(E_UNEXPECTED,
-                                                   tr("The service call failed with error %Rrc"), vrc);
-                        }
-                    }
-                    else /* Execution went fine. */
-                    {
-                        /* Return the progress to the caller. */
-                        progress.queryInterfaceTo(aProgress);
+                        rc = setErrorNoLog(VBOX_E_IPRT_ERROR,
+                                           tr("Unable to retrieve process execution status data"));
                     }
                 }
-                else /* Callback context not found; should never happen! */
-                    AssertMsg(it != mCallbackMap.end(), ("Callback context with ID %u not found!", uContextID));
+                else
+                    rc = handleErrorCompletion(vrc);
+
+                /*
+                 * Do *not* remove the callback yet - we might wait with the IProgress object on something
+                 * else (like end of process) ...
+                 */
             }
-            else /* HGCM related error codes .*/
-            {
-                if (vrc == VERR_INVALID_VM_HANDLE)
-                    rc = setErrorNoLog(VBOX_E_VM_ERROR,
-                                       tr("VMM device is not available (is the VM running?)"));
-                else if (vrc == VERR_NOT_FOUND)
-                    rc = setErrorNoLog(VBOX_E_IPRT_ERROR,
-                                       tr("The guest execution service is not ready"));
-                else if (vrc == VERR_HGCM_SERVICE_NOT_FOUND)
-                    rc = setErrorNoLog(VBOX_E_IPRT_ERROR,
-                                       tr("The guest execution service is not available"));
-                else /* HGCM call went wrong. */
-                    rc = setErrorNoLog(E_UNEXPECTED,
-                                       tr("The HGCM call failed with error %Rrc"), vrc);
-            }
+            else
+                rc = handleErrorHGCM(vrc);
 
             for (unsigned i = 0; i < uNumArgs; i++)
                 RTMemFree(papszArgv[i]);
             RTMemFree(papszArgv);
         }
 
-        if (RT_FAILURE(vrc))
+        if (SUCCEEDED(rc))
+        {
+            /* Return the progress to the caller. */
+            pProgress.queryInterfaceTo(aProgress);
+        }
+        else
         {
             if (!pRC) /* Skip logging internal calls. */
                 LogRel(("Executing guest process \"%s\" as user \"%s\" failed with %Rrc\n",
@@ -1817,8 +1684,8 @@ HRESULT Guest::executeProcessInternal(IN_BSTR aCommand, ULONG aFlags,
         rc = E_OUTOFMEMORY;
     }
     return rc;
-#endif /* VBOX_WITH_GUEST_CONTROL */
 }
+#endif /* VBOX_WITH_GUEST_CONTROL */
 
 STDMETHODIMP Guest::SetProcessInput(ULONG aPID, ULONG aFlags, ULONG aTimeoutMS, ComSafeArrayIn(BYTE, aData), ULONG *aBytesWritten)
 {
@@ -1844,29 +1711,23 @@ STDMETHODIMP Guest::SetProcessInput(ULONG aPID, ULONG aFlags, ULONG aTimeoutMS, 
 
     try
     {
-        /* Init. */
-        *aBytesWritten = 0;
-
+        VBOXGUESTCTRL_PROCESS process;
+        int vrc = processGetByPID(aPID, &process);
+        if (RT_SUCCESS(vrc))
         {
-            /* Take read lock to prevent races. */
-            AutoReadLock alock(this COMMA_LOCKVAL_SRC_POS);
-
-            /* Search for existing PID. */
-            GuestProcessMapIterConst itProc = getProcessByPID(aPID);
-            if (itProc != mGuestProcessMap.end())
-            {
-                /* PID exists; check if process is still running. */
-                if (itProc->second.mStatus != ExecuteProcessStatus_Started)
-                    rc = setError(VBOX_E_IPRT_ERROR,
-                                  Guest::tr("Cannot inject input to not running process (PID %u)"), aPID);
-            }
-            else
+            /* PID exists; check if process is still running. */
+            if (process.mStatus != ExecuteProcessStatus_Started)
                 rc = setError(VBOX_E_IPRT_ERROR,
-                              Guest::tr("Cannot inject input to non-existent process (PID %u)"), aPID);
+                              Guest::tr("Cannot inject input to not running process (PID %u)"), aPID);
         }
+        else
+            rc = setError(VBOX_E_IPRT_ERROR,
+                          Guest::tr("Cannot inject input to non-existent process (PID %u)"), aPID);
 
         if (SUCCEEDED(rc))
         {
+            uint32_t uContextID = 0;
+
             /*
              * Create progress object.
              * This progress object, compared to the one in executeProgress() above,
@@ -1888,51 +1749,52 @@ STDMETHODIMP Guest::SetProcessInput(ULONG aPID, ULONG aFlags, ULONG aTimeoutMS, 
             if (aTimeoutMS == 0)
                 aTimeoutMS = UINT32_MAX;
 
-            PCALLBACKDATAEXECINSTATUS pData = (PCALLBACKDATAEXECINSTATUS)RTMemAlloc(sizeof(CALLBACKDATAEXECINSTATUS));
-            if (NULL == pData) throw rc;
-            AssertReturn(pData, VBOX_E_IPRT_ERROR);
-            RT_ZERO(*pData);
-
-            /* Save PID + output flags for later use. */
-            pData->u32PID = aPID;
-            pData->u32Flags = aFlags;
-
-            /* Add job to callback contexts. */
-            uint32_t uContextID = addCtrlCallbackContext(VBOXGUESTCTRLCALLBACKTYPE_EXEC_INPUT_STATUS,
-                                                         pData, sizeof(CALLBACKDATAEXECINSTATUS), pProgress);
-            Assert(uContextID > 0);
-
-            com::SafeArray<BYTE> sfaData(ComSafeArrayInArg(aData));
-            uint32_t cbSize = sfaData.size();
-
-            VBOXHGCMSVCPARM paParms[6];
-            int i = 0;
-            paParms[i++].setUInt32(uContextID);
-            paParms[i++].setUInt32(aPID);
-            paParms[i++].setUInt32(aFlags);
-            paParms[i++].setPointer(sfaData.raw(), cbSize);
-            paParms[i++].setUInt32(cbSize);
-
-            int vrc = VINF_SUCCESS;
-
+            VBOXGUESTCTRL_CALLBACK callback;
+            vrc = callbackInit(&callback, VBOXGUESTCTRLCALLBACKTYPE_EXEC_INPUT_STATUS, pProgress);
+            if (RT_SUCCESS(vrc))
             {
-                VMMDev *vmmDev;
-                {
-                    /* Make sure mParent is valid, so set the read lock while using.
-                     * Do not keep this lock while doing the actual call, because in the meanwhile
-                     * another thread could request a write lock which would be a bad idea ... */
-                    AutoReadLock alock(this COMMA_LOCKVAL_SRC_POS);
+                PCALLBACKDATAEXECINSTATUS pData = (PCALLBACKDATAEXECINSTATUS)callback.pvData;
 
-                    /* Forward the information to the VMM device. */
-                    AssertPtr(mParent);
-                    vmmDev = mParent->getVMMDev();
-                }
+                /* Save PID + output flags for later use. */
+                pData->u32PID = aPID;
+                pData->u32Flags = aFlags;
+            }
 
-                if (vmmDev)
+            if (RT_SUCCESS(vrc))
+                vrc = callbackAdd(&callback, &uContextID);
+
+            if (RT_SUCCESS(vrc))
+            {
+                com::SafeArray<BYTE> sfaData(ComSafeArrayInArg(aData));
+                uint32_t cbSize = sfaData.size();
+
+                VBOXHGCMSVCPARM paParms[6];
+                int i = 0;
+                paParms[i++].setUInt32(uContextID);
+                paParms[i++].setUInt32(aPID);
+                paParms[i++].setUInt32(aFlags);
+                paParms[i++].setPointer(sfaData.raw(), cbSize);
+                paParms[i++].setUInt32(cbSize);
+
                 {
-                    LogFlowFunc(("hgcmHostCall numParms=%d\n", i));
-                    vrc = vmmDev->hgcmHostCall("VBoxGuestControlSvc", HOST_EXEC_SET_INPUT,
-                                               i, paParms);
+                    VMMDev *pVMMDev = NULL;
+                    {
+                        /* Make sure mParent is valid, so set the read lock while using.
+                         * Do not keep this lock while doing the actual call, because in the meanwhile
+                         * another thread could request a write lock which would be a bad idea ... */
+                        AutoReadLock alock(this COMMA_LOCKVAL_SRC_POS);
+
+                        /* Forward the information to the VMM device. */
+                        AssertPtr(mParent);
+                        pVMMDev = mParent->getVMMDev();
+                    }
+
+                    if (pVMMDev)
+                    {
+                        LogFlowFunc(("hgcmHostCall numParms=%d\n", i));
+                        vrc = pVMMDev->hgcmHostCall("VBoxGuestControlSvc", HOST_EXEC_SET_INPUT,
+                                                   i, paParms);
+                    }
                 }
             }
 
@@ -1945,64 +1807,52 @@ STDMETHODIMP Guest::SetProcessInput(ULONG aPID, ULONG aFlags, ULONG aTimeoutMS, 
                  * has been started (or something went wrong). This is necessary to
                  * get the PID.
                  */
-                CallbackMapIter it = getCtrlCallbackContextByID(uContextID);
-                BOOL fCanceled = FALSE;
-                if (it != mCallbackMap.end())
+
+                PCALLBACKDATAEXECINSTATUS pExecStatusIn = NULL;
+
+                 /*
+                 * Wait for the first stage (=0) to complete (that is starting the process).
+                 */
+                vrc = callbackWaitForCompletion(uContextID, 0 /* Stage */, aTimeoutMS);
+                if (RT_SUCCESS(vrc))
                 {
-                    ComAssert(!it->second.pProgress.isNull());
-
-                    /* Wait until operation completed. */
-                    rc = it->second.pProgress->WaitForCompletion(aTimeoutMS);
-                    if (FAILED(rc)) throw rc;
-
-                    /* Was the operation canceled by one of the parties? */
-                    rc = it->second.pProgress->COMGETTER(Canceled)(&fCanceled);
-                    if (FAILED(rc)) throw rc;
-
-                    if (!fCanceled)
+                    vrc = callbackGetUserData(uContextID, NULL /* We know the type. */,
+                                              (void**)&pExecStatusIn, NULL /* Don't need the size. */);
+                    if (RT_SUCCESS(vrc))
                     {
-                        BOOL fCompleted;
-                        if (   SUCCEEDED(it->second.pProgress->COMGETTER(Completed)(&fCompleted))
-                            && fCompleted)
+                        switch (pExecStatusIn->u32Status)
                         {
-                            AutoReadLock alock(this COMMA_LOCKVAL_SRC_POS);
+                            case INPUT_STS_WRITTEN:
+                                *aBytesWritten = pExecStatusIn->cbProcessed;
+                                break;
 
-                            PCALLBACKDATAEXECINSTATUS pStatusData = (PCALLBACKDATAEXECINSTATUS)it->second.pvData;
-                            AssertPtr(pStatusData);
-                            Assert(it->second.cbData == sizeof(CALLBACKDATAEXECINSTATUS));
-
-                            switch (pStatusData->u32Status)
-                            {
-                                case INPUT_STS_WRITTEN:
-                                    *aBytesWritten = pStatusData->cbProcessed;
-                                    break;
-
-                                default:
-                                    rc = setError(VBOX_E_IPRT_ERROR,
-                                                  tr("Client error %u while processing input data"), pStatusData->u32Status);
-                                    break;
-                            }
+                            default:
+                                rc = setError(VBOX_E_IPRT_ERROR,
+                                              tr("Client error %u while processing input data"), pExecStatusIn->u32Status);
+                                break;
                         }
-                        else
-                            rc = setError(VBOX_E_IPRT_ERROR,
-                                          tr("The input operation was not acknowledged from guest within time (%ums)"), aTimeoutMS);
+
+                        callbackFreeUserData(pExecStatusIn);
                     }
                     else
-                        rc = setError(VBOX_E_IPRT_ERROR,
-                                      tr("The input operation was canceled by the guest"));
                     {
-                        AutoWriteLock alock(this COMMA_LOCKVAL_SRC_POS);
-                        /* Destroy locally used progress object. */
-                        destroyCtrlCallbackContext(it);
+                        rc = setErrorNoLog(VBOX_E_IPRT_ERROR,
+                                           tr("Unable to retrieve process input status data"));
                     }
                 }
-                else /* PID lookup failed. */
-                    rc = setError(VBOX_E_IPRT_ERROR,
-                                  tr("Process (PID %u) not found"), aPID);
+                else
+                    rc = handleErrorCompletion(vrc);
             }
-            else /* HGCM operation failed. */
-                rc = setError(E_UNEXPECTED,
-                              tr("The HGCM call failed (%Rrc)"), vrc);
+            else
+                rc = handleErrorHGCM(vrc);
+
+            if (SUCCEEDED(rc))
+            {
+                /* Nothing to do here yet. */
+            }
+
+            /* The callback isn't needed anymore -- just was kept locally. */
+            callbackDestroy(uContextID);
 
             /* Cleanup. */
             if (!pProgress.isNull())
@@ -2030,6 +1880,8 @@ STDMETHODIMP Guest::GetProcessOutput(ULONG aPID, ULONG aFlags, ULONG aTimeoutMS,
     CheckComArgExpr(aPID, aPID > 0);
     if (aSize < 0)
         return setError(E_INVALIDARG, tr("The size argument (%lld) is negative"), aSize);
+    if (aSize == 0)
+        return setError(E_INVALIDARG, tr("The size (%lld) is zero"), aSize);
     if (aFlags)
     {
         if (!(aFlags & ProcessOutputFlag_StdErr))
@@ -2045,182 +1897,150 @@ STDMETHODIMP Guest::GetProcessOutput(ULONG aPID, ULONG aFlags, ULONG aTimeoutMS,
 
     try
     {
-        /*
-         * Create progress object.
-         * This progress object, compared to the one in executeProgress() above
-         * is only local and is used to determine whether the operation finished
-         * or got canceled.
-         */
-        ComObjPtr <Progress> progress;
-        rc = progress.createObject();
+        VBOXGUESTCTRL_PROCESS process;
+        int vrc = processGetByPID(aPID, &process);
+        if (RT_FAILURE(vrc))
+            rc = setError(VBOX_E_IPRT_ERROR,
+                          Guest::tr("Cannot get output from non-existent guest process (PID %u)"), aPID);
+
         if (SUCCEEDED(rc))
         {
-            rc = progress->init(static_cast<IGuest*>(this),
-                                Bstr(tr("Getting output of process")).raw(),
-                                TRUE /* Cancelable */);
-        }
-        if (FAILED(rc)) return rc;
-
-        /* Adjust timeout. */
-        if (aTimeoutMS == 0)
-            aTimeoutMS = UINT32_MAX;
-        /* Set handle ID. */
-        uint32_t uHandleID = OUTPUT_HANDLE_ID_STDOUT; /* Default */
-        if (aFlags & ProcessOutputFlag_StdErr)
-            uHandleID = OUTPUT_HANDLE_ID_STDERR;
-
-        /* Search for existing PID. */
-        PCALLBACKDATAEXECOUT pData = (CALLBACKDATAEXECOUT*)RTMemAlloc(sizeof(CALLBACKDATAEXECOUT));
-        AssertReturn(pData, VBOX_E_IPRT_ERROR);
-        RT_ZERO(*pData);
-        /* Save PID + output flags for later use. */
-        pData->u32PID = aPID;
-        pData->u32Flags = aFlags;
-        /* Add job to callback contexts. */
-        uint32_t uContextID = addCtrlCallbackContext(VBOXGUESTCTRLCALLBACKTYPE_EXEC_OUTPUT,
-                                                     pData, sizeof(CALLBACKDATAEXECOUT), progress);
-        Assert(uContextID > 0);
-
-        VBOXHGCMSVCPARM paParms[5];
-        int i = 0;
-        paParms[i++].setUInt32(uContextID);
-        paParms[i++].setUInt32(aPID);
-        paParms[i++].setUInt32(uHandleID);
-        paParms[i++].setUInt32(0 /* Flags, none set yet */);
-
-        com::SafeArray<BYTE> outputData((size_t)aSize);
-        int vrc = VINF_SUCCESS;
-
-        {
-            VMMDev *vmmDev;
-            {
-                /* Make sure mParent is valid, so set the read lock while using.
-                 * Do not keep this lock while doing the actual call, because in the meanwhile
-                 * another thread could request a write lock which would be a bad idea ... */
-                AutoReadLock alock(this COMMA_LOCKVAL_SRC_POS);
-
-                /* Forward the information to the VMM device. */
-                AssertPtr(mParent);
-                vmmDev = mParent->getVMMDev();
-            }
-
-            if (vmmDev)
-            {
-                LogFlowFunc(("hgcmHostCall numParms=%d\n", i));
-                vrc = vmmDev->hgcmHostCall("VBoxGuestControlSvc", HOST_EXEC_GET_OUTPUT,
-                                           i, paParms);
-            }
-        }
-
-        if (RT_SUCCESS(vrc))
-        {
-            LogFlowFunc(("Waiting for HGCM callback (timeout=%ldms) ...\n", aTimeoutMS));
+            uint32_t uContextID = 0;
 
             /*
-             * Wait for the HGCM low level callback until the process
-             * has been started (or something went wrong). This is necessary to
-             * get the PID.
+             * Create progress object.
+             * This progress object, compared to the one in executeProgress() above,
+             * is only single-stage local and is used to determine whether the operation
+             * finished or got canceled.
              */
-            CallbackMapIter it = getCtrlCallbackContextByID(uContextID);
-            BOOL fCanceled = FALSE;
-            if (it != mCallbackMap.end())
+            ComObjPtr <Progress> pProgress;
+            rc = pProgress.createObject();
+            if (SUCCEEDED(rc))
             {
-                ComAssert(!it->second.pProgress.isNull());
+                rc = pProgress->init(static_cast<IGuest*>(this),
+                                     Bstr(tr("Getting output for guest process")).raw(),
+                                     TRUE /* Cancelable */);
+            }
+            if (FAILED(rc)) throw rc;
+            ComAssert(!pProgress.isNull());
 
-                /* Wait until operation completed. */
-                rc = it->second.pProgress->WaitForCompletion(aTimeoutMS);
-                if (FAILED(rc)) throw rc;
+            /* Adjust timeout. */
+            if (aTimeoutMS == 0)
+                aTimeoutMS = UINT32_MAX;
 
-                /* Was the operation canceled by one of the parties? */
-                rc = it->second.pProgress->COMGETTER(Canceled)(&fCanceled);
-                if (FAILED(rc)) throw rc;
+            /* Set handle ID. */
+            uint32_t uHandleID = OUTPUT_HANDLE_ID_STDOUT; /* Default */
+            if (aFlags & ProcessOutputFlag_StdErr)
+                uHandleID = OUTPUT_HANDLE_ID_STDERR;
 
-                if (!fCanceled)
+            VBOXGUESTCTRL_CALLBACK callback;
+            vrc = callbackInit(&callback, VBOXGUESTCTRLCALLBACKTYPE_EXEC_OUTPUT, pProgress);
+            if (RT_SUCCESS(vrc))
+            {
+                PCALLBACKDATAEXECOUT pData = (PCALLBACKDATAEXECOUT)callback.pvData;
+
+                /* Save PID + output flags for later use. */
+                pData->u32PID = aPID;
+                pData->u32Flags = aFlags;
+            }
+
+            if (RT_SUCCESS(vrc))
+                vrc = callbackAdd(&callback, &uContextID);
+
+            if (RT_SUCCESS(vrc))
+            {
+                VBOXHGCMSVCPARM paParms[5];
+                int i = 0;
+                paParms[i++].setUInt32(uContextID);
+                paParms[i++].setUInt32(aPID);
+                paParms[i++].setUInt32(uHandleID);
+                paParms[i++].setUInt32(0 /* Flags, none set yet */);
+
+                VMMDev *pVMMDev = NULL;
                 {
-                    BOOL fCompleted;
-                    if (   SUCCEEDED(it->second.pProgress->COMGETTER(Completed)(&fCompleted))
-                        && fCompleted)
+                    /* Make sure mParent is valid, so set the read lock while using.
+                     * Do not keep this lock while doing the actual call, because in the meanwhile
+                     * another thread could request a write lock which would be a bad idea ... */
+                    AutoReadLock alock(this COMMA_LOCKVAL_SRC_POS);
+
+                    /* Forward the information to the VMM device. */
+                    AssertPtr(mParent);
+                    pVMMDev = mParent->getVMMDev();
+                }
+
+                if (pVMMDev)
+                {
+                    LogFlowFunc(("hgcmHostCall numParms=%d\n", i));
+                    vrc = pVMMDev->hgcmHostCall("VBoxGuestControlSvc", HOST_EXEC_GET_OUTPUT,
+                                               i, paParms);
+                }
+            }
+
+            if (RT_SUCCESS(vrc))
+            {
+                LogFlowFunc(("Waiting for HGCM callback (timeout=%dms) ...\n", aTimeoutMS));
+
+                /*
+                 * Wait for the HGCM low level callback until the process
+                 * has been started (or something went wrong). This is necessary to
+                 * get the PID.
+                 */
+
+                PCALLBACKDATAEXECOUT pExecOut = NULL;
+
+                /*
+                 * Wait for the first output callback notification to arrive.
+                 */
+                vrc = callbackWaitForCompletion(uContextID, -1 /* No staging */, aTimeoutMS);
+                if (RT_SUCCESS(vrc))
+                {
+                    vrc = callbackGetUserData(uContextID, NULL /* We know the type. */,
+                                              (void**)&pExecOut, NULL /* Don't need the size. */);
+                    if (RT_SUCCESS(vrc))
                     {
-                        AutoReadLock alock(this COMMA_LOCKVAL_SRC_POS);
+                        com::SafeArray<BYTE> outputData((size_t)aSize);
 
-                        /* Did we get some output? */
-                        pData = (PCALLBACKDATAEXECOUT)it->second.pvData;
-                        Assert(it->second.cbData == sizeof(CALLBACKDATAEXECOUT));
-                        AssertPtr(pData);
-
-                        if (pData->cbData)
+                        if (pExecOut->cbData)
                         {
                             /* Do we need to resize the array? */
-                            if (pData->cbData > aSize)
-                                outputData.resize(pData->cbData);
+                            if (pExecOut->cbData > aSize)
+                                outputData.resize(pExecOut->cbData);
 
                             /* Fill output in supplied out buffer. */
-                            memcpy(outputData.raw(), pData->pvData, pData->cbData);
-                            outputData.resize(pData->cbData); /* Shrink to fit actual buffer size. */
+                            memcpy(outputData.raw(), pExecOut->pvData, pExecOut->cbData);
+                            outputData.resize(pExecOut->cbData); /* Shrink to fit actual buffer size. */
                         }
                         else
                         {
-                            /* No data within specified timeout available. Use a special
-                             * error so that we can gently handle that case a bit below. */
-                            vrc = VERR_NO_DATA;
+                            /* No data within specified timeout available. */
+                            outputData.resize(0);
                         }
-                    }
-                    else /* If callback not called within time ... well, that's a timeout! */
-                        vrc = VERR_TIMEOUT;
-                }
-                else /* Operation was canceled. */
-                {
-                    vrc = VERR_CANCELLED;
-                }
 
-                if (RT_FAILURE(vrc))
-                {
-                    if (vrc == VERR_NO_DATA)
-                    {
-                        /* If there was no output data then this is no error we want
-                         * to report to COM. The caller just gets back a size of 0 (zero). */
-                        rc = S_OK;
-                    }
-                    else if (vrc == VERR_TIMEOUT)
-                    {
-                        rc = setError(VBOX_E_IPRT_ERROR,
-                                      tr("The guest did not output within time (%ums)"), aTimeoutMS);
-                    }
-                    else if (vrc == VERR_CANCELLED)
-                    {
-                        rc = setError(VBOX_E_IPRT_ERROR,
-                                      tr("The output operation was canceled"));
+                        /* Detach output buffer to output argument. */
+                        outputData.detachTo(ComSafeArrayOutArg(aData));
+
+                        callbackFreeUserData(pExecOut);
                     }
                     else
                     {
-                        rc = setError(E_UNEXPECTED,
-                                      tr("The service call failed with error %Rrc"), vrc);
+                        rc = setErrorNoLog(VBOX_E_IPRT_ERROR,
+                                           tr("Unable to retrieve process output data"));
                     }
                 }
-
-                {
-                    AutoWriteLock alock(this COMMA_LOCKVAL_SRC_POS);
-                    /* Destroy locally used progress object. */
-                    destroyCtrlCallbackContext(it);
-                }
+                else
+                    rc = handleErrorCompletion(vrc);
             }
-            else /* PID lookup failed. */
-                rc = setError(VBOX_E_IPRT_ERROR,
-                              tr("Process (PID %u) not found!"), aPID);
+            else
+                rc = handleErrorHGCM(vrc);
+
+            /* The callback isn't needed anymore -- just was kept locally. */
+            callbackDestroy(uContextID);
+
+            /* Cleanup. */
+            if (!pProgress.isNull())
+                pProgress->uninit();
+            pProgress.setNull();
         }
-        else /* HGCM operation failed. */
-            rc = setError(E_UNEXPECTED,
-                          tr("The HGCM call failed with error %Rrc"), vrc);
-
-        /* Cleanup. */
-        progress->uninit();
-        progress.setNull();
-
-        /* If something failed (or there simply was no data, indicated by VERR_NO_DATA,
-         * we return an empty array so that the frontend knows when to give up. */
-        if (RT_FAILURE(vrc) || FAILED(rc))
-            outputData.resize(0);
-        outputData.detachTo(ComSafeArrayOutArg(aData));
     }
     catch (std::bad_alloc &)
     {
@@ -2246,14 +2066,13 @@ STDMETHODIMP Guest::GetProcessStatus(ULONG aPID, ULONG *aExitCode, ULONG *aFlags
 
     try
     {
-        AutoReadLock alock(this COMMA_LOCKVAL_SRC_POS);
-
-        GuestProcessMapIterConst it = getProcessByPID(aPID);
-        if (it != mGuestProcessMap.end())
+        VBOXGUESTCTRL_PROCESS process;
+        int vrc = processGetByPID(aPID, &process);
+        if (RT_SUCCESS(vrc))
         {
-            *aExitCode = it->second.mExitCode;
-            *aFlags = it->second.mFlags;
-            *aStatus = it->second.mStatus;
+            *aExitCode = process.mExitCode;
+            *aFlags = process.mFlags;
+            *aStatus = process.mStatus;
         }
         else
             rc = setError(VBOX_E_IPRT_ERROR,
@@ -2267,16 +2086,16 @@ STDMETHODIMP Guest::GetProcessStatus(ULONG aPID, ULONG *aExitCode, ULONG *aFlags
 #endif
 }
 
-STDMETHODIMP Guest::CopyToGuest(IN_BSTR aSource, IN_BSTR aDest,
-                                IN_BSTR aUserName, IN_BSTR aPassword,
-                                ULONG aFlags, IProgress **aProgress)
+STDMETHODIMP Guest::CopyFromGuest(IN_BSTR aSource, IN_BSTR aDest,
+                                  IN_BSTR aUsername, IN_BSTR aPassword,
+                                  ULONG aFlags, IProgress **aProgress)
 {
 #ifndef VBOX_WITH_GUEST_CONTROL
     ReturnComNotImplemented();
 #else /* VBOX_WITH_GUEST_CONTROL */
     CheckComArgStrNotEmptyOrNull(aSource);
     CheckComArgStrNotEmptyOrNull(aDest);
-    CheckComArgStrNotEmptyOrNull(aUserName);
+    CheckComArgStrNotEmptyOrNull(aUsername);
     CheckComArgStrNotEmptyOrNull(aPassword);
     CheckComArgOutPointerValid(aProgress);
 
@@ -2305,20 +2124,20 @@ STDMETHODIMP Guest::CopyToGuest(IN_BSTR aSource, IN_BSTR aDest,
         progress.createObject();
 
         rc = progress->init(static_cast<IGuest*>(this),
-                            Bstr(tr("Copying file")).raw(),
+                            Bstr(tr("Copying file from guest to host")).raw(),
                             TRUE /* aCancelable */);
         if (FAILED(rc)) throw rc;
 
         /* Initialize our worker task. */
-        TaskGuest *pTask = new TaskGuest(TaskGuest::CopyFile, this, progress);
+        GuestTask *pTask = new GuestTask(GuestTask::TaskType_CopyFileFromGuest, this, progress);
         AssertPtr(pTask);
-        std::auto_ptr<TaskGuest> task(pTask);
+        std::auto_ptr<GuestTask> task(pTask);
 
         /* Assign data - aSource is the source file on the host,
          * aDest reflects the full path on the guest. */
         task->strSource   = (Utf8Str(aSource));
         task->strDest     = (Utf8Str(aDest));
-        task->strUserName = (Utf8Str(aUserName));
+        task->strUserName = (Utf8Str(aUsername));
         task->strPassword = (Utf8Str(aPassword));
         task->uFlags      = aFlags;
 
@@ -2342,166 +2161,76 @@ STDMETHODIMP Guest::CopyToGuest(IN_BSTR aSource, IN_BSTR aDest,
 #endif /* VBOX_WITH_GUEST_CONTROL */
 }
 
-STDMETHODIMP Guest::CreateDirectory(IN_BSTR aDirectory,
-                                    IN_BSTR aUserName, IN_BSTR aPassword,
-                                    ULONG aMode, ULONG aFlags,
-                                    IProgress **aProgress)
-{
-#ifndef VBOX_WITH_GUEST_CONTROL
-    ReturnComNotImplemented();
-#else  /* VBOX_WITH_GUEST_CONTROL */
-    using namespace guestControl;
-
-    CheckComArgStrNotEmptyOrNull(aDirectory);
-
-    /* Do not allow anonymous executions (with system rights). */
-    if (RT_UNLIKELY((aUserName) == NULL || *(aUserName) == '\0'))
-        return setError(E_INVALIDARG, tr("No user name specified"));
-
-    LogRel(("Creating guest directory \"%s\" as  user \"%s\" ...\n",
-            Utf8Str(aDirectory).c_str(), Utf8Str(aUserName).c_str()));
-
-    return createDirectoryInternal(aDirectory,
-                                   aUserName, aPassword,
-                                   aMode, aFlags, aProgress, NULL /* rc */);
-#endif
-}
-
-HRESULT Guest::createDirectoryInternal(IN_BSTR aDirectory,
-                                       IN_BSTR aUserName, IN_BSTR aPassword,
-                                       ULONG aMode, ULONG aFlags,
-                                       IProgress **aProgress, int *pRC)
+STDMETHODIMP Guest::CopyToGuest(IN_BSTR aSource, IN_BSTR aDest,
+                                IN_BSTR aUsername, IN_BSTR aPassword,
+                                ULONG aFlags, IProgress **aProgress)
 {
 #ifndef VBOX_WITH_GUEST_CONTROL
     ReturnComNotImplemented();
 #else /* VBOX_WITH_GUEST_CONTROL */
-    using namespace guestControl;
-
-    CheckComArgStrNotEmptyOrNull(aDirectory);
+    CheckComArgStrNotEmptyOrNull(aSource);
+    CheckComArgStrNotEmptyOrNull(aDest);
+    CheckComArgStrNotEmptyOrNull(aUsername);
+    CheckComArgStrNotEmptyOrNull(aPassword);
     CheckComArgOutPointerValid(aProgress);
 
     AutoCaller autoCaller(this);
     if (FAILED(autoCaller.rc())) return autoCaller.rc();
 
     /* Validate flags. */
-    if (aFlags != CreateDirectoryFlag_None)
+    if (aFlags != CopyFileFlag_None)
     {
-        if (!(aFlags & CreateDirectoryFlag_Parents))
+        if (   !(aFlags & CopyFileFlag_Recursive)
+            && !(aFlags & CopyFileFlag_Update)
+            && !(aFlags & CopyFileFlag_FollowLinks))
         {
             return setError(E_INVALIDARG, tr("Unknown flags (%#x)"), aFlags);
         }
     }
 
-    /**
-     * @todo We return a progress object because we maybe later want to
-     *       process more than one directory (or somewhat lengthly operations)
-     *       that require having a progress object provided to the caller.
-     */
+    AutoReadLock alock(this COMMA_LOCKVAL_SRC_POS);
 
     HRESULT rc = S_OK;
+
+    ComObjPtr<Progress> progress;
     try
     {
-        Utf8Str Utf8Directory(aDirectory);
-        Utf8Str Utf8UserName(aUserName);
-        Utf8Str Utf8Password(aPassword);
+        /* Create the progress object. */
+        progress.createObject();
 
-        com::SafeArray<IN_BSTR> args;
-        com::SafeArray<IN_BSTR> env;
+        rc = progress->init(static_cast<IGuest*>(this),
+                            Bstr(tr("Copying file from host to guest")).raw(),
+                            TRUE /* aCancelable */);
+        if (FAILED(rc)) throw rc;
 
-        /*
-         * Prepare tool command line.
-         */
-        if (aFlags & CreateDirectoryFlag_Parents)
-            args.push_back(Bstr("--parents").raw());        /* We also want to create the parent directories. */
-        if (aMode > 0)
-        {
-            args.push_back(Bstr("--mode").raw());           /* Set the creation mode. */
+        /* Initialize our worker task. */
+        GuestTask *pTask = new GuestTask(GuestTask::TaskType_CopyFileToGuest, this, progress);
+        AssertPtr(pTask);
+        std::auto_ptr<GuestTask> task(pTask);
 
-            char szMode[16];
-            RTStrPrintf(szMode, sizeof(szMode), "%o", aMode);
-            args.push_back(Bstr(szMode).raw());
-        }
-        args.push_back(Bstr(Utf8Directory).raw());  /* The directory we want to create. */
+        /* Assign data - aSource is the source file on the host,
+         * aDest reflects the full path on the guest. */
+        task->strSource   = (Utf8Str(aSource));
+        task->strDest     = (Utf8Str(aDest));
+        task->strUserName = (Utf8Str(aUsername));
+        task->strPassword = (Utf8Str(aPassword));
+        task->uFlags      = aFlags;
 
-        /*
-         * Execute guest process.
-         */
-        ComPtr<IProgress> progressExec;
-        ULONG uPID;
-        if (SUCCEEDED(rc))
-        {
-            rc = ExecuteProcess(Bstr(VBOXSERVICE_TOOL_MKDIR).raw(),
-                                ExecuteProcessFlag_Hidden,
-                                ComSafeArrayAsInParam(args),
-                                ComSafeArrayAsInParam(env),
-                                Bstr(Utf8UserName).raw(),
-                                Bstr(Utf8Password).raw(),
-                                5 * 1000 /* Wait 5s for getting the process started. */,
-                                &uPID, progressExec.asOutParam());
-        }
+        rc = task->startThread();
+        if (FAILED(rc)) throw rc;
 
-        if (SUCCEEDED(rc))
-        {
-            /* Wait for process to exit ... */
-            BOOL fCompleted = FALSE;
-            BOOL fCanceled = FALSE;
-
-            while (   SUCCEEDED(progressExec->COMGETTER(Completed(&fCompleted)))
-                   && !fCompleted)
-            {
-                /* Progress canceled by Main API? */
-                if (   SUCCEEDED(progressExec->COMGETTER(Canceled(&fCanceled)))
-                    && fCanceled)
-                {
-                    break;
-                }
-            }
-
-            ComObjPtr<Progress> progressCreate;
-            rc = progressCreate.createObject();
-            if (SUCCEEDED(rc))
-            {
-                rc = progressCreate->init(static_cast<IGuest*>(this),
-                                          Bstr(tr("Creating directory")).raw(),
-                                          TRUE);
-            }
-            if (FAILED(rc)) return rc;
-
-            if (fCompleted)
-            {
-                ExecuteProcessStatus_T retStatus;
-                ULONG uRetExitCode, uRetFlags;
-                if (SUCCEEDED(rc))
-                {
-                    rc = GetProcessStatus(uPID, &uRetExitCode, &uRetFlags, &retStatus);
-                    if (SUCCEEDED(rc) && uRetExitCode != 0)
-                    {
-                        rc = setError(VBOX_E_IPRT_ERROR,
-                                      tr("Error %u while creating directory"), uRetExitCode);
-                    }
-                }
-            }
-            else if (fCanceled)
-                rc = setError(VBOX_E_IPRT_ERROR,
-                                      tr("Directory creation was aborted"));
-            else
-                AssertReleaseMsgFailed(("Directory creation neither completed nor canceled!?"));
-
-            if (SUCCEEDED(rc))
-                progressCreate->notifyComplete(S_OK);
-            else
-                progressCreate->notifyComplete(VBOX_E_IPRT_ERROR,
-                                               COM_IIDOF(IGuest),
-                                               Guest::getStaticComponentName(),
-                                               Guest::tr("Error while executing creation command"));
-
-            /* Return the progress to the caller. */
-            progressCreate.queryInterfaceTo(aProgress);
-        }
+        /* Don't destruct on success. */
+        task.release();
     }
-    catch (std::bad_alloc &)
+    catch (HRESULT aRC)
     {
-        rc = E_OUTOFMEMORY;
+        rc = aRC;
+    }
+
+    if (SUCCEEDED(rc))
+    {
+        /* Return progress to the caller. */
+        progress.queryInterfaceTo(aProgress);
     }
     return rc;
 #endif /* VBOX_WITH_GUEST_CONTROL */
@@ -2541,9 +2270,9 @@ STDMETHODIMP Guest::UpdateGuestAdditions(IN_BSTR aSource, ULONG aFlags, IProgres
         if (FAILED(rc)) throw rc;
 
         /* Initialize our worker task. */
-        TaskGuest *pTask = new TaskGuest(TaskGuest::UpdateGuestAdditions, this, progress);
+        GuestTask *pTask = new GuestTask(GuestTask::TaskType_UpdateGuestAdditions, this, progress);
         AssertPtr(pTask);
-        std::auto_ptr<TaskGuest> task(pTask);
+        std::auto_ptr<GuestTask> task(pTask);
 
         /* Assign data - in that case aSource is the full path
          * to the Guest Additions .ISO we want to mount. */
@@ -2569,3 +2298,4 @@ STDMETHODIMP Guest::UpdateGuestAdditions(IN_BSTR aSource, ULONG aFlags, IProgres
     return rc;
 #endif /* VBOX_WITH_GUEST_CONTROL */
 }
+

@@ -52,7 +52,11 @@ static void state_blendop(DWORD state, IWineD3DStateBlockImpl *stateblock, struc
 
 static void state_undefined(DWORD state, IWineD3DStateBlockImpl *stateblock, struct wined3d_context *context)
 {
+#ifdef DEBUG_misha
+    WARN("Undefined state.\n");
+#elif !defined(VBOX_WITH_WDDM)
     ERR("Undefined state.\n");
+#endif
 }
 
 static void state_nop(DWORD state, IWineD3DStateBlockImpl *stateblock, struct wined3d_context *context)

@@ -39,6 +39,7 @@ public:
         GLSettingsPage_USB,
         GLSettingsPage_Network,
         GLSettingsPage_Extension,
+        GLSettingsPage_Proxy,
         GLSettingsPage_MAX
     };
 
@@ -93,7 +94,7 @@ protected:
 
     QString title() const;
 
-    bool recorrelate(QWidget *pPage, QString &strWarning);
+    void recorrelate(UISettingsPage *pSettingsPage);
 
 private slots:
 

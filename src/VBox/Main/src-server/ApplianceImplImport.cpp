@@ -36,6 +36,7 @@
 #include "MediumImpl.h"
 #include "MediumFormatImpl.h"
 #include "SystemPropertiesImpl.h"
+#include "HostImpl.h"
 
 #include "AutoCaller.h"
 #include "Logging.h"
@@ -404,7 +405,7 @@ STDMETHODIMP Appliance::Interpret()
                          && (strNetwork.compare("Bridged", Utf8Str::CaseInsensitive))
                          && (strNetwork.compare("Internal", Utf8Str::CaseInsensitive))
                          && (strNetwork.compare("HostOnly", Utf8Str::CaseInsensitive))
-                         && (strNetwork.compare("VDE", Utf8Str::CaseInsensitive))
+                         && (strNetwork.compare("Generic", Utf8Str::CaseInsensitive))
                        )
                         strNetwork = "Bridged";     // VMware assumes this is the default apparently
 
@@ -664,12 +665,17 @@ STDMETHODIMP Appliance::Interpret()
  * @param aProgress
  * @return
  */
-STDMETHODIMP Appliance::ImportMachines(IProgress **aProgress)
+STDMETHODIMP Appliance::ImportMachines(ComSafeArrayIn(ImportOptions_T, options), IProgress **aProgress)
 {
     CheckComArgOutPointerValid(aProgress);
 
     AutoCaller autoCaller(this);
     if (FAILED(autoCaller.rc())) return autoCaller.rc();
+
+    if (options != NULL)
+        m->optList = com::SafeArray<ImportOptions_T>(ComSafeArrayInArg(options)).toList();
+
+    AssertReturn(!(m->optList.contains(ImportOptions_KeepAllMACs) && m->optList.contains(ImportOptions_KeepNATMACs)), E_INVALIDARG);
 
     AutoReadLock alock(this COMMA_LOCKVAL_SRC_POS);
 
@@ -834,7 +840,8 @@ HRESULT Appliance::readFSOVF(TaskOVF *pTask)
             rc = E_FAIL;
             break;
         }
-        rc = readFSImpl(pTask, pSha1Callbacks, &storage);
+
+        rc = readFSImpl(pTask, pTask->locInfo.strPath, pSha1Callbacks, &storage);
     }while(0);
 
     /* Cleanup */
@@ -862,43 +869,51 @@ HRESULT Appliance::readFSOVA(TaskOVF *pTask)
 
     HRESULT rc = S_OK;
 
-    PVDINTERFACEIO pSha1Callbacks = 0;
-    PVDINTERFACEIO pTarCallbacks = 0;
+    PVDINTERFACEIO pSha1Io = 0;
+    PVDINTERFACEIO pTarIo = 0;
+    char *pszFilename = 0;
     do
     {
-        pSha1Callbacks = Sha1CreateInterface();
-        if (!pSha1Callbacks)
+        vrc = RTTarCurrentFile(tar, &pszFilename);
+        if (RT_FAILURE(vrc))
+        {
+            rc = VBOX_E_FILE_ERROR;
+            break;
+        }
+        pSha1Io = Sha1CreateInterface();
+        if (!pSha1Io)
         {
             rc = E_OUTOFMEMORY;
             break;
         }
-        pTarCallbacks = TarCreateInterface();
-        if (!pTarCallbacks)
+        pTarIo = TarCreateInterface();
+        if (!pTarIo)
         {
             rc = E_OUTOFMEMORY;
             break;
         }
-        VDINTERFACE VDInterfaceIO;
         SHA1STORAGE storage;
         RT_ZERO(storage);
-        vrc = VDInterfaceAdd(&VDInterfaceIO, "Appliance::IOTar",
-                             VDINTERFACETYPE_IO, pTarCallbacks,
-                             tar, &storage.pVDImageIfaces);
+        vrc = VDInterfaceAdd(&pTarIo->Core, "Appliance::IOTar",
+                             VDINTERFACETYPE_IO, tar, sizeof(VDINTERFACEIO),
+                             &storage.pVDImageIfaces);
         if (RT_FAILURE(vrc))
         {
             rc = E_FAIL;
             break;
         }
-        rc = readFSImpl(pTask, pSha1Callbacks, &storage);
+        rc = readFSImpl(pTask, pszFilename, pSha1Io, &storage);
     }while(0);
 
     RTTarClose(tar);
 
     /* Cleanup */
-    if (pSha1Callbacks)
-        RTMemFree(pSha1Callbacks);
-    if (pTarCallbacks)
-        RTMemFree(pTarCallbacks);
+    if (pszFilename)
+        RTMemFree(pszFilename);
+    if (pSha1Io)
+        RTMemFree(pSha1Io);
+    if (pTarIo)
+        RTMemFree(pTarIo);
 
     LogFlowFunc(("rc=%Rhrc\n", rc));
     LogFlowFuncLeave();
@@ -906,7 +921,7 @@ HRESULT Appliance::readFSOVA(TaskOVF *pTask)
     return rc;
 }
 
-HRESULT Appliance::readFSImpl(TaskOVF *pTask, PVDINTERFACEIO pCallbacks, PSHA1STORAGE pStorage)
+HRESULT Appliance::readFSImpl(TaskOVF *pTask, const RTCString &strFilename, PVDINTERFACEIO pIfIo, PSHA1STORAGE pStorage)
 {
     LogFlowFuncEnter();
 
@@ -917,15 +932,14 @@ HRESULT Appliance::readFSImpl(TaskOVF *pTask, PVDINTERFACEIO pCallbacks, PSHA1ST
     void *pvTmpBuf = 0;
     try
     {
-        Utf8Str strOvfFile = Utf8Str(pTask->locInfo.strPath).stripExt().append(".ovf");
         /* Read the OVF into a memory buffer */
         size_t cbSize = 0;
-        int vrc = Sha1ReadBuf(strOvfFile.c_str(), &pvTmpBuf, &cbSize, pCallbacks, pStorage);
+        int vrc = Sha1ReadBuf(strFilename.c_str(), &pvTmpBuf, &cbSize, pIfIo, pStorage);
         if (   RT_FAILURE(vrc)
             || !pvTmpBuf)
             throw setError(VBOX_E_FILE_ERROR,
                            tr("Could not read OVF file '%s' (%Rrc)"),
-                           RTPathFilename(strOvfFile.c_str()), vrc);
+                           RTPathFilename(strFilename.c_str()), vrc);
         /* Copy the SHA1 sum of the OVF file for later validation */
         m->strOVFSHA1Digest = pStorage->strDigest;
         /* Read & parse the XML structure of the OVF file */
@@ -1291,30 +1305,36 @@ HRESULT Appliance::importFSOVA(TaskOVF *pTask, AutoWriteLockBase& writeLock)
 
     HRESULT rc = S_OK;
 
-    PVDINTERFACEIO pSha1Callbacks = 0;
-    PVDINTERFACEIO pTarCallbacks = 0;
+    PVDINTERFACEIO pSha1Io = 0;
+    PVDINTERFACEIO pTarIo = 0;
+    char *pszFilename = 0;
     void *pvMfBuf = 0;
     writeLock.release();
     try
     {
         /* Create the necessary file access interfaces. */
-        pSha1Callbacks = Sha1CreateInterface();
-        if (!pSha1Callbacks)
+        pSha1Io = Sha1CreateInterface();
+        if (!pSha1Io)
             throw E_OUTOFMEMORY;
-        pTarCallbacks = TarCreateInterface();
-        if (!pTarCallbacks)
+        pTarIo = TarCreateInterface();
+        if (!pTarIo)
             throw E_OUTOFMEMORY;
 
-        VDINTERFACE VDInterfaceIO;
         SHA1STORAGE storage;
         RT_ZERO(storage);
-        vrc = VDInterfaceAdd(&VDInterfaceIO, "Appliance::IOTar",
-                             VDINTERFACETYPE_IO, pTarCallbacks,
-                             tar, &storage.pVDImageIfaces);
+        vrc = VDInterfaceAdd(&pTarIo->Core, "Appliance::IOTar",
+                             VDINTERFACETYPE_IO, tar, sizeof(VDINTERFACEIO),
+                             &storage.pVDImageIfaces);
         if (RT_FAILURE(vrc))
             throw setError(E_FAIL,
                            tr("Internal error (%Rrc)"), vrc);
 
+        /* Read the file name of the first file (need to be the ovf file). This
+         * is how all internal files are named. */
+        vrc = RTTarCurrentFile(tar, &pszFilename);
+        if (RT_FAILURE(vrc))
+            throw setError(E_FAIL,
+                           tr("Internal error (%Rrc)"), vrc);
         /* Skip the OVF file, cause this was read in IAppliance::Read already. */
         vrc = RTTarSeekNextFile(tar);
         if (   RT_FAILURE(vrc)
@@ -1322,7 +1342,7 @@ HRESULT Appliance::importFSOVA(TaskOVF *pTask, AutoWriteLockBase& writeLock)
             throw setError(E_FAIL,
                            tr("Internal error (%Rrc)"), vrc);
 
-        PVDINTERFACEIO pCallbacks = pSha1Callbacks;
+        PVDINTERFACEIO pCallbacks = pSha1Io;
         PSHA1STORAGE pStorage = &storage;
 
         /* We always need to create the digest, cause we didn't know if there
@@ -1330,7 +1350,7 @@ HRESULT Appliance::importFSOVA(TaskOVF *pTask, AutoWriteLockBase& writeLock)
         pStorage->fCreateDigest = true;
 
         size_t cbMfSize = 0;
-        Utf8Str strMfFile = Utf8Str(pTask->locInfo.strPath).stripExt().append(".mf");
+        Utf8Str strMfFile = Utf8Str(pszFilename).stripExt().append(".mf");
         /* Create the import stack for the rollback on errors. */
         ImportStack stack(pTask->locInfo, m->pReader->m_mapDisks, pTask->pProgress);
         /*
@@ -1359,7 +1379,7 @@ HRESULT Appliance::importFSOVA(TaskOVF *pTask, AutoWriteLockBase& writeLock)
         if (pvMfBuf)
         {
             /* Add the ovf file to the digest list. */
-            stack.llSrcDisksDigest.push_front(STRPAIR(Utf8Str(pTask->locInfo.strPath).stripExt().append(".ovf"), m->strOVFSHA1Digest));
+            stack.llSrcDisksDigest.push_front(STRPAIR(Utf8Str(pszFilename).stripExt().append(".ovf"), m->strOVFSHA1Digest));
             rc = verifyManifestFile(strMfFile, stack, pvMfBuf, cbMfSize);
             if (FAILED(rc)) throw rc;
         }
@@ -1373,12 +1393,14 @@ HRESULT Appliance::importFSOVA(TaskOVF *pTask, AutoWriteLockBase& writeLock)
     RTTarClose(tar);
 
     /* Cleanup */
+    if (pszFilename)
+        RTMemFree(pszFilename);
     if (pvMfBuf)
         RTMemFree(pvMfBuf);
-    if (pSha1Callbacks)
-        RTMemFree(pSha1Callbacks);
-    if (pTarCallbacks)
-        RTMemFree(pTarCallbacks);
+    if (pSha1Io)
+        RTMemFree(pSha1Io);
+    if (pTarIo)
+        RTMemFree(pTarIo);
 
     LogFlowFunc(("rc=%Rhrc\n", rc));
     LogFlowFuncLeave();
@@ -2044,7 +2066,7 @@ void Appliance::importMachineGeneric(const ovf::VirtualSystem &vsysThis,
             if (pvsys->strExtraConfigCurrent.endsWith("type=Bridged", Utf8Str::CaseInsensitive))
             {
                 /* Attach to the right interface */
-                rc = pNetworkAdapter->AttachToBridgedInterface();
+                rc = pNetworkAdapter->COMSETTER(AttachmentType)(NetworkAttachmentType_Bridged);
                 if (FAILED(rc)) throw rc;
                 ComPtr<IHost> host;
                 rc = mVirtualBox->COMGETTER(Host)(host.asOutParam());
@@ -2067,7 +2089,7 @@ void Appliance::importMachineGeneric(const ovf::VirtualSystem &vsysThis,
                         rc = nwInterfaces[j]->COMGETTER(Name)(name.asOutParam());
                         if (FAILED(rc)) throw rc;
                         /* Set the interface name to attach to */
-                        pNetworkAdapter->COMSETTER(HostInterface)(name.raw());
+                        pNetworkAdapter->COMSETTER(BridgedInterface)(name.raw());
                         if (FAILED(rc)) throw rc;
                         break;
                     }
@@ -2077,7 +2099,7 @@ void Appliance::importMachineGeneric(const ovf::VirtualSystem &vsysThis,
             else if (pvsys->strExtraConfigCurrent.endsWith("type=HostOnly", Utf8Str::CaseInsensitive))
             {
                 /* Attach to the right interface */
-                rc = pNetworkAdapter->AttachToHostOnlyInterface();
+                rc = pNetworkAdapter->COMSETTER(AttachmentType)(NetworkAttachmentType_HostOnly);
                 if (FAILED(rc)) throw rc;
                 ComPtr<IHost> host;
                 rc = mVirtualBox->COMGETTER(Host)(host.asOutParam());
@@ -2100,7 +2122,7 @@ void Appliance::importMachineGeneric(const ovf::VirtualSystem &vsysThis,
                         rc = nwInterfaces[j]->COMGETTER(Name)(name.asOutParam());
                         if (FAILED(rc)) throw rc;
                         /* Set the interface name to attach to */
-                        pNetworkAdapter->COMSETTER(HostInterface)(name.raw());
+                        pNetworkAdapter->COMSETTER(HostOnlyInterface)(name.raw());
                         if (FAILED(rc)) throw rc;
                         break;
                     }
@@ -2110,14 +2132,14 @@ void Appliance::importMachineGeneric(const ovf::VirtualSystem &vsysThis,
             else if (pvsys->strExtraConfigCurrent.endsWith("type=Internal", Utf8Str::CaseInsensitive))
             {
                 /* Attach to the right interface */
-                rc = pNetworkAdapter->AttachToInternalNetwork();
+                rc = pNetworkAdapter->COMSETTER(AttachmentType)(NetworkAttachmentType_Internal);
                 if (FAILED(rc)) throw rc;
             }
-            /* Next test for VDE interfaces */
-            else if (pvsys->strExtraConfigCurrent.endsWith("type=VDE", Utf8Str::CaseInsensitive))
+            /* Next test for Generic interfaces */
+            else if (pvsys->strExtraConfigCurrent.endsWith("type=Generic", Utf8Str::CaseInsensitive))
             {
                 /* Attach to the right interface */
-                rc = pNetworkAdapter->AttachToVDE();
+                rc = pNetworkAdapter->COMSETTER(AttachmentType)(NetworkAttachmentType_Generic);
                 if (FAILED(rc)) throw rc;
             }
         }
@@ -2526,14 +2548,21 @@ void Appliance::importVBoxMachine(ComObjPtr<VirtualSystemDescription> &vsdescThi
     settings::NetworkAdaptersList &llNetworkAdapters = config.hardwareMachine.llNetworkAdapters;
     /* First disable all network cards, they will be enabled below again. */
     settings::NetworkAdaptersList::iterator it1;
+    bool fKeepAllMACs = m->optList.contains(ImportOptions_KeepAllMACs);
+    bool fKeepNATMACs = m->optList.contains(ImportOptions_KeepNATMACs);
     for (it1 = llNetworkAdapters.begin(); it1 != llNetworkAdapters.end(); ++it1)
+    {
         it1->fEnabled = false;
+        if (!(   fKeepAllMACs
+              || (fKeepNATMACs && it1->mode == NetworkAttachmentType_NAT)))
+            Host::generateMACAddress(it1->strMACAddress);
+    }
     /* Now iterate over all network entries. */
     std::list<VirtualSystemDescriptionEntry*> avsdeNWs = vsdescThis->findByType(VirtualSystemDescriptionType_NetworkAdapter);
     if (avsdeNWs.size() > 0)
     {
         /* Iterate through all network adapter entries and search for the
-         * corrosponding one in the machine config. If one is found, configure
+         * corresponding one in the machine config. If one is found, configure
          * it based on the user settings. */
         list<VirtualSystemDescriptionEntry*>::const_iterator itNW;
         for (itNW = avsdeNWs.begin();

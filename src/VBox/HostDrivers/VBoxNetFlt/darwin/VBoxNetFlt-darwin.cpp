@@ -837,7 +837,17 @@ static errno_t vboxNetFltDarwinIffInputOutputWorker(PVBOXNETFLTINS pThis, mbuf_t
 
         fDropIt = pThis->pSwitchPort->pfnRecv(pThis->pSwitchPort, NULL /* pvIf */, pSG, fSrc);
         if (fDropIt)
-            mbuf_freem(pMBuf);
+        {
+            /*
+             * Check if this interface is in promiscuous mode. We should not drop
+             * any packets before they get to the driver as it passes them to tap
+             * callbacks in order for BPF to work properly.
+             */
+            if (vboxNetFltDarwinIsPromiscuous(pThis))
+                fDropIt = false;
+            else
+                mbuf_freem(pMBuf);
+        }
     }
 
     vboxNetFltRelease(pThis, true /* fBusy */);

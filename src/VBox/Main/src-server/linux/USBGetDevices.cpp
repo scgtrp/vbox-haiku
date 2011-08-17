@@ -22,13 +22,16 @@
 
 #include "USBGetDevices.h"
 
+#include <VBox/err.h>
 #include <VBox/usb.h>
 #include <VBox/usblib.h>
 
 #include <iprt/linux/sysfs.h>
 #include <iprt/cdefs.h>
 #include <iprt/ctype.h>
-#include <iprt/err.h>
+#include <iprt/dir.h>
+#include <iprt/env.h>
+#include <iprt/file.h>
 #include <iprt/fs.h>
 #include <iprt/log.h>
 #include <iprt/mem.h>
@@ -824,25 +827,35 @@ static int USBDevInfoInit(USBDeviceInfo *pSelf, const char *aDevice,
 
 #define USBDEVICE_MAJOR 189
 
-/** Deduce the bus that a USB device is plugged into from the device node
- * number.  See drivers/usb/core/hub.c:usb_new_device as of Linux 2.6.20. */
-static unsigned usbBusFromDevNum(dev_t devNum)
+/** Calculate the bus (a.k.a root hub) number of a USB device from it's sysfs
+ * path.  sysfs nodes representing root hubs have file names of the form
+ * usb<n>, where n is the bus number; other devices start with that number.
+ * See [http://www.linux-usb.org/FAQ.html#i6] and
+ * [http://www.kernel.org/doc/Documentation/usb/proc_usb_info.txt] for
+ * equivalent information about usbfs.
+ * @returns a bus number greater than 0 on success or 0 on failure.
+ */
+static unsigned usbGetBusFromSysfsPath(const char *pcszPath)
 {
-    AssertReturn(devNum, 0);
-    AssertReturn(major(devNum) == USBDEVICE_MAJOR, 0);
-    return (minor(devNum) >> 7) + 1;
+    const char *pcszFile = strrchr(pcszPath, '/');
+    if (!pcszFile)
+        return 0;
+    unsigned bus = RTStrToUInt32(pcszFile + 1);
+    if (   !bus
+        && pcszFile[1] == 'u' && pcszFile[2] == 's' && pcszFile[3] == 'b')
+    bus = RTStrToUInt32(pcszFile + 4);
+    return bus;
 }
 
-
-/** Deduce the device number of a USB device on the bus from the device node
- * number.  See drivers/usb/core/hub.c:usb_new_device as of Linux 2.6.20. */
-static unsigned usbDeviceFromDevNum(dev_t devNum)
+/** Calculate the device number of a USB device.  See
+ * drivers/usb/core/hub.c:usb_new_device as of Linux 2.6.20. */
+static dev_t usbMakeDevNum(unsigned bus, unsigned device)
 {
-    AssertReturn(devNum, 0);
-    AssertReturn(major(devNum) == USBDEVICE_MAJOR, 0);
-    return (minor(devNum) & 127) + 1;
+    AssertReturn(bus > 0, 0);
+    AssertReturn(((device - 1) & ~127) == 0, 0);
+    AssertReturn(device > 0, 0);
+    return makedev(USBDEVICE_MAJOR, ((bus - 1) << 7) + device - 1);
 }
-
 
 /**
  * If a file @a pcszNode from /sys/bus/usb/devices is a device rather than an
@@ -853,12 +866,15 @@ static int addIfDevice(const char *pcszDevicesRoot,
                        VECTOR_OBJ(USBDeviceInfo) *pvecDevInfo)
 {
     const char *pcszFile = strrchr(pcszNode, '/');
+    if (!pcszFile)
+        return VERR_INVALID_PARAMETER;
     if (strchr(pcszFile, ':'))
         return VINF_SUCCESS;
-    dev_t devnum = RTLinuxSysFsReadDevNumFile("%s/dev", pcszNode);
-    /* Sanity test of our static helpers */
-    Assert(usbBusFromDevNum(makedev(USBDEVICE_MAJOR, 517)) == 5);
-    Assert(usbDeviceFromDevNum(makedev(USBDEVICE_MAJOR, 517)) == 6);
+    unsigned bus = usbGetBusFromSysfsPath(pcszNode);
+    if (!bus)
+        return VINF_SUCCESS;
+    unsigned device = RTLinuxSysFsReadIntFile(10, "%s/devnum", pcszNode);
+    dev_t devnum = usbMakeDevNum(bus, device);
     if (!devnum)
         return VINF_SUCCESS;
     char szDevPath[RTPATH_MAX];
@@ -866,9 +882,7 @@ static int addIfDevice(const char *pcszDevicesRoot,
     cchDevPath = RTLinuxFindDevicePath(devnum, RTFS_TYPE_DEV_CHAR,
                                        szDevPath, sizeof(szDevPath),
                                        "%s/%.3d/%.3d",
-                                       pcszDevicesRoot,
-                                       usbBusFromDevNum(devnum),
-                                       usbDeviceFromDevNum(devnum));
+                                       pcszDevicesRoot, bus, device);
     if (cchDevPath < 0)
         return VINF_SUCCESS;
 
@@ -1225,7 +1239,7 @@ static void fillInDeviceFromSysfs(USBDEVICE *Dev, USBDeviceInfo *pInfo)
 
     /* Fill in the simple fields */
     Dev->enmState           = USBDEVICESTATE_UNUSED;
-    Dev->bBus               = RTLinuxSysFsReadIntFile(10, "%s/busnum", pszSysfsPath);
+    Dev->bBus               = usbGetBusFromSysfsPath(pszSysfsPath);
     Dev->bDeviceClass       = RTLinuxSysFsReadIntFile(16, "%s/bDeviceClass", pszSysfsPath);
     Dev->bDeviceSubClass    = RTLinuxSysFsReadIntFile(16, "%s/bDeviceSubClass", pszSysfsPath);
     Dev->bDeviceProtocol    = RTLinuxSysFsReadIntFile(16, "%s/bDeviceProtocol", pszSysfsPath);
@@ -1466,6 +1480,11 @@ static PUSBDEVICE testGetUsbfsDevices(const char *pcszUsbfsRoot, bool testfs)
 }
 # define getDevicesFromUsbfs testGetUsbfsDevices
 
+/**
+ * Specify the list of devices that will appear to be available through
+ * usbfs during unit testing (of USBProxyLinuxGetDevices)
+ * @param  pacszDeviceAddresses  NULL terminated array of usbfs device addresses
+ */
 void TestUSBSetAvailableUsbfsDevices(const char **pacszDeviceAddresses)
 {
     s_pacszUsbfsDeviceAddresses = pacszDeviceAddresses;
@@ -1485,12 +1504,175 @@ static int testAccess(const char *pcszPath, int mode)
 }
 # define access testAccess
 
+/**
+ * Specify the list of files that access will report as accessible (at present
+ * we only do accessible or not accessible) during unit testing (of
+ * USBProxyLinuxGetDevices)
+ * @param  pacszAccessibleFiles  NULL terminated array of file paths to be
+ *                               reported accessible
+ */
 void TestUSBSetAccessibleFiles(const char **pacszAccessibleFiles)
 {
     s_pacszAccessibleFiles = pacszAccessibleFiles;
 }
 #endif
 
+#ifdef UNIT_TEST
+#  ifdef UNIT_TEST
+    /** The path we pretend the usbfs root is located at, or NULL. */
+    const char *s_pcszTestUsbfsRoot;
+    /** Should usbfs be accessible to the current user? */
+    bool s_fTestUsbfsAccessible;
+    /** The path we pretend the device node tree root is located at, or NULL. */
+    const char *s_pcszTestDevicesRoot;
+    /** Should the device node tree be accessible to the current user? */
+    bool s_fTestDevicesAccessible;
+    /** The result of the usbfs/inotify-specific init */
+    int s_rcTestMethodInitResult;
+    /** The value of the VBOX_USB environment variable. */
+    const char *s_pcszTestEnvUsb;
+    /** The value of the VBOX_USB_ROOT environment variable. */
+    const char *s_pcszTestEnvUsbRoot;
+#  endif
+
+/** Select which access methods will be available to the @a init method
+ * during unit testing, and (hack!) what return code it will see from
+ * the access method-specific initialisation. */
+void TestUSBSetupInit(const char *pcszUsbfsRoot, bool fUsbfsAccessible,
+                      const char *pcszDevicesRoot, bool fDevicesAccessible,
+                      int rcMethodInitResult)
+{
+    s_pcszTestUsbfsRoot = pcszUsbfsRoot;
+    s_fTestUsbfsAccessible = fUsbfsAccessible;
+    s_pcszTestDevicesRoot = pcszDevicesRoot;
+    s_fTestDevicesAccessible = fDevicesAccessible;
+    s_rcTestMethodInitResult = rcMethodInitResult;
+}
+
+/** Specify the environment that the @a init method will see during unit
+ * testing. */
+void TestUSBSetEnv(const char *pcszEnvUsb, const char *pcszEnvUsbRoot)
+{
+    s_pcszTestEnvUsb = pcszEnvUsb;
+    s_pcszTestEnvUsbRoot = pcszEnvUsbRoot;
+}
+
+/* For testing we redefine anything that accesses the outside world to
+ * return test values. */
+# define RTEnvGet(a) \
+    (  !RTStrCmp(a, "VBOX_USB") ? s_pcszTestEnvUsb \
+     : !RTStrCmp(a, "VBOX_USB_ROOT") ? s_pcszTestEnvUsbRoot \
+     : NULL)
+# define USBProxyLinuxCheckDeviceRoot(pcszPath, fUseNodes) \
+    (   ((fUseNodes) && s_fTestDevicesAccessible \
+                     && !RTStrCmp(pcszPath, s_pcszTestDevicesRoot)) \
+     || (!(fUseNodes) && s_fTestUsbfsAccessible \
+                      && !RTStrCmp(pcszPath, s_pcszTestUsbfsRoot)))
+# define RTDirExists(pcszDir) \
+    (   (pcszDir) \
+     && (   !RTStrCmp(pcszDir, s_pcszTestDevicesRoot) \
+         || !RTStrCmp(pcszDir, s_pcszTestUsbfsRoot)))
+# define RTFileExists(pcszFile) \
+    (   (pcszFile) \
+     && s_pcszTestUsbfsRoot \
+     && !RTStrNCmp(pcszFile, s_pcszTestUsbfsRoot, strlen(s_pcszTestUsbfsRoot)) \
+     && !RTStrCmp(pcszFile + strlen(s_pcszTestUsbfsRoot), "/devices"))
+#endif
+
+/**
+ * Selects the access method that will be used to access USB devices based on
+ * what is available on the host and what if anything the user has specified
+ * in the environment.
+ * @returns iprt status value
+ * @param  pfUsingUsbfsDevices  on success this will be set to true if 
+ *                              the prefered access method is USBFS-like and to
+ *                              false if it is sysfs/device node-like
+ * @param  ppcszDevicesRoot     on success the root of the tree of USBFS-like
+ *                              device nodes will be stored here
+ */
+int USBProxyLinuxChooseMethod(bool *pfUsingUsbfsDevices,
+                              const char **ppcszDevicesRoot)
+{
+    /*
+     * We have two methods available for getting host USB device data - using
+     * USBFS and using sysfs.  The default choice is sysfs; if that is not
+     * available we fall back to USBFS.
+     * In the event of both failing, an appropriate error will be returned.
+     * The user may also specify a method and root using the VBOX_USB and
+     * VBOX_USB_ROOT environment variables.  In this case we don't check
+     * the root they provide for validity.
+     */
+    bool fUsbfsChosen = false, fSysfsChosen = false;
+    const char *pcszUsbFromEnv = RTEnvGet("VBOX_USB");
+    const char *pcszUsbRoot = NULL;
+    if (pcszUsbFromEnv)
+    {
+        bool fValidVBoxUSB = true;
+
+        pcszUsbRoot = RTEnvGet("VBOX_USB_ROOT");
+        if (!RTStrICmp(pcszUsbFromEnv, "USBFS"))
+        {
+            LogRel(("Default USB access method set to \"usbfs\" from environment\n"));
+            fUsbfsChosen = true;
+        }
+        else if (!RTStrICmp(pcszUsbFromEnv, "SYSFS"))
+        {
+            LogRel(("Default USB method set to \"sysfs\" from environment\n"));
+            fSysfsChosen = true;
+        }
+        else
+        {
+            LogRel(("Invalid VBOX_USB environment variable setting \"%s\"\n",
+                    pcszUsbFromEnv));
+            fValidVBoxUSB = false;
+            pcszUsbFromEnv = NULL;
+        }
+        if (!fValidVBoxUSB && pcszUsbRoot)
+            pcszUsbRoot = NULL;
+    }
+    if (!pcszUsbRoot)
+    {
+        if (   !fUsbfsChosen
+            && USBProxyLinuxCheckDeviceRoot("/dev/vboxusb", true))
+        {
+            fSysfsChosen = true;
+            pcszUsbRoot = "/dev/vboxusb";
+        }
+        else if (   !fSysfsChosen
+                 && USBProxyLinuxCheckDeviceRoot("/proc/bus/usb", false))
+        {
+            fUsbfsChosen = true;
+            pcszUsbRoot = "/proc/bus/usb";
+        }
+    }
+    else if (!USBProxyLinuxCheckDeviceRoot(pcszUsbRoot, fSysfsChosen))
+        pcszUsbRoot = NULL;
+    if (pcszUsbRoot)
+    {
+        *pfUsingUsbfsDevices = fUsbfsChosen;
+        *ppcszDevicesRoot = pcszUsbRoot;
+        return VINF_SUCCESS;
+    }
+    /* else */
+    return   pcszUsbFromEnv ? VERR_NOT_FOUND
+           : RTDirExists("/dev/vboxusb") ? VERR_VUSB_USB_DEVICE_PERMISSION
+           : RTFileExists("/proc/bus/usb/devices") ? VERR_VUSB_USBFS_PERMISSION
+           : VERR_NOT_FOUND;
+}
+
+#ifdef UNIT_TEST
+# undef RTEnvGet
+# undef USBProxyLinuxCheckDeviceRoot
+# undef RTDirExists
+# undef RTFileExists
+#endif
+
+/**
+ * Check whether a USB device tree root is usable
+ * @param pcszRoot        the path to the root of the device tree
+ * @param fIsDeviceNodes  whether this is a device node (or usbfs) tree
+ * @note  returns a pointer into a static array so it will stay valid
+ */
 bool USBProxyLinuxCheckDeviceRoot(const char *pcszRoot, bool fIsDeviceNodes)
 {
     bool fOK = false;
@@ -1524,6 +1706,12 @@ bool USBProxyLinuxCheckDeviceRoot(const char *pcszRoot, bool fIsDeviceNodes)
 # undef access
 #endif
 
+/**
+ * Get the list of USB devices supported by the system.  Should be freed using
+ * @a deviceFree or something equivalent.
+ * @param pcszDevicesRoot  the path to the root of the device tree
+ * @param fUseSysfs        whether to use sysfs (or usbfs) for enumeration
+ */
 PUSBDEVICE USBProxyLinuxGetDevices(const char *pcszDevicesRoot,
                                    bool fUseSysfs)
 {

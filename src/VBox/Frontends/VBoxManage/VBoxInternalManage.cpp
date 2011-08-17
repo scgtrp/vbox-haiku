@@ -571,15 +571,12 @@ static int CmdSetHDUUID(int argc, char **argv, ComPtr<IVirtualBox> aVirtualBox, 
     PVBOXHDD pDisk = NULL;
 
     PVDINTERFACE     pVDIfs = NULL;
-    VDINTERFACE      vdInterfaceError;
-    VDINTERFACEERROR vdInterfaceErrorCallbacks;
-    vdInterfaceErrorCallbacks.cbSize       = sizeof(VDINTERFACEERROR);
-    vdInterfaceErrorCallbacks.enmInterface = VDINTERFACETYPE_ERROR;
-    vdInterfaceErrorCallbacks.pfnError     = handleVDError;
-    vdInterfaceErrorCallbacks.pfnMessage   = handleVDMessage;
+    VDINTERFACEERROR vdInterfaceError;
+    vdInterfaceError.pfnError     = handleVDError;
+    vdInterfaceError.pfnMessage   = handleVDMessage;
 
-    rc = VDInterfaceAdd(&vdInterfaceError, "VBoxManage_IError", VDINTERFACETYPE_ERROR,
-                        &vdInterfaceErrorCallbacks, NULL, &pVDIfs);
+    rc = VDInterfaceAdd(&vdInterfaceError.Core, "VBoxManage_IError", VDINTERFACETYPE_ERROR,
+                        NULL, sizeof(VDINTERFACEERROR), &pVDIfs);
     AssertRC(rc);
 
     rc = VDCreate(pVDIfs, enmType, &pDisk);
@@ -634,15 +631,12 @@ static int CmdDumpHDInfo(int argc, char **argv, ComPtr<IVirtualBox> aVirtualBox,
     PVBOXHDD pDisk = NULL;
 
     PVDINTERFACE     pVDIfs = NULL;
-    VDINTERFACE      vdInterfaceError;
-    VDINTERFACEERROR vdInterfaceErrorCallbacks;
-    vdInterfaceErrorCallbacks.cbSize       = sizeof(VDINTERFACEERROR);
-    vdInterfaceErrorCallbacks.enmInterface = VDINTERFACETYPE_ERROR;
-    vdInterfaceErrorCallbacks.pfnError     = handleVDError;
-    vdInterfaceErrorCallbacks.pfnMessage   = handleVDMessage;
+    VDINTERFACEERROR vdInterfaceError;
+    vdInterfaceError.pfnError     = handleVDError;
+    vdInterfaceError.pfnMessage   = handleVDMessage;
 
-    rc = VDInterfaceAdd(&vdInterfaceError, "VBoxManage_IError", VDINTERFACETYPE_ERROR,
-                        &vdInterfaceErrorCallbacks, NULL, &pVDIfs);
+    rc = VDInterfaceAdd(&vdInterfaceError.Core, "VBoxManage_IError", VDINTERFACETYPE_ERROR,
+                        NULL, sizeof(VDINTERFACEERROR), &pVDIfs);
     AssertRC(rc);
 
     rc = VDCreate(pVDIfs, enmType, &pDisk);
@@ -863,8 +857,8 @@ static int CmdListPartitions(int argc, char **argv, ComPtr<IVirtualBox> aVirtual
     if (rawdisk.isEmpty())
         return errorSyntax(USAGE_LISTPARTITIONS, "Mandatory parameter -rawdisk missing");
 
-    RTFILE RawFile;
-    int vrc = RTFileOpen(&RawFile, rawdisk.c_str(), RTFILE_O_READ | RTFILE_O_OPEN | RTFILE_O_DENY_WRITE);
+    RTFILE hRawFile;
+    int vrc = RTFileOpen(&hRawFile, rawdisk.c_str(), RTFILE_O_READ | RTFILE_O_OPEN | RTFILE_O_DENY_WRITE);
     if (RT_FAILURE(vrc))
     {
         RTMsgError("Cannot open the raw disk: %Rrc", vrc);
@@ -872,7 +866,7 @@ static int CmdListPartitions(int argc, char **argv, ComPtr<IVirtualBox> aVirtual
     }
 
     HOSTPARTITIONS partitions;
-    vrc = partRead(RawFile, &partitions);
+    vrc = partRead(hRawFile, &partitions);
     /* Don't bail out on errors, print the table and return the result code. */
 
     RTPrintf("Number  Type   StartCHS       EndCHS      Size (MiB)  Start (Sect)\n");
@@ -988,8 +982,8 @@ static int CmdCreateRawVMDK(int argc, char **argv, ComPtr<IVirtualBox> aVirtualB
 #ifdef RT_OS_DARWIN
     fRelative = true;
 #endif /* RT_OS_DARWIN */
-    RTFILE RawFile;
-    int vrc = RTFileOpen(&RawFile, rawdisk.c_str(), RTFILE_O_READ | RTFILE_O_OPEN | RTFILE_O_DENY_WRITE);
+    RTFILE hRawFile;
+    int vrc = RTFileOpen(&hRawFile, rawdisk.c_str(), RTFILE_O_READ | RTFILE_O_OPEN | RTFILE_O_DENY_WRITE);
     if (RT_FAILURE(vrc))
     {
         RTMsgError("Cannot open the raw disk '%s': %Rrc", rawdisk.c_str(), vrc);
@@ -1007,7 +1001,7 @@ static int CmdCreateRawVMDK(int argc, char **argv, ComPtr<IVirtualBox> aVirtualB
      */
     DISK_GEOMETRY DriveGeo;
     DWORD cbDriveGeo;
-    if (DeviceIoControl((HANDLE)RawFile,
+    if (DeviceIoControl((HANDLE)RTFileToNative(hRawFile),
                         IOCTL_DISK_GET_DRIVE_GEOMETRY, NULL, 0,
                         &DriveGeo, sizeof(DriveGeo), &cbDriveGeo, NULL))
     {
@@ -1028,7 +1022,7 @@ static int CmdCreateRawVMDK(int argc, char **argv, ComPtr<IVirtualBox> aVirtualB
 
         GET_LENGTH_INFORMATION DiskLenInfo;
         DWORD junk;
-        if (DeviceIoControl((HANDLE)RawFile,
+        if (DeviceIoControl((HANDLE)RTFileToNative(hRawFile),
                             IOCTL_DISK_GET_LENGTH_INFO, NULL, 0,
                             &DiskLenInfo, sizeof(DiskLenInfo), &junk, (LPOVERLAPPED)NULL))
         {
@@ -1044,7 +1038,7 @@ static int CmdCreateRawVMDK(int argc, char **argv, ComPtr<IVirtualBox> aVirtualB
     }
 #elif defined(RT_OS_LINUX)
     struct stat DevStat;
-    if (!fstat(RawFile, &DevStat) && S_ISBLK(DevStat.st_mode))
+    if (!fstat(RTFileToNative(hRawFile), &DevStat) && S_ISBLK(DevStat.st_mode))
     {
 #ifdef BLKGETSIZE64
         /* BLKGETSIZE64 is broken up to 2.4.17 and in many 2.5.x. In 2.6.0
@@ -1055,14 +1049,14 @@ static int CmdCreateRawVMDK(int argc, char **argv, ComPtr<IVirtualBox> aVirtualB
                  || (strncmp(utsname.release, "2.", 2) == 0 && atoi(&utsname.release[2]) >= 6)))
         {
             uint64_t cbBlk;
-            if (!ioctl(RawFile, BLKGETSIZE64, &cbBlk))
+            if (!ioctl(RTFileToNative(hRawFile), BLKGETSIZE64, &cbBlk))
                 cbSize = cbBlk;
         }
 #endif /* BLKGETSIZE64 */
         if (!cbSize)
         {
             long cBlocks;
-            if (!ioctl(RawFile, BLKGETSIZE, &cBlocks))
+            if (!ioctl(RTFileToNative(hRawFile), BLKGETSIZE, &cBlocks))
                 cbSize = (uint64_t)cBlocks << 9;
             else
             {
@@ -1080,13 +1074,13 @@ static int CmdCreateRawVMDK(int argc, char **argv, ComPtr<IVirtualBox> aVirtualB
     }
 #elif defined(RT_OS_DARWIN)
     struct stat DevStat;
-    if (!fstat(RawFile, &DevStat) && S_ISBLK(DevStat.st_mode))
+    if (!fstat(RTFileToNative(hRawFile), &DevStat) && S_ISBLK(DevStat.st_mode))
     {
         uint64_t cBlocks;
         uint32_t cbBlock;
-        if (!ioctl(RawFile, DKIOCGETBLOCKCOUNT, &cBlocks))
+        if (!ioctl(RTFileToNative(hRawFile), DKIOCGETBLOCKCOUNT, &cBlocks))
         {
-            if (!ioctl(RawFile, DKIOCGETBLOCKSIZE, &cbBlock))
+            if (!ioctl(RTFileToNative(hRawFile), DKIOCGETBLOCKSIZE, &cbBlock))
                 cbSize = cBlocks * cbBlock;
             else
             {
@@ -1110,11 +1104,11 @@ static int CmdCreateRawVMDK(int argc, char **argv, ComPtr<IVirtualBox> aVirtualB
     }
 #elif defined(RT_OS_SOLARIS)
     struct stat DevStat;
-    if (!fstat(RawFile, &DevStat) && (   S_ISBLK(DevStat.st_mode)
+    if (!fstat(RTFileToNative(hRawFile), &DevStat) && (   S_ISBLK(DevStat.st_mode)
                                       || S_ISCHR(DevStat.st_mode)))
     {
         struct dk_minfo mediainfo;
-        if (!ioctl(RawFile, DKIOCGMEDIAINFO, &mediainfo))
+        if (!ioctl(RTFileToNative(hRawFile), DKIOCGMEDIAINFO, &mediainfo))
             cbSize = mediainfo.dki_capacity * mediainfo.dki_lbsize;
         else
         {
@@ -1131,10 +1125,10 @@ static int CmdCreateRawVMDK(int argc, char **argv, ComPtr<IVirtualBox> aVirtualB
     }
 #elif defined(RT_OS_FREEBSD)
     struct stat DevStat;
-    if (!fstat(RawFile, &DevStat) && S_ISCHR(DevStat.st_mode))
+    if (!fstat(RTFileToNative(hRawFile), &DevStat) && S_ISCHR(DevStat.st_mode))
     {
         off_t cbMedia = 0;
-        if (!ioctl(RawFile, DIOCGMEDIASIZE, &cbMedia))
+        if (!ioctl(RTFileToNative(hRawFile), DIOCGMEDIASIZE, &cbMedia))
         {
             cbSize = cbMedia;
         }
@@ -1154,7 +1148,7 @@ static int CmdCreateRawVMDK(int argc, char **argv, ComPtr<IVirtualBox> aVirtualB
 #else /* all unrecognized OSes */
     /* Hopefully this works on all other hosts. If it doesn't, it'll just fail
      * creating the VMDK, so no real harm done. */
-    vrc = RTFileGetSize(RawFile, &cbSize);
+    vrc = RTFileGetSize(hRawFile, &cbSize);
     if (RT_FAILURE(vrc))
     {
         RTMsgError("Cannot get the size of the raw disk '%s': %Rrc", rawdisk.c_str(), vrc);
@@ -1212,7 +1206,7 @@ static int CmdCreateRawVMDK(int argc, char **argv, ComPtr<IVirtualBox> aVirtualB
         }
 
         HOSTPARTITIONS partitions;
-        vrc = partRead(RawFile, &partitions);
+        vrc = partRead(hRawFile, &partitions);
         if (RT_FAILURE(vrc))
         {
             RTMsgError("Cannot read the partition information from '%s'", rawdisk.c_str());
@@ -1253,7 +1247,7 @@ static int CmdCreateRawVMDK(int argc, char **argv, ComPtr<IVirtualBox> aVirtualB
                 }
 
                 /** @todo the clipping below isn't 100% accurate, as it should
-                 * actually clip to the track size. However that's easier said
+                 * actually clip to the track size. However, that's easier said
                  * than done as figuring out the track size is heuristics. In
                  * any case the clipping is adjusted later after sorting, to
                  * prevent overlapping data areas on the resulting image. */
@@ -1267,7 +1261,7 @@ static int CmdCreateRawVMDK(int argc, char **argv, ComPtr<IVirtualBox> aVirtualB
                     vrc = VERR_NO_MEMORY;
                     goto out;
                 }
-                vrc = RTFileReadAt(RawFile, partitions.aPartitions[i].uPartDataStart * 512,
+                vrc = RTFileReadAt(hRawFile, partitions.aPartitions[i].uPartDataStart * 512,
                                    pPartData, (size_t)pPartDesc->cbData, NULL);
                 if (RT_FAILURE(vrc))
                 {
@@ -1414,7 +1408,7 @@ static int CmdCreateRawVMDK(int argc, char **argv, ComPtr<IVirtualBox> aVirtualB
         }
     }
 
-    RTFileClose(RawFile);
+    RTFileClose(hRawFile);
 
 #ifdef DEBUG_klaus
     RTPrintf("#            start         length    startoffset  partdataptr  device\n");
@@ -1429,15 +1423,12 @@ static int CmdCreateRawVMDK(int argc, char **argv, ComPtr<IVirtualBox> aVirtualB
     }
 #endif
 
-    VDINTERFACE      vdInterfaceError;
-    VDINTERFACEERROR vdInterfaceErrorCallbacks;
-    vdInterfaceErrorCallbacks.cbSize       = sizeof(VDINTERFACEERROR);
-    vdInterfaceErrorCallbacks.enmInterface = VDINTERFACETYPE_ERROR;
-    vdInterfaceErrorCallbacks.pfnError     = handleVDError;
-    vdInterfaceErrorCallbacks.pfnMessage   = handleVDMessage;
+    VDINTERFACEERROR vdInterfaceError;
+    vdInterfaceError.pfnError     = handleVDError;
+    vdInterfaceError.pfnMessage   = handleVDMessage;
 
-    vrc = VDInterfaceAdd(&vdInterfaceError, "VBoxManage_IError", VDINTERFACETYPE_ERROR,
-                         &vdInterfaceErrorCallbacks, NULL, &pVDIfs);
+    rc = VDInterfaceAdd(&vdInterfaceError.Core, "VBoxManage_IError", VDINTERFACETYPE_ERROR,
+                        NULL, sizeof(VDINTERFACEERROR), &pVDIfs);
     AssertRC(vrc);
 
     vrc = VDCreate(pVDIfs, VDTYPE_HDD, &pDisk); /* Raw VMDK's are harddisk only. */
@@ -1530,15 +1521,12 @@ static int CmdRenameVMDK(int argc, char **argv, ComPtr<IVirtualBox> aVirtualBox,
     PVBOXHDD pDisk = NULL;
 
     PVDINTERFACE     pVDIfs = NULL;
-    VDINTERFACE      vdInterfaceError;
-    VDINTERFACEERROR vdInterfaceErrorCallbacks;
-    vdInterfaceErrorCallbacks.cbSize       = sizeof(VDINTERFACEERROR);
-    vdInterfaceErrorCallbacks.enmInterface = VDINTERFACETYPE_ERROR;
-    vdInterfaceErrorCallbacks.pfnError     = handleVDError;
-    vdInterfaceErrorCallbacks.pfnMessage   = handleVDMessage;
+    VDINTERFACEERROR vdInterfaceError;
+    vdInterfaceError.pfnError     = handleVDError;
+    vdInterfaceError.pfnMessage   = handleVDMessage;
 
-    int vrc = VDInterfaceAdd(&vdInterfaceError, "VBoxManage_IError", VDINTERFACETYPE_ERROR,
-                             &vdInterfaceErrorCallbacks, NULL, &pVDIfs);
+    int vrc = VDInterfaceAdd(&vdInterfaceError.Core, "VBoxManage_IError", VDINTERFACETYPE_ERROR,
+                             NULL, sizeof(VDINTERFACEERROR), &pVDIfs);
     AssertRC(vrc);
 
     vrc = VDCreate(pVDIfs, VDTYPE_HDD, &pDisk);
@@ -1614,15 +1602,12 @@ static int CmdConvertToRaw(int argc, char **argv, ComPtr<IVirtualBox> aVirtualBo
     PVBOXHDD pDisk = NULL;
 
     PVDINTERFACE     pVDIfs = NULL;
-    VDINTERFACE      vdInterfaceError;
-    VDINTERFACEERROR vdInterfaceErrorCallbacks;
-    vdInterfaceErrorCallbacks.cbSize       = sizeof(VDINTERFACEERROR);
-    vdInterfaceErrorCallbacks.enmInterface = VDINTERFACETYPE_ERROR;
-    vdInterfaceErrorCallbacks.pfnError     = handleVDError;
-    vdInterfaceErrorCallbacks.pfnMessage   = handleVDMessage;
+    VDINTERFACEERROR vdInterfaceError;
+    vdInterfaceError.pfnError     = handleVDError;
+    vdInterfaceError.pfnMessage   = handleVDMessage;
 
-    int vrc = VDInterfaceAdd(&vdInterfaceError, "VBoxManage_IError", VDINTERFACETYPE_ERROR,
-                             &vdInterfaceErrorCallbacks, NULL, &pVDIfs);
+    int vrc = VDInterfaceAdd(&vdInterfaceError.Core, "VBoxManage_IError", VDINTERFACETYPE_ERROR,
+                             NULL, sizeof(VDINTERFACEERROR), &pVDIfs);
     AssertRC(vrc);
 
     /** @todo: Support convert to raw for floppy and DVD images too. */
@@ -1637,7 +1622,7 @@ static int CmdConvertToRaw(int argc, char **argv, ComPtr<IVirtualBox> aVirtualBo
     RTFILE outFile;
     vrc = VINF_SUCCESS;
     if (fWriteToStdOut)
-        outFile = 1;
+        vrc = RTFileFromNative(&outFile, 1);
     else
         vrc = RTFileOpen(&outFile, dst.c_str(), RTFILE_O_WRITE | RTFILE_O_CREATE | RTFILE_O_DENY_ALL);
     if (RT_FAILURE(vrc))
@@ -1786,15 +1771,12 @@ static int CmdConvertHardDisk(int argc, char **argv, ComPtr<IVirtualBox> aVirtua
 
 
     PVDINTERFACE     pVDIfs = NULL;
-    VDINTERFACE      vdInterfaceError;
-    VDINTERFACEERROR vdInterfaceErrorCallbacks;
-    vdInterfaceErrorCallbacks.cbSize       = sizeof(VDINTERFACEERROR);
-    vdInterfaceErrorCallbacks.enmInterface = VDINTERFACETYPE_ERROR;
-    vdInterfaceErrorCallbacks.pfnError     = handleVDError;
-    vdInterfaceErrorCallbacks.pfnMessage   = handleVDMessage;
+    VDINTERFACEERROR vdInterfaceError;
+    vdInterfaceError.pfnError     = handleVDError;
+    vdInterfaceError.pfnMessage   = handleVDMessage;
 
-    vrc = VDInterfaceAdd(&vdInterfaceError, "VBoxManage_IError", VDINTERFACETYPE_ERROR,
-                         &vdInterfaceErrorCallbacks, NULL, &pVDIfs);
+    vrc = VDInterfaceAdd(&vdInterfaceError.Core, "VBoxManage_IError", VDINTERFACETYPE_ERROR,
+                         NULL, sizeof(VDINTERFACEERROR), &pVDIfs);
     AssertRC(vrc);
 
     do

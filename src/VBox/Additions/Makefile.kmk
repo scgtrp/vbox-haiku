@@ -76,7 +76,7 @@ ifndef VBOX_ONLY_TESTSUITE
 
  ifeq ($(KBUILD_TARGET),linux)
   INSTALLS += LnxAddIso-scripts
-  LnxAddIso-scripts_INST    = bin/additions
+  LnxAddIso-scripts_INST    = $(INST_ADDITIONS)
   LnxAddIso-scripts_MODE    = a+rx,u+w
   LnxAddIso-scripts_SOURCES = \
 	$(LnxAddIso-scripts_0_OUTDIR)/runasroot.sh \
@@ -86,28 +86,30 @@ ifndef VBOX_ONLY_TESTSUITE
 	$(LnxAddIso-scripts_0_OUTDIR)/autorun.sh
 
   $$(LnxAddIso-scripts_0_OUTDIR)/runasroot.sh: \
-	$(PATH_SUB_CURRENT)/../Installer/linux/runasroot.sh \
-	$(PATH_SUB_CURRENT)/../Installer/linux/sh-utils.sh \
-	| $$(dir $$@)
+		$(PATH_SUB_CURRENT)/../Installer/linux/runasroot.sh \
+		$(PATH_SUB_CURRENT)/../Installer/linux/sh-utils.sh \
+		| $$(dir $$@)
 	$(QUIET)$(SED) \
-	    -e '/#include sh-utils.sh/ {' \
-	    -e "r $(PATH_ROOT)/src/VBox/Installer/linux/sh-utils.sh" \
-	    -e 'd' \
-	    -e '}' \
-	    --output $@ \
-	    $<
+		-e '/#include sh-utils.sh/ {' \
+		-e "r $(PATH_ROOT)/src/VBox/Installer/linux/sh-utils.sh" \
+		-e 'd' \
+		-e '}' \
+		--output $@ \
+		$<
+	$(QUIET)$(CHMOD) a+rx,u+w $@
 
   $$(LnxAddIso-scripts_0_OUTDIR)/autorun.sh: \
-	$(PATH_SUB_CURRENT)/linux/installer/autorun.sh \
-	$(PATH_SUB_CURRENT)/../Installer/linux/sh-utils.sh \
-	| $$(dir $$@)
+		$(PATH_SUB_CURRENT)/linux/installer/autorun.sh \
+		$(PATH_SUB_CURRENT)/../Installer/linux/sh-utils.sh \
+		| $$(dir $$@)
 	$(QUIET)$(SED) \
-	    -e '/#include sh-utils.sh/ {' \
-	    -e "r $(PATH_ROOT)/src/VBox/Installer/linux/sh-utils.sh" \
-	    -e 'd' \
-	    -e '}' \
-	    --output $@ \
-	    $<
+		-e '/#include sh-utils.sh/ {' \
+		-e "r $(PATH_ROOT)/src/VBox/Installer/linux/sh-utils.sh" \
+		-e 'd' \
+		-e '}' \
+		--output $@ \
+		$<
+	$(QUIET)$(CHMOD) a+rx,u+w $@
  endif # KBUILD_TARGET == linux
  ifeq ($(KBUILD_TARGET),win)
   #
@@ -135,13 +137,13 @@ ifndef VBOX_ONLY_TESTSUITE
 	$(call MSG_GENERATE,VBoxGuest-inf,$@,$<)
 	$(call VBOX_EDIT_INF_FN,$<,$@)
 
-  $(PATH_TARGET)/VBoxGuestCat.dir/VBoxGuest.sys:   $$(TARGET_VBoxGuest) | $$(dir $$@)
+  $(PATH_TARGET)/VBoxGuestCat.dir/VBoxGuest.sys:   $$(VBoxGuest_1_TARGET) | $$(dir $$@)
 	$(INSTALL) -m 644 $< $(@D)
 
-  $(PATH_TARGET)/VBoxGuestCat.dir/VBoxControl.exe: $$(TARGET_VBoxControl) | $$(dir $$@)
+  $(PATH_TARGET)/VBoxGuestCat.dir/VBoxControl.exe: $$(VBoxControl_1_TARGET) | $$(dir $$@)
 	$(INSTALL) -m 755 $< $(@D)
 
-  $(PATH_TARGET)/VBoxGuestCat.dir/VBoxTray.exe:    $$(TARGET_VBoxTray) | $$(dir $$@)
+  $(PATH_TARGET)/VBoxGuestCat.dir/VBoxTray.exe:    $$(VBoxTray_1_TARGET) | $$(dir $$@)
 	$(INSTALL) -m 755 $< $(@D)
 
   $(PATH_TARGET)/VBoxGuestCat.dir/VBoxGuest.cat: \
@@ -156,7 +158,7 @@ ifndef VBOX_ONLY_TESTSUITE
  # The packing target rule, but only if we're on the local build box.
  # (VBOX_WITHOUT_ADDITIONS_ISO is used by the additions build box, see the root makefile.)
  ifndef VBOX_WITHOUT_ADDITIONS_ISO
-  PACKING += $(PATH_BIN)/additions/VBoxGuestAdditions.iso
+  PACKING += $(PATH_STAGE_BIN)/additions/VBoxGuestAdditions.iso
  endif
 endif # !VBOX_ONLY_TESTSUITE
 
@@ -309,7 +311,7 @@ $(VBOX_PATH_ADDITIONS_ISO)/VBoxGuestAdditions.iso: \
 	@# use iso-level 3 which is the most ISO conforming level with least restrictions; iso-level 4 maps to iso-level 2
 	@# with some extra restrictions removal (not conforming to ISO9660) which some platforms like Solaris 10 does not like.
 	$(VBOX_MKISOFS) -rational-rock -joliet -iso-level 3 \
-		-volid "VBOXADDITIONS_$(VBOX_VERSION_STRING)_$(VBOX_SVN_REV)" -l -graft-points -o $@ \
+		-volid "VBOXADDITIONS_$(VBOX_VERSION_STRING_RAW)_$(VBOX_SVN_REV)" -l -graft-points -o $@ \
 		$(GUESTADDITIONS_FILESPEC.win) \
 		$(GUESTADDITIONS_FILESPEC.win.x86) \
 		$(GUESTADDITIONS_FILESPEC.win.amd64) \

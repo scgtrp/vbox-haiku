@@ -60,9 +60,9 @@
 #include <VBox/log.h>
 #include <VBox/err.h>
 #include <VBox/param.h>
-#include <VBox/x86.h>
 #include <iprt/assert.h>
 #include <iprt/string.h>
+#include <iprt/x86.h>
 
 
 /*******************************************************************************
@@ -3534,7 +3534,7 @@ static VBOXSTRICTRC iemMemBounceBufferMapPhys(PIEMCPU pIemCpu, unsigned iMemMap,
             {
                 pEvtRec->enmEvent = IEMVERIFYEVENT_RAM_READ;
                 pEvtRec->u.RamRead.GCPhys  = GCPhysFirst;
-                pEvtRec->u.RamRead.cb      = cbMem;
+                pEvtRec->u.RamRead.cb      = (uint32_t)cbMem;
                 pEvtRec->pNext = *pIemCpu->ppIemEvtRecNext;
                 *pIemCpu->ppIemEvtRecNext = pEvtRec;
             }
@@ -4629,6 +4629,7 @@ static VBOXSTRICTRC iemMemMarkSelDescAccessed(PIEMCPU pIemCpu, uint16_t uSel)
 #define IEM_MC_FETCH_CR0_U32(a_u32Dst)                  (a_u32Dst) = (uint32_t)(pIemCpu)->CTX_SUFF(pCtx)->cr0
 #define IEM_MC_FETCH_CR0_U64(a_u64Dst)                  (a_u64Dst) = (pIemCpu)->CTX_SUFF(pCtx)->cr0
 #define IEM_MC_FETCH_EFLAGS(a_EFlags)                   (a_EFlags) = (pIemCpu)->CTX_SUFF(pCtx)->eflags.u
+#define IEM_MC_FETCH_EFLAGS_U8(a_EFlags)                (a_EFlags) = (uint8_t)(pIemCpu)->CTX_SUFF(pCtx)->eflags.u
 #define IEM_MC_FETCH_FSW(a_u16Fsw)                      (a_u16Fsw) = iemFRegFetchFsw(pIemCpu)
 
 #define IEM_MC_STORE_GREG_U8(a_iGReg, a_u8Value)        *iemGRegRefU8(pIemCpu, (a_iGReg)) = (a_u8Value)
@@ -4677,6 +4678,7 @@ static VBOXSTRICTRC iemMemMarkSelDescAccessed(PIEMCPU pIemCpu, uint16_t uSel)
 #define IEM_MC_ADD_LOCAL_S32_TO_EFF_ADDR(a_EffAddr, a_i32) do { (a_EffAddr) += (a_i32); } while (0)
 #define IEM_MC_ADD_LOCAL_S64_TO_EFF_ADDR(a_EffAddr, a_i64) do { (a_EffAddr) += (a_i64); } while (0)
 
+#define IEM_MC_AND_LOCAL_U8(a_u8Local, a_u8Mask)        do { (a_u8Local)  &= (a_u8Mask);  } while (0)
 #define IEM_MC_AND_LOCAL_U16(a_u16Local, a_u16Mask)     do { (a_u16Local) &= (a_u16Mask); } while (0)
 #define IEM_MC_AND_LOCAL_U32(a_u32Local, a_u32Mask)     do { (a_u32Local) &= (a_u32Mask); } while (0)
 #define IEM_MC_AND_LOCAL_U64(a_u64Local, a_u64Mask)     do { (a_u64Local) &= (a_u64Mask); } while (0)
@@ -4684,6 +4686,9 @@ static VBOXSTRICTRC iemMemMarkSelDescAccessed(PIEMCPU pIemCpu, uint16_t uSel)
 #define IEM_MC_AND_ARG_U16(a_u16Arg, a_u16Mask)         do { (a_u16Arg) &= (a_u16Mask); } while (0)
 #define IEM_MC_AND_ARG_U32(a_u32Arg, a_u32Mask)         do { (a_u32Arg) &= (a_u32Mask); } while (0)
 #define IEM_MC_AND_ARG_U64(a_u64Arg, a_u64Mask)         do { (a_u64Arg) &= (a_u64Mask); } while (0)
+
+#define IEM_MC_OR_LOCAL_U8(a_u8Local, a_u8Mask)         do { (a_u8Local)  |= (a_u8Mask);  } while (0)
+#define IEM_MC_OR_LOCAL_U32(a_u32Local, a_u32Mask)      do { (a_u32Local) |= (a_u32Mask); } while (0)
 
 #define IEM_MC_SAR_LOCAL_S16(a_i16Local, a_cShift)      do { (a_i16Local) >>= (a_cShift);  } while (0)
 #define IEM_MC_SAR_LOCAL_S32(a_i32Local, a_cShift)      do { (a_i32Local) >>= (a_cShift);  } while (0)
@@ -4693,9 +4698,34 @@ static VBOXSTRICTRC iemMemMarkSelDescAccessed(PIEMCPU pIemCpu, uint16_t uSel)
 #define IEM_MC_SHL_LOCAL_S32(a_i32Local, a_cShift)      do { (a_i32Local) <<= (a_cShift);  } while (0)
 #define IEM_MC_SHL_LOCAL_S64(a_i64Local, a_cShift)      do { (a_i64Local) <<= (a_cShift);  } while (0)
 
+#define IEM_MC_AND_2LOCS_U32(a_u32Local, a_u32Mask)     do { (a_u32Local) &= (a_u32Mask); } while (0)
+
+#define IEM_MC_OR_2LOCS_U32(a_u32Local, a_u32Mask)      do { (a_u32Local) |= (a_u32Mask); } while (0)
+
+#define IEM_MC_AND_GREG_U8(a_iGReg, a_u8Value)          *(uint8_t  *)iemGRegRef(pIemCpu, (a_iGReg)) &= (a_u8Value)
+#define IEM_MC_AND_GREG_U16(a_iGReg, a_u16Value)        *(uint16_t *)iemGRegRef(pIemCpu, (a_iGReg)) &= (a_u16Value)
+#define IEM_MC_AND_GREG_U32(a_iGReg, a_u32Value) \
+    do { \
+        uint32_t *pu32Reg = (uint32_t *)iemGRegRef(pIemCpu, (a_iGReg)); \
+        *pu32Reg &= (a_u32Value); \
+        pu32Reg[1] = 0; /* implicitly clear the high bit. */ \
+    } while (0)
+#define IEM_MC_AND_GREG_U64(a_iGReg, a_u64Value)        *(uint64_t *)iemGRegRef(pIemCpu, (a_iGReg)) &= (a_u64Value)
+
+#define IEM_MC_OR_GREG_U8(a_iGReg, a_u8Value)           *(uint8_t  *)iemGRegRef(pIemCpu, (a_iGReg)) |= (a_u8Value)
+#define IEM_MC_OR_GREG_U16(a_iGReg, a_u16Value)         *(uint16_t *)iemGRegRef(pIemCpu, (a_iGReg)) |= (a_u16Value)
+#define IEM_MC_OR_GREG_U32(a_iGReg, a_u32Value) \
+    do { \
+        uint32_t *pu32Reg = (uint32_t *)iemGRegRef(pIemCpu, (a_iGReg)); \
+        *pu32Reg |= (a_u32Value); \
+        pu32Reg[1] = 0; /* implicitly clear the high bit. */ \
+    } while (0)
+#define IEM_MC_OR_GREG_U64(a_iGReg, a_u64Value)         *(uint64_t *)iemGRegRef(pIemCpu, (a_iGReg)) |= (a_u64Value)
+
 
 #define IEM_MC_SET_EFL_BIT(a_fBit)                      do { (pIemCpu)->CTX_SUFF(pCtx)->eflags.u |= (a_fBit); } while (0)
 #define IEM_MC_CLEAR_EFL_BIT(a_fBit)                    do { (pIemCpu)->CTX_SUFF(pCtx)->eflags.u &= ~(a_fBit); } while (0)
+#define IEM_MC_FLIP_EFL_BIT(a_fBit)                     do { (pIemCpu)->CTX_SUFF(pCtx)->eflags.u ^= (a_fBit); } while (0)
 
 
 
@@ -5004,11 +5034,11 @@ static VBOXSTRICTRC iemMemMarkSelDescAccessed(PIEMCPU pIemCpu, uint16_t uSel)
  */
 #ifdef DEBUG
 # define IEMOP_MNEMONIC(a_szMnemonic) \
-    Log2(("decode - %04x:%RGv %s%s\n", pIemCpu->CTX_SUFF(pCtx)->cs, pIemCpu->CTX_SUFF(pCtx)->rip, \
-          pIemCpu->fPrefixes & IEM_OP_PRF_LOCK ? "lock " : "", a_szMnemonic))
+    Log2(("decode - %04x:%RGv %s%s [#%u]\n", pIemCpu->CTX_SUFF(pCtx)->cs, pIemCpu->CTX_SUFF(pCtx)->rip, \
+          pIemCpu->fPrefixes & IEM_OP_PRF_LOCK ? "lock " : "", a_szMnemonic, pIemCpu->cInstructions))
 # define IEMOP_MNEMONIC2(a_szMnemonic, a_szOps) \
-    Log2(("decode - %04x:%RGv %s%s %s\n", pIemCpu->CTX_SUFF(pCtx)->cs, pIemCpu->CTX_SUFF(pCtx)->rip, \
-          pIemCpu->fPrefixes & IEM_OP_PRF_LOCK ? "lock " : "", a_szMnemonic, a_szOps))
+    Log2(("decode - %04x:%RGv %s%s %s [#%u]\n", pIemCpu->CTX_SUFF(pCtx)->cs, pIemCpu->CTX_SUFF(pCtx)->rip, \
+          pIemCpu->fPrefixes & IEM_OP_PRF_LOCK ? "lock " : "", a_szMnemonic, a_szOps, pIemCpu->cInstructions))
 #else
 # define IEMOP_MNEMONIC(a_szMnemonic) do { } while (0)
 # define IEMOP_MNEMONIC2(a_szMnemonic, a_szOps) do { } while (0)
@@ -5035,7 +5065,7 @@ static VBOXSTRICTRC iemMemMarkSelDescAccessed(PIEMCPU pIemCpu, uint16_t uSel)
 #define IEMOP_HLP_NO_64BIT() \
     do \
     { \
-        if (pIemCpu->fPrefixes & IEM_OP_PRF_LOCK) \
+        if (pIemCpu->enmCpuMode == IEMMODE_64BIT) \
             return IEMOP_RAISE_INVALID_OPCODE(); \
     } while (0)
 
@@ -5503,7 +5533,7 @@ VMM_INT_DECL(void)   IEMNotifyMMIORead(PVM pVM, RTGCPHYS GCPhys, size_t cbValue)
         return;
     pEvtRec->enmEvent = IEMVERIFYEVENT_RAM_READ;
     pEvtRec->u.RamRead.GCPhys  = GCPhys;
-    pEvtRec->u.RamRead.cb      = cbValue;
+    pEvtRec->u.RamRead.cb      = (uint32_t)cbValue;
     pEvtRec->pNext = *pIemCpu->ppOtherEvtRecNext;
     *pIemCpu->ppOtherEvtRecNext = pEvtRec;
 }
@@ -5523,7 +5553,7 @@ VMM_INT_DECL(void)   IEMNotifyMMIOWrite(PVM pVM, RTGCPHYS GCPhys, uint32_t u32Va
         return;
     pEvtRec->enmEvent = IEMVERIFYEVENT_RAM_WRITE;
     pEvtRec->u.RamWrite.GCPhys   = GCPhys;
-    pEvtRec->u.RamWrite.cb       = cbValue;
+    pEvtRec->u.RamWrite.cb       = (uint32_t)cbValue;
     pEvtRec->u.RamWrite.ab[0]    = RT_BYTE1(u32Value);
     pEvtRec->u.RamWrite.ab[1]    = RT_BYTE2(u32Value);
     pEvtRec->u.RamWrite.ab[2]    = RT_BYTE3(u32Value);
@@ -5547,7 +5577,7 @@ VMM_INT_DECL(void)   IEMNotifyIOPortRead(PVM pVM, RTIOPORT Port, size_t cbValue)
         return;
     pEvtRec->enmEvent = IEMVERIFYEVENT_IOPORT_READ;
     pEvtRec->u.IOPortRead.Port    = Port;
-    pEvtRec->u.IOPortRead.cbValue = cbValue;
+    pEvtRec->u.IOPortRead.cbValue = (uint32_t)cbValue;
     pEvtRec->pNext = *pIemCpu->ppOtherEvtRecNext;
     *pIemCpu->ppOtherEvtRecNext = pEvtRec;
 }
@@ -5566,7 +5596,7 @@ VMM_INT_DECL(void)   IEMNotifyIOPortWrite(PVM pVM, RTIOPORT Port, uint32_t u32Va
         return;
     pEvtRec->enmEvent = IEMVERIFYEVENT_IOPORT_WRITE;
     pEvtRec->u.IOPortWrite.Port     = Port;
-    pEvtRec->u.IOPortWrite.cbValue  = cbValue;
+    pEvtRec->u.IOPortWrite.cbValue  = (uint32_t)cbValue;
     pEvtRec->u.IOPortWrite.u32Value = u32Value;
     pEvtRec->pNext = *pIemCpu->ppOtherEvtRecNext;
     *pIemCpu->ppOtherEvtRecNext = pEvtRec;
@@ -5601,7 +5631,7 @@ static VBOXSTRICTRC iemVerifyFakeIOPortRead(PIEMCPU pIemCpu, RTIOPORT Port, uint
     {
         pEvtRec->enmEvent = IEMVERIFYEVENT_IOPORT_READ;
         pEvtRec->u.IOPortRead.Port    = Port;
-        pEvtRec->u.IOPortRead.cbValue = cbValue;
+        pEvtRec->u.IOPortRead.cbValue = (uint32_t)cbValue;
         pEvtRec->pNext = *pIemCpu->ppIemEvtRecNext;
         *pIemCpu->ppIemEvtRecNext = pEvtRec;
     }
@@ -5627,7 +5657,7 @@ static VBOXSTRICTRC iemVerifyFakeIOPortWrite(PIEMCPU pIemCpu, RTIOPORT Port, uin
     {
         pEvtRec->enmEvent = IEMVERIFYEVENT_IOPORT_WRITE;
         pEvtRec->u.IOPortWrite.Port     = Port;
-        pEvtRec->u.IOPortWrite.cbValue  = cbValue;
+        pEvtRec->u.IOPortWrite.cbValue  = (uint32_t)cbValue;
         pEvtRec->u.IOPortWrite.u32Value = u32Value;
         pEvtRec->pNext = *pIemCpu->ppIemEvtRecNext;
         *pIemCpu->ppIemEvtRecNext = pEvtRec;
@@ -5822,8 +5852,11 @@ static void iemExecVerificationModeCheck(PIEMCPU pIemCpu)
     /*
      * Execute the instruction in REM.
      */
-    int rc = REMR3EmulateInstruction(IEMCPU_TO_VM(pIemCpu), IEMCPU_TO_VMCPU(pIemCpu));
+    PVM pVM = IEMCPU_TO_VM(pIemCpu);
+    EMRemLock(pVM);
+    int rc = REMR3EmulateInstruction(pVM, IEMCPU_TO_VMCPU(pIemCpu));
     AssertRC(rc);
+    EMRemUnlock(pVM);
 
     /*
      * Compare the register states.

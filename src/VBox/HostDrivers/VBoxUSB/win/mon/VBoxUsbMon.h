@@ -30,23 +30,8 @@
 //#define VBOXUSBMON_DBG_NO_PNPHOOK
 #endif
 
+#include "../../../win/VBoxDbgLog.h"
 #include "../cmn/VBoxDrvTool.h"
-
-#ifdef Log
-# undef Log
-# define Log(_m) DbgPrint _m
-#endif
-
-#ifdef LogRel
-# undef LogRel
-# define LogRel(_m) DbgPrint _m
-#endif
-
-#ifdef LogFlow
-# undef LogFlow
-# define LogFlow(_m) DbgPrint _m
-#endif
-
 #include "../cmn/VBoxUsbTool.h"
 
 #include "VBoxUsbHook.h"

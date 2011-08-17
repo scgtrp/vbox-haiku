@@ -751,25 +751,15 @@ static void vrdpReportPatBlt (PVBOXDISPDEV pDev,
 
     if (pptlBrush)
     {
-        int xDiff;
-        int yDiff;
-
         LOG(("Dst %d,%d Brush origin %d,%d", prclTrg->left, prclTrg->top, pptlBrush->x, pptlBrush->y));
 
-        xDiff = prclTrg->left - pptlBrush->x;
-        if (xDiff < 0)
-        {
-            xDiff = -xDiff;
-        }
-
-        yDiff = prclTrg->top - pptlBrush->y;
-        if (yDiff < 0)
-        {
-            yDiff = -yDiff;
-        }
-
-        xSrc = (int8_t)(xDiff % 8);
-        ySrc = (int8_t)(yDiff % 8);
+        /* Make sure that the coords fit in a 8 bit value.
+         * Only 8x8 pixel brushes are supported, so last 3 bits
+         * is a [0..7] coordinate of the brush, because the brush
+         * repeats after each 8 pixels.
+         */
+        xSrc = (int8_t)(pptlBrush->x & 7);
+        ySrc = (int8_t)(pptlBrush->y & 7);
     }
 
     order.x     = (int16_t)prclTrg->left;
@@ -928,7 +918,7 @@ void vrdpReset(PVBOXDISPDEV pDev)
  * VRDP driver functions.
  */
 
-void vrdpDrvLineTo(SURFOBJ *pso, CLIPOBJ *pco, BRUSHOBJ *pbo, 
+void vrdpDrvLineTo(SURFOBJ *pso, CLIPOBJ *pco, BRUSHOBJ *pbo,
                    LONG x1, LONG y1, LONG x2, LONG y2, RECTL *prclBounds, MIX mix)
 {
     PVBOXDISPDEV pDev = (PVBOXDISPDEV)pso->dhpdev;
@@ -1230,7 +1220,7 @@ void vrdpDrvTextOut(SURFOBJ *pso, STROBJ *pstro, FONTOBJ *pfo, CLIPOBJ *pco,
         /* Unknown/unsupported parameters. */
         WARN(("unsupported: pstro->pwszOrg=%p, prclExtra=%p, pfo->flFontType & FO_TYPE_RASTER = 0x%08X, "
               "pstro->cGlyphs = %d, pboOpaque->iSolidColor %p, pfo->iUniq = %p",
-              pstro->pwszOrg, prclExtra, pfo->flFontType & FO_TYPE_RASTER, pstro->cGlyphs, 
+              pstro->pwszOrg, prclExtra, pfo->flFontType & FO_TYPE_RASTER, pstro->cGlyphs,
               pboOpaque? pboOpaque->iSolidColor: 0, pfo->iUniq));
         vrdpReportDirtyRects(pDev, &clipRects);
     }

@@ -4,7 +4,7 @@
  */
 
 /*
- * Copyright (C) 2006-2010 Oracle Corporation
+ * Copyright (C) 2006-2011 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -83,7 +83,7 @@ extern const PDMDEVREG g_DeviceLsiLogicSAS;
 #ifdef VBOX_WITH_EFI
 extern const PDMDEVREG g_DeviceEFI;
 #endif
-#ifdef VBOX_WITH_PCI_PASSTHROUGH
+#ifdef VBOX_WITH_PCI_PASSTHROUGH_IMPL
 extern const PDMDEVREG g_DevicePciRaw;
 #endif
 
@@ -100,6 +100,9 @@ extern const PDMDRVREG g_DrvISCSI;
 extern const PDMDRVREG g_DrvISCSITransportTcp;
 #if defined(RT_OS_LINUX) || defined(RT_OS_FREEBSD)
 extern const PDMDRVREG g_DrvHostInterface;
+#endif
+#ifdef VBOX_WITH_UDPTUNNEL
+extern const PDMDRVREG g_DrvUDPTunnel;
 #endif
 #ifdef VBOX_WITH_VDE
 extern const PDMDRVREG g_DrvVDE;

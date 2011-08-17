@@ -21,7 +21,7 @@
 #include "QIWidgetValidator.h"
 #include "UIIconPool.h"
 #include "VBoxGlobal.h"
-#include "VBoxProblemReporter.h"
+#include "UIMessageCenter.h"
 #include "UIToolBar.h"
 #include "UIMachineSettingsUSB.h"
 #include "UIMachineSettingsUSBFilterDetails.h"
@@ -468,15 +468,15 @@ bool UIMachineSettingsUSB::revalidate(QString &strWarningText, QString& /* strTi
     /* USB 2.0 Extension Pack presence test: */
     QString strExtPackName = "Oracle VM VirtualBox Extension Pack";
     CExtPack extPack = vboxGlobal().virtualBox().GetExtensionPackManager().Find(strExtPackName);
-    if (mCbUSB2->isChecked() && (extPack.isNull() || !extPack.GetUsable()))
+    if (mGbUSB->isChecked() && mCbUSB2->isChecked() && (extPack.isNull() || !extPack.GetUsable()))
     {
         strWarningText = tr("USB 2.0 is currently enabled for this virtual machine. "
-                            "However this requires the <b>%1</b> to be installed. "
+                            "However, this requires the <b>%1</b> to be installed. "
                             "Please install the Extension Pack from the VirtualBox download site. "
                             "After this you will be able to re-enable USB 2.0. "
                             "It will be disabled in the meantime unless you cancel the current settings changes.")
                             .arg(strExtPackName);
-        vboxProblem().remindAboutUnsupportedUSB2(strExtPackName, this);
+        msgCenter().remindAboutUnsupportedUSB2(strExtPackName, this);
         return true;
     }
     return true;
@@ -532,7 +532,8 @@ void UIMachineSettingsUSB::retranslateUi()
 void UIMachineSettingsUSB::usbAdapterToggled(bool fEnabled)
 {
     /* Enable/disable USB children: */
-    mUSBChild->setEnabled(fEnabled);
+    mUSBChild->setEnabled(isMachineInValidMode() && fEnabled);
+    mCbUSB2->setEnabled(isMachineOffline() && fEnabled);
     if (fEnabled)
     {
         /* If there is no chosen item but there is something to choose => choose it: */

@@ -5,7 +5,7 @@
  */
 
 /*
- * Copyright (C) 2006-2010 Oracle Corporation
+ * Copyright (C) 2006-2011 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -103,49 +103,8 @@ ULONG VirtualBox::sRevision;
 // static
 Bstr VirtualBox::sPackageType;
 
-////////////////////////////////////////////////////////////////////////////////
-//
-// VirtualBoxCallbackRegistration
-//
-////////////////////////////////////////////////////////////////////////////////
-
-/**
- * Registered IVirtualBoxCallback, used by VirtualBox::CallbackList and
- * VirtualBox::Data::llCallbacks.
- *
- * In addition to keeping the interface pointer this also keeps track of the
- * methods that asked to not be called again.  The latter is for reducing
- * unnecessary IPC.
- */
-class VirtualBoxCallbackRegistration
-{
-public:
-    /** Callback bit indexes (for bmDisabled). */
-    typedef enum
-    {
-        kOnMachineStateChanged = 0,
-        kOnMachineDataChanged,
-        kOnExtraDataCanChange,
-        kOnExtraDataChanged,
-        kOnMediumRegistered,
-        kOnMachineRegistered,
-        kOnSessionStateChanged,
-        kOnSnapshotTaken,
-        kOnSnapshotDeleted,
-        kOnSnapshotChanged,
-        kOnGuestPropertyChanged
-    } CallbackBit;
-
-    VirtualBoxCallbackRegistration()
-    {
-        /* nothing */
-    }
-
-    ~VirtualBoxCallbackRegistration()
-    {
-       /* nothing */
-    }
-};
+// static
+Bstr VirtualBox::sAPIVersion;
 
 ////////////////////////////////////////////////////////////////////////////////
 //
@@ -167,7 +126,7 @@ class VirtualBox::CallbackEvent : public Event
 {
 public:
 
-    CallbackEvent(VirtualBox *aVirtualBox, VirtualBoxCallbackRegistration::CallbackBit aWhat)
+    CallbackEvent(VirtualBox *aVirtualBox, VBoxEventType_T aWhat)
         : mVirtualBox(aVirtualBox), mWhat(aWhat)
     {
         Assert(aVirtualBox);
@@ -183,9 +142,9 @@ private:
      *  Note that this is a weak ref -- the CallbackEvent handler thread
      *  is bound to the lifetime of the VirtualBox instance, so it's safe.
      */
-    VirtualBox        *mVirtualBox;
+    VirtualBox         *mVirtualBox;
 protected:
-    VirtualBoxCallbackRegistration::CallbackBit mWhat;
+    VBoxEventType_T     mWhat;
 };
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -389,7 +348,9 @@ HRESULT VirtualBox::init()
     sRevision = RTBldCfgRevision();
     if (sPackageType.isEmpty())
         sPackageType = VBOX_PACKAGE_STRING;
-    LogFlowThisFunc(("Version: %ls, Package: %ls\n", sVersion.raw(), sPackageType.raw()));
+    if (sAPIVersion.isEmpty())
+        sAPIVersion = VBOX_API_VERSION_STRING;
+    LogFlowThisFunc(("Version: %ls, Package: %ls, API Version: %ls\n", sVersion.raw(), sPackageType.raw(), sAPIVersion.raw()));
 
     /* Get the VirtualBox home directory. */
     {
@@ -887,6 +848,17 @@ STDMETHODIMP VirtualBox::COMGETTER(PackageType)(BSTR *aPackageType)
     return S_OK;
 }
 
+STDMETHODIMP VirtualBox::COMGETTER(APIVersion)(BSTR *aAPIVersion)
+{
+    CheckComArgNotNull(aAPIVersion);
+
+    AutoCaller autoCaller(this);
+    if (FAILED(autoCaller.rc())) return autoCaller.rc();
+
+    sAPIVersion.cloneTo(aAPIVersion);
+    return S_OK;
+}
+
 STDMETHODIMP VirtualBox::COMGETTER(HomeFolder)(BSTR *aHomeFolder)
 {
     CheckComArgNotNull(aHomeFolder);
@@ -1106,6 +1078,138 @@ VirtualBox::COMGETTER(ExtensionPackManager)(IExtPackManager **aExtPackManager)
     }
 
     return hrc;
+}
+
+STDMETHODIMP VirtualBox::COMGETTER(InternalNetworks)(ComSafeArrayOut(BSTR, aInternalNetworks))
+{
+    if (ComSafeArrayOutIsNull(aInternalNetworks))
+        return E_POINTER;
+
+    AutoCaller autoCaller(this);
+    if (FAILED(autoCaller.rc())) return autoCaller.rc();
+
+    std::list<Bstr> allInternalNetworks;
+
+    /* get copy of all machine references, to avoid holding the list lock */
+    MachinesOList::MyList allMachines;
+    {
+        AutoReadLock al(m->allMachines.getLockHandle() COMMA_LOCKVAL_SRC_POS);
+        allMachines = m->allMachines.getList();
+    }
+    for (MachinesOList::MyList::const_iterator it = allMachines.begin();
+         it != allMachines.end();
+         ++it)
+    {
+        const ComObjPtr<Machine> &pMachine = *it;
+        AutoCaller autoMachineCaller(pMachine);
+        if (FAILED(autoMachineCaller.rc()))
+            continue;
+        AutoReadLock mlock(pMachine COMMA_LOCKVAL_SRC_POS);
+
+        if (pMachine->isAccessible())
+        {
+            ULONG cNetworkAdapters = 0;
+            HRESULT rc = m->pSystemProperties->GetMaxNetworkAdapters(pMachine->getChipsetType(), &cNetworkAdapters);
+            if (FAILED(rc))
+                continue;
+            cNetworkAdapters = RT_MIN(4, cNetworkAdapters);
+            for (ULONG i = 0; i < cNetworkAdapters; i++)
+            {
+                ComPtr<INetworkAdapter> pNet;
+                rc = pMachine->GetNetworkAdapter(i, pNet.asOutParam());
+                if (FAILED(rc) || pNet.isNull())
+                    continue;
+                Bstr strInternalNetwork;
+                rc = pNet->COMGETTER(InternalNetwork)(strInternalNetwork.asOutParam());
+                if (FAILED(rc) || strInternalNetwork.isEmpty())
+                    continue;
+
+                allInternalNetworks.push_back(strInternalNetwork);
+            }
+        }
+    }
+
+    /* throw out any duplicates */
+    allInternalNetworks.sort();
+    allInternalNetworks.unique();
+    com::SafeArray<BSTR> internalNetworks(allInternalNetworks.size());
+    size_t i = 0;
+    for (std::list<Bstr>::const_iterator it = allInternalNetworks.begin();
+         it != allInternalNetworks.end();
+         ++it, i++)
+    {
+        const Bstr &tmp = *it;
+        tmp.cloneTo(&internalNetworks[i]);
+    }
+    internalNetworks.detachTo(ComSafeArrayOutArg(aInternalNetworks));
+
+    return S_OK;
+}
+
+STDMETHODIMP VirtualBox::COMGETTER(GenericNetworkDrivers)(ComSafeArrayOut(BSTR, aGenericNetworkDrivers))
+{
+    if (ComSafeArrayOutIsNull(aGenericNetworkDrivers))
+        return E_POINTER;
+
+    AutoCaller autoCaller(this);
+    if (FAILED(autoCaller.rc())) return autoCaller.rc();
+
+    std::list<Bstr> allGenericNetworkDrivers;
+
+    /* get copy of all machine references, to avoid holding the list lock */
+    MachinesOList::MyList allMachines;
+    {
+        AutoReadLock al(m->allMachines.getLockHandle() COMMA_LOCKVAL_SRC_POS);
+        allMachines = m->allMachines.getList();
+    }
+    for (MachinesOList::MyList::const_iterator it = allMachines.begin();
+         it != allMachines.end();
+         ++it)
+    {
+        const ComObjPtr<Machine> &pMachine = *it;
+        AutoCaller autoMachineCaller(pMachine);
+        if (FAILED(autoMachineCaller.rc()))
+            continue;
+        AutoReadLock mlock(pMachine COMMA_LOCKVAL_SRC_POS);
+
+        if (pMachine->isAccessible())
+        {
+            ULONG cNetworkAdapters = 0;
+            HRESULT rc = m->pSystemProperties->GetMaxNetworkAdapters(pMachine->getChipsetType(), &cNetworkAdapters);
+            if (FAILED(rc))
+                continue;
+            cNetworkAdapters = RT_MIN(4, cNetworkAdapters);
+            for (ULONG i = 0; i < cNetworkAdapters; i++)
+            {
+                ComPtr<INetworkAdapter> pNet;
+                rc = pMachine->GetNetworkAdapter(i, pNet.asOutParam());
+                if (FAILED(rc) || pNet.isNull())
+                    continue;
+                Bstr strGenericNetworkDriver;
+                rc = pNet->COMGETTER(GenericDriver)(strGenericNetworkDriver.asOutParam());
+                if (FAILED(rc) || strGenericNetworkDriver.isEmpty())
+                    continue;
+
+                allGenericNetworkDrivers.push_back(strGenericNetworkDriver);
+            }
+        }
+    }
+
+    /* throw out any duplicates */
+    allGenericNetworkDrivers.sort();
+    allGenericNetworkDrivers.unique();
+    com::SafeArray<BSTR> genericNetworks(allGenericNetworkDrivers.size());
+    size_t i = 0;
+    for (std::list<Bstr>::const_iterator it = allGenericNetworkDrivers.begin();
+         it != allGenericNetworkDrivers.end();
+         ++it, i++)
+    {
+        const Bstr &tmp = *it;
+        tmp.cloneTo(&genericNetworks[i]);
+    }
+    genericNetworks.detachTo(ComSafeArrayOutArg(aGenericNetworkDrivers));
+
+    return S_OK;
 }
 
 STDMETHODIMP
@@ -1465,6 +1569,7 @@ STDMETHODIMP VirtualBox::CreateHardDisk(IN_BSTR aFormat,
 STDMETHODIMP VirtualBox::OpenMedium(IN_BSTR aLocation,
                                     DeviceType_T deviceType,
                                     AccessMode_T accessMode,
+                                    BOOL fForceNewUuid,
                                     IMedium **aMedium)
 {
     CheckComArgStrNotEmptyOrNull(aLocation);
@@ -1512,6 +1617,7 @@ STDMETHODIMP VirtualBox::OpenMedium(IN_BSTR aLocation,
         rc = pMedium->init(this,
                            aLocation,
                            (accessMode == AccessMode_ReadWrite) ? Medium::OpenReadWrite : Medium::OpenReadOnly,
+                           fForceNewUuid,
                            deviceType);
 
         if (SUCCEEDED(rc))
@@ -2209,34 +2315,30 @@ void VirtualBox::addProcessToReap(RTPROCESS pid)
 /** Event for onMachineStateChange(), onMachineDataChange(), onMachineRegistered() */
 struct MachineEvent : public VirtualBox::CallbackEvent
 {
-    MachineEvent(VirtualBox *aVB, const Guid &aId)
-        : CallbackEvent(aVB, VirtualBoxCallbackRegistration::kOnMachineDataChanged), id(aId.toUtf16())
-        {}
+    MachineEvent(VirtualBox *aVB, VBoxEventType_T aWhat, const Guid &aId, BOOL aBool)
+        : CallbackEvent(aVB, aWhat), id(aId.toUtf16())
+        , mBool(aBool)
+        { }
 
-    MachineEvent(VirtualBox *aVB, const Guid &aId, MachineState_T aState)
-        : CallbackEvent(aVB, VirtualBoxCallbackRegistration::kOnMachineStateChanged), id(aId.toUtf16())
-        , state(aState)
-        {}
-
-    MachineEvent(VirtualBox *aVB, const Guid &aId, BOOL aRegistered)
-        : CallbackEvent(aVB, VirtualBoxCallbackRegistration::kOnMachineRegistered), id(aId.toUtf16())
-        , registered(aRegistered)
+    MachineEvent(VirtualBox *aVB, VBoxEventType_T aWhat, const Guid &aId, MachineState_T aState)
+        : CallbackEvent(aVB, aWhat), id(aId.toUtf16())
+        , mState(aState)
         {}
 
     virtual HRESULT prepareEventDesc(IEventSource* aSource, VBoxEventDesc& aEvDesc)
     {
         switch (mWhat)
         {
-            case VirtualBoxCallbackRegistration::kOnMachineDataChanged:
-                aEvDesc.init(aSource, VBoxEventType_OnMachineDataChanged, id.raw());
+            case VBoxEventType_OnMachineDataChanged:
+                aEvDesc.init(aSource, mWhat, id.raw(), mBool);
                 break;
 
-            case VirtualBoxCallbackRegistration::kOnMachineStateChanged:
-                aEvDesc.init(aSource, VBoxEventType_OnMachineStateChanged, id.raw(), state);
+            case VBoxEventType_OnMachineStateChanged:
+                aEvDesc.init(aSource, mWhat, id.raw(), mState);
                 break;
 
-            case VirtualBoxCallbackRegistration::kOnMachineRegistered:
-                aEvDesc.init(aSource, VBoxEventType_OnMachineRegistered, id.raw(), registered);
+            case VBoxEventType_OnMachineRegistered:
+                aEvDesc.init(aSource, mWhat, id.raw(), mBool);
                 break;
 
             default:
@@ -2246,8 +2348,8 @@ struct MachineEvent : public VirtualBox::CallbackEvent
     }
 
     Bstr id;
-    MachineState_T state;
-    BOOL registered;
+    MachineState_T mState;
+    BOOL mBool;
 };
 
 /**
@@ -2255,15 +2357,15 @@ struct MachineEvent : public VirtualBox::CallbackEvent
  */
 void VirtualBox::onMachineStateChange(const Guid &aId, MachineState_T aState)
 {
-    postEvent(new MachineEvent(this, aId, aState));
+    postEvent(new MachineEvent(this, VBoxEventType_OnMachineStateChanged, aId, aState));
 }
 
 /**
  *  @note Doesn't lock any object.
  */
-void VirtualBox::onMachineDataChange(const Guid &aId)
+void VirtualBox::onMachineDataChange(const Guid &aId, BOOL aTemporary)
 {
-    postEvent(new MachineEvent(this, aId));
+    postEvent(new MachineEvent(this, VBoxEventType_OnMachineDataChanged, aId, aTemporary));
 }
 
 /**
@@ -2315,7 +2417,7 @@ struct ExtraDataEvent : public VirtualBox::CallbackEvent
 {
     ExtraDataEvent(VirtualBox *aVB, const Guid &aMachineId,
                    IN_BSTR aKey, IN_BSTR aVal)
-        : CallbackEvent(aVB, VirtualBoxCallbackRegistration::kOnExtraDataChanged)
+        : CallbackEvent(aVB, VBoxEventType_OnExtraDataChanged)
         , machineId(aMachineId.toUtf16()), key(aKey), val(aVal)
     {}
 
@@ -2340,14 +2442,14 @@ void VirtualBox::onExtraDataChange(const Guid &aId, IN_BSTR aKey, IN_BSTR aValue
  */
 void VirtualBox::onMachineRegistered(const Guid &aId, BOOL aRegistered)
 {
-    postEvent(new MachineEvent(this, aId, aRegistered));
+    postEvent(new MachineEvent(this, VBoxEventType_OnMachineRegistered, aId, aRegistered));
 }
 
 /** Event for onSessionStateChange() */
 struct SessionEvent : public VirtualBox::CallbackEvent
 {
     SessionEvent(VirtualBox *aVB, const Guid &aMachineId, SessionState_T aState)
-        : CallbackEvent(aVB, VirtualBoxCallbackRegistration::kOnSessionStateChanged)
+        : CallbackEvent(aVB, VBoxEventType_OnSessionStateChanged)
         , machineId(aMachineId.toUtf16()), sessionState(aState)
     {}
 
@@ -2371,7 +2473,7 @@ void VirtualBox::onSessionStateChange(const Guid &aId, SessionState_T aState)
 struct SnapshotEvent : public VirtualBox::CallbackEvent
 {
     SnapshotEvent(VirtualBox *aVB, const Guid &aMachineId, const Guid &aSnapshotId,
-                  VirtualBoxCallbackRegistration::CallbackBit aWhat)
+                  VBoxEventType_T aWhat)
         : CallbackEvent(aVB, aWhat)
         , machineId(aMachineId), snapshotId(aSnapshotId)
         {}
@@ -2392,7 +2494,7 @@ struct SnapshotEvent : public VirtualBox::CallbackEvent
 void VirtualBox::onSnapshotTaken(const Guid &aMachineId, const Guid &aSnapshotId)
 {
     postEvent(new SnapshotEvent(this, aMachineId, aSnapshotId,
-                                VirtualBoxCallbackRegistration::kOnSnapshotTaken));
+                                VBoxEventType_OnSnapshotTaken));
 }
 
 /**
@@ -2401,7 +2503,7 @@ void VirtualBox::onSnapshotTaken(const Guid &aMachineId, const Guid &aSnapshotId
 void VirtualBox::onSnapshotDeleted(const Guid &aMachineId, const Guid &aSnapshotId)
 {
     postEvent(new SnapshotEvent(this, aMachineId, aSnapshotId,
-                                VirtualBoxCallbackRegistration::kOnSnapshotDeleted));
+                                VBoxEventType_OnSnapshotDeleted));
 }
 
 /**
@@ -2410,7 +2512,7 @@ void VirtualBox::onSnapshotDeleted(const Guid &aMachineId, const Guid &aSnapshot
 void VirtualBox::onSnapshotChange(const Guid &aMachineId, const Guid &aSnapshotId)
 {
     postEvent(new SnapshotEvent(this, aMachineId, aSnapshotId,
-                                VirtualBoxCallbackRegistration::kOnSnapshotChanged));
+                                VBoxEventType_OnSnapshotChanged));
 }
 
 /** Event for onGuestPropertyChange() */
@@ -2418,7 +2520,7 @@ struct GuestPropertyEvent : public VirtualBox::CallbackEvent
 {
     GuestPropertyEvent(VirtualBox *aVBox, const Guid &aMachineId,
                        IN_BSTR aName, IN_BSTR aValue, IN_BSTR aFlags)
-        : CallbackEvent(aVBox, VirtualBoxCallbackRegistration::kOnGuestPropertyChanged),
+        : CallbackEvent(aVBox, VBoxEventType_OnGuestPropertyChanged),
           machineId(aMachineId),
           name(aName),
           value(aValue),
@@ -3082,7 +3184,7 @@ HRESULT VirtualBox::checkMediaForConflicts(const Guid &aId,
         Utf8Str strLocFound = pMediumFound->getLocationFull();
         Guid idFound = pMediumFound->getId();
 
-        if (    (strLocFound == aLocation)
+        if (    (RTPathCompare(strLocFound.c_str(), aLocation.c_str()) == 0)
              && (idFound == aId)
            )
             fIdentical = true;
@@ -3735,7 +3837,7 @@ HRESULT VirtualBox::unregisterMachine(Machine *pMachine,
                     // 2) better registry found: then use that
                     pMedium->addRegistry(*puuidBetter, true /* fRecurse */);
                     // 3) and make sure the registry is saved below
-                    addGuidToListUniquely(llRegistriesThatNeedSaving, *puuidBetter);
+                    VirtualBox::addGuidToListUniquely(llRegistriesThatNeedSaving, *puuidBetter);
                 }
             }
         }
@@ -3757,6 +3859,7 @@ HRESULT VirtualBox::unregisterMachine(Machine *pMachine,
  * @param llRegistriesThatNeedSaving
  * @param uuid
  */
+/* static */
 void VirtualBox::addGuidToListUniquely(GuidList &llRegistriesThatNeedSaving,
                                        const Guid &uuid)
 {

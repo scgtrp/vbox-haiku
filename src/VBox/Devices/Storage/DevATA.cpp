@@ -4,7 +4,7 @@
  */
 
 /*
- * Copyright (C) 2006-2010 Oracle Corporation
+ * Copyright (C) 2006-2011 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -102,16 +102,6 @@
 #define ATA_MEDIA_TYPE_UNKNOWN                  0    /**< unknown CD type */
 #define ATA_MEDIA_TYPE_DATA                     1    /**< Data CD */
 #define ATA_MEDIA_TYPE_CDDA                     2    /**< CD-DA  (audio) CD type */
-
-/**
- * Length of the configurable VPD data (without termination)
- */
-#define ATA_SERIAL_NUMBER_LENGTH        20
-#define ATA_FIRMWARE_REVISION_LENGTH     8
-#define ATA_MODEL_NUMBER_LENGTH         40
-#define ATAPI_INQUIRY_VENDOR_ID_LENGTH   8
-#define ATAPI_INQUIRY_PRODUCT_ID_LENGTH 16
-#define ATAPI_INQUIRY_REVISION_LENGTH    4
 
 /*******************************************************************************
 *   Structures and Typedefs                                                    *
@@ -256,6 +246,8 @@ typedef struct ATADevState
     /** Statistics: number of flush operations and the time spend flushing. */
     STAMPROFILE     StatFlushes;
 
+    /** Mark the drive as having a non-rotational medium (i.e. as a SSD). */
+    bool            fNonRotational;
     /** Enable passing through commands directly to the ATAPI drive. */
     bool            fATAPIPassthrough;
     /** Number of errors we've reported to the release log.
@@ -483,6 +475,8 @@ typedef struct PCIATAState
     PDMILEDPORTS        ILeds;
     /** Status LUN: Partner of ILeds. */
     R3PTRTYPE(PPDMILEDCONNECTORS)   pLedsConnector;
+    /** Status LUN: Media Notify. */
+    R3PTRTYPE(PPDMIMEDIANOTIFY)     pMediaNotify;
     /** Flag whether GC is enabled. */
     bool                fGCEnabled;
     /** Flag whether R0 is enabled. */
@@ -1245,6 +1239,8 @@ static bool ataIdentifySS(ATADevState *s)
         p[102] = RT_H2LE_U16(s->cTotalSectors >> 32);
         p[103] = RT_H2LE_U16(s->cTotalSectors >> 48);
     }
+    if (s->fNonRotational)
+        p[217] = RT_H2LE_U16(1); /* Non-rotational medium */
     uint32_t uCsum = ataChecksum(p, 510);
     p[255] = RT_H2LE_U16(0xa5 | (uCsum << 8)); /* Integrity word */
     s->iSourceSink = ATAFN_SS_NULL;
@@ -3121,23 +3117,31 @@ static void atapiParseCmdVirtualATAPI(ATADevState *s)
                     case 1: /* 01 - Start motor */
                         break;
                     case 2: /* 10 - Eject media */
+                    {
                         /* This must be done from EMT. */
-                        {
                         PATACONTROLLER pCtl = ATADEVSTATE_2_CONTROLLER(s);
                         PPDMDEVINS pDevIns = ATADEVSTATE_2_DEVINS(s);
+                        PCIATAState *pThis = PDMINS_2_DATA(pDevIns, PCIATAState *);
 
                         PDMCritSectLeave(&pCtl->lock);
                         rc = VMR3ReqCallWait(PDMDevHlpGetVM(pDevIns), VMCPUID_ANY,
                                              (PFNRT)s->pDrvMount->pfnUnmount, 3,
-                                             s->pDrvMount /*=fForce*/, true /*=fEject*/);
+                                             s->pDrvMount, false /*=fForce*/, true /*=fEject*/);
                         Assert(RT_SUCCESS(rc) || (rc == VERR_PDM_MEDIA_LOCKED) || (rc = VERR_PDM_MEDIA_NOT_MOUNTED));
+                        if (RT_SUCCESS(rc) && pThis->pMediaNotify)
+                        {
+                            rc = VMR3ReqCallNoWait(PDMDevHlpGetVM(pDevIns), VMCPUID_ANY,
+                                                   (PFNRT)pThis->pMediaNotify->pfnEjected, 2,
+                                                   pThis->pMediaNotify, s->iLUN);
+                            AssertRC(rc);
+                        }
                         {
                             STAM_PROFILE_START(&pCtl->StatLockWait, a);
                             PDMCritSectEnter(&pCtl->lock, VINF_SUCCESS);
                             STAM_PROFILE_STOP(&pCtl->StatLockWait, a);
                         }
-                        }
                         break;
+                    }
                     case 3: /* 11 - Load media */
                         /** @todo rc = s->pDrvMount->pfnLoadMedia(s->pDrvMount) */
                         break;
@@ -3728,7 +3732,7 @@ static bool ataExecuteDeviceDiagnosticSS(ATADevState *s)
     if (s->fATAPI)
         ataSetStatusValue(s, 0); /* NOTE: READY is _not_ set */
     else
-        ataSetStatusValue(s, ATA_STAT_READY);
+        ataSetStatusValue(s, ATA_STAT_READY | ATA_STAT_SEEK);
     s->uATARegError = 0x01;
     return false;
 }
@@ -3793,7 +3797,7 @@ static void ataParseCmd(ATADevState *s, uint8_t cmd)
         case ATA_READ_VERIFY_SECTORS:
         case ATA_READ_VERIFY_SECTORS_WITHOUT_RETRIES:
             /* do sector number check ? */
-            ataCmdOK(s, 0);
+            ataCmdOK(s, ATA_STAT_SEEK);
             ataSetIRQ(s); /* Shortcut, do not use AIO thread. */
             break;
         case ATA_READ_SECTORS_EXT:
@@ -7037,7 +7041,7 @@ static DECLCALLBACK(int)   ataR3Construct(PPDMDEVINS pDevIns, int iInstance, PCF
 #endif /* VBOX_WITH_STATISTICS */
 
         /* Initialize per-controller critical section */
-        rc = PDMDevHlpCritSectInit(pDevIns, &pThis->aCts[i].lock, RT_SRC_POS, "ATA%u", i);
+        rc = PDMDevHlpCritSectInit(pDevIns, &pThis->aCts[i].lock, RT_SRC_POS, "ATA#%u", i);
         if (RT_FAILURE(rc))
             return PDMDEV_SET_ERROR(pDevIns, rc, N_("PIIX3 cannot initialize critical section"));
     }
@@ -7047,7 +7051,10 @@ static DECLCALLBACK(int)   ataR3Construct(PPDMDEVINS pDevIns, int iInstance, PCF
      */
     rc = PDMDevHlpDriverAttach(pDevIns, PDM_STATUS_LUN, &pThis->IBase, &pBase, "Status Port");
     if (RT_SUCCESS(rc))
+    {
         pThis->pLedsConnector = PDMIBASE_QUERY_INTERFACE(pBase, PDMILEDCONNECTORS);
+        pThis->pMediaNotify = PDMIBASE_QUERY_INTERFACE(pBase, PDMIMEDIANOTIFY);
+    }
     else if (rc != VERR_PDM_NO_ATTACHED_DRIVER)
     {
         AssertMsgFailed(("Failed to attach to status driver. rc=%Rrc\n", rc));
@@ -7160,6 +7167,11 @@ static DECLCALLBACK(int)   ataR3Construct(PPDMDEVINS pDevIns, int iInstance, PCF
                         return PDMDEV_SET_ERROR(pDevIns, rc,
                                     N_("PIIX3 configuration error: failed to read \"ModelNumber\" as string"));
                     }
+
+                    rc = CFGMR3QueryBoolDef(pCfgNode, "NonRotationalMedium", &pIf->fNonRotational, false);
+                    if (RT_FAILURE(rc))
+                        return PDMDEV_SET_ERROR(pDevIns, rc,
+                                    N_("PIIX3 configuration error: failed to read \"NonRotationalMedium\" as boolean"));
 
                     /* There are three other identification strings for CD drives used for INQUIRY */
                     if (pIf->fATAPI)

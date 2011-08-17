@@ -22,12 +22,14 @@
 #else  /* !VBOX_WITH_PRECOMPILED_HEADERS */
 /* Local includes */
 #include "UIIconPool.h"
-#include "VBoxProblemReporter.h"
+#include "UIMessageCenter.h"
 #include "VBoxSnapshotDetailsDlg.h"
 #include "VBoxSnapshotsWgt.h"
 #include "VBoxTakeSnapshotDlg.h"
+#include "UICloneVMWizard.h"
 #include "UIToolBar.h"
 #include "UIVirtualBoxEventHandler.h"
+#include "UISelectorShortcuts.h"
 
 /* Global includes */
 #include <QDateTime>
@@ -135,6 +137,7 @@ public:
         adjustText();
     }
 
+    CMachine machine() const { return mMachine; }
     CSnapshot snapshot() const { return mSnapshot; }
     QString snapshotId() const { return mId; }
 
@@ -329,6 +332,7 @@ VBoxSnapshotsWgt::VBoxSnapshotsWgt (QWidget *aParent)
     , mDeleteSnapshotAction (new QAction (mSnapshotActionGroup))
     , mShowSnapshotDetailsAction (new QAction (mSnapshotActionGroup))
     , mTakeSnapshotAction (new QAction (mCurStateActionGroup))
+    , mCloneSnapshotAction(new QAction(mCurStateActionGroup))
 {
     /* Apply UI decorations */
     Ui::VBoxSnapshotsWgt::setupUi (this);
@@ -359,6 +363,8 @@ VBoxSnapshotsWgt::VBoxSnapshotsWgt (QWidget *aParent)
     toolBar->addAction (mRestoreSnapshotAction);
     toolBar->addAction (mDeleteSnapshotAction);
     toolBar->addSeparator();
+    toolBar->addAction(mCloneSnapshotAction);
+    toolBar->addSeparator();
     toolBar->addAction (mShowSnapshotDetailsAction);
 
     ((QVBoxLayout*)layout())->insertWidget (0, toolBar);
@@ -380,11 +386,14 @@ VBoxSnapshotsWgt::VBoxSnapshotsWgt (QWidget *aParent)
         QSize (22, 22), QSize (16, 16),
         ":/take_snapshot_22px.png", ":/take_snapshot_16px.png",
         ":/take_snapshot_dis_22px.png", ":/take_snapshot_dis_16px.png"));
+    mCloneSnapshotAction->setIcon(UIIconPool::iconSet(
+        ":/vm_clone_16px.png", ":/vm_clone_disabled_16px.png"));
 
     mRestoreSnapshotAction->setShortcut (QString ("Ctrl+Shift+R"));
     mDeleteSnapshotAction->setShortcut (QString ("Ctrl+Shift+D"));
     mShowSnapshotDetailsAction->setShortcut (QString ("Ctrl+Space"));
     mTakeSnapshotAction->setShortcut (QString ("Ctrl+Shift+S"));
+    mCloneSnapshotAction->setShortcut(QString ("Ctrl+Shift+C"));
 
     mAgeUpdateTimer.setSingleShot (true);
 
@@ -400,6 +409,7 @@ VBoxSnapshotsWgt::VBoxSnapshotsWgt (QWidget *aParent)
     connect (mRestoreSnapshotAction, SIGNAL (triggered()), this, SLOT (sltRestoreSnapshot()));
     connect (mDeleteSnapshotAction, SIGNAL (triggered()), this, SLOT (sltDeleteSnapshot()));
     connect (mShowSnapshotDetailsAction, SIGNAL (triggered()), this, SLOT (sltShowSnapshotDetails()));
+    connect (mCloneSnapshotAction, SIGNAL(triggered()), this, SLOT(sltCloneSnapshot()));
 
     connect (gVBoxEvents, SIGNAL(sigMachineDataChange(QString)),
              this, SLOT(machineDataChanged(QString)));
@@ -440,11 +450,14 @@ void VBoxSnapshotsWgt::retranslateUi()
     mDeleteSnapshotAction->setText (tr ("&Delete Snapshot"));
     mShowSnapshotDetailsAction->setText (tr ("S&how Details"));
     mTakeSnapshotAction->setText (tr ("Take &Snapshot"));
+    mCloneSnapshotAction->setText(tr("&Clone..."));
+
 
     mRestoreSnapshotAction->setStatusTip (tr ("Restore the selected snapshot of the virtual machine"));
     mDeleteSnapshotAction->setStatusTip (tr ("Delete the selected snapshot of the virtual machine"));
     mShowSnapshotDetailsAction->setStatusTip (tr ("Show the details of the selected snapshot"));
     mTakeSnapshotAction->setStatusTip (tr ("Take a snapshot of the current virtual machine state"));
+    mCloneSnapshotAction->setStatusTip(tr("Clone the selected virtual machine"));
 
     mRestoreSnapshotAction->setToolTip (mRestoreSnapshotAction->text().remove ('&').remove ('.') +
         QString (" (%1)").arg (mRestoreSnapshotAction->shortcut().toString()));
@@ -454,6 +467,8 @@ void VBoxSnapshotsWgt::retranslateUi()
         QString (" (%1)").arg (mShowSnapshotDetailsAction->shortcut().toString()));
     mTakeSnapshotAction->setToolTip (mTakeSnapshotAction->text().remove ('&').remove ('.') +
         QString (" (%1)").arg (mTakeSnapshotAction->shortcut().toString()));
+    mCloneSnapshotAction->setToolTip(mCloneSnapshotAction->text().remove('&').remove('.') +
+        QString(" (%1)").arg(mCloneSnapshotAction->shortcut().toString()));
 }
 
 void VBoxSnapshotsWgt::onCurrentChanged (QTreeWidgetItem *aItem)
@@ -497,6 +512,9 @@ void VBoxSnapshotsWgt::onCurrentChanged (QTreeWidgetItem *aItem)
     mTakeSnapshotAction->setEnabled (   (   canTakeDeleteSnapshot
                                          && mCurSnapshotItem && item && item->isCurrentStateItem())
                                      || (item && !mCurSnapshotItem));
+
+    /* Enable/disable cloning snapshots */
+    mCloneSnapshotAction->setEnabled(!busy && item);
 }
 
 void VBoxSnapshotsWgt::onContextMenuRequested (const QPoint &aPoint)
@@ -513,10 +531,16 @@ void VBoxSnapshotsWgt::onContextMenuRequested (const QPoint &aPoint)
         menu.addAction (mRestoreSnapshotAction);
         menu.addAction (mDeleteSnapshotAction);
         menu.addSeparator();
+        menu.addAction(mCloneSnapshotAction);
+        menu.addSeparator();
         menu.addAction (mShowSnapshotDetailsAction);
     }
     else
+    {
         menu.addAction (mTakeSnapshotAction);
+        menu.addSeparator();
+        menu.addAction(mCloneSnapshotAction);
+    }
 
     menu.exec (mTreeWidget->viewport()->mapToGlobal (aPoint));
 }
@@ -553,7 +577,7 @@ void VBoxSnapshotsWgt::sltRestoreSnapshot()
     CSnapshot snapshot = mMachine.FindSnapshot(strSnapshotId);
 
     /* Ask the user if he really wants to restore the snapshot: */
-    int iResultCode = vboxProblem().askAboutSnapshotRestoring(snapshot.GetName(), mMachine.GetCurrentStateModified());
+    int iResultCode = msgCenter().askAboutSnapshotRestoring(snapshot.GetName(), mMachine.GetCurrentStateModified());
 
     /* If user confirmed other snapshot restoring: */
     if (iResultCode & QIMessageBox::Ok)
@@ -577,13 +601,13 @@ void VBoxSnapshotsWgt::sltRestoreSnapshot()
         CProgress progress = console.RestoreSnapshot(snapshot);
         if (console.isOk())
         {
-            vboxProblem().showModalProgressDialog(progress, mMachine.GetName(), ":/progress_snapshot_restore_90px.png",
-                                                  vboxProblem().mainWindowShown(), true);
+            msgCenter().showModalProgressDialog(progress, mMachine.GetName(), ":/progress_snapshot_restore_90px.png",
+                                                  msgCenter().mainWindowShown(), true);
             if (progress.GetResultCode() != 0)
-                vboxProblem().cannotRestoreSnapshot(progress, snapshot.GetName());
+                msgCenter().cannotRestoreSnapshot(progress, snapshot.GetName());
         }
         else
-            vboxProblem().cannotRestoreSnapshot(progress, snapshot.GetName());
+            msgCenter().cannotRestoreSnapshot(progress, snapshot.GetName());
 
         /* Unlock machine finally: */
         session.UnlockMachine();
@@ -600,12 +624,12 @@ void VBoxSnapshotsWgt::sltDeleteSnapshot()
     AssertReturn (!snapId.isNull(), (void) 0);
     CSnapshot snapshot = mMachine.FindSnapshot(snapId);
 
-    if (!vboxProblem().askAboutSnapshotDeleting (snapshot.GetName()))
+    if (!msgCenter().askAboutSnapshotDeleting (snapshot.GetName()))
         return;
 
     /** @todo check available space on the target filesystem etc etc. */
 #if 0
-    if (!vboxProblem().askAboutSnapshotDeletingFreeSpace (snapshot.GetName(),
+    if (!msgCenter().askAboutSnapshotDeletingFreeSpace (snapshot.GetName(),
                                                           "/home/juser/.VirtualBox/Machines/SampleVM/Snapshots/{01020304-0102-0102-0102-010203040506}.vdi",
                                                           "59 GiB",
                                                           "15 GiB"))
@@ -624,14 +648,14 @@ void VBoxSnapshotsWgt::sltDeleteSnapshot()
     if (console.isOk())
     {
         /* Show the progress dialog */
-        vboxProblem().showModalProgressDialog (progress, mMachine.GetName(), ":/progress_snapshot_discard_90px.png",
-                                               vboxProblem().mainWindowShown(), true);
+        msgCenter().showModalProgressDialog (progress, mMachine.GetName(), ":/progress_snapshot_discard_90px.png",
+                                               msgCenter().mainWindowShown(), true);
 
         if (progress.GetResultCode() != 0)
-            vboxProblem().cannotDeleteSnapshot (progress,  snapshot.GetName());
+            msgCenter().cannotDeleteSnapshot (progress,  snapshot.GetName());
     }
     else
-        vboxProblem().cannotDeleteSnapshot (console,  snapshot.GetName());
+        msgCenter().cannotDeleteSnapshot (console,  snapshot.GetName());
 
     session.UnlockMachine();
 }
@@ -652,6 +676,28 @@ void VBoxSnapshotsWgt::sltShowSnapshotDetails()
 
     if (dlg.exec() == QDialog::Accepted)
         dlg.putBackToSnapshot();
+}
+
+void VBoxSnapshotsWgt::sltCloneSnapshot()
+{
+    SnapshotWgtItem *item = !mTreeWidget->currentItem() ? 0 :
+        static_cast <SnapshotWgtItem*> (mTreeWidget->currentItem());
+    AssertReturn (item, (void) 0);
+
+    CMachine machine;
+    CSnapshot snapshot;
+    if (item->isCurrentStateItem())
+        machine = item->machine();
+    else
+    {
+        snapshot = item->snapshot();
+        AssertReturn(!snapshot.isNull(), (void)0);
+        machine = snapshot.GetMachine();
+    }
+    AssertReturn(!machine.isNull(), (void)0);
+
+    UICloneVMWizard wzd(this, machine, snapshot);
+    wzd.exec();
 }
 
 void VBoxSnapshotsWgt::machineDataChanged(QString strId)
@@ -718,58 +764,104 @@ void VBoxSnapshotsWgt::updateSnapshotsAge()
 
 bool VBoxSnapshotsWgt::takeSnapshot()
 {
+    /* Prepare result: */
+    bool fIsValid = true;
+
     /* Get currently chosen item: */
-    SnapshotWgtItem *pItem = mTreeWidget->currentItem() ? static_cast <SnapshotWgtItem*>(mTreeWidget->currentItem()) : 0;
+    SnapshotWgtItem *pItem = mTreeWidget->currentItem() ? static_cast<SnapshotWgtItem*>(mTreeWidget->currentItem()) : 0;
     AssertReturn(pItem, (bool)0);
 
-    /* Create 'take new snapshot' dialog: */
-    VBoxTakeSnapshotDlg dlg(this, mMachine);
-    dlg.mLbIcon->setPixmap(vboxGlobal().vmGuestOSTypeIcon(mMachine.GetOSTypeId()));
+    /* Open a session to work with corresponding VM: */
+    CSession session = vboxGlobal().openSession(mMachineId,
+                                                mSessionState != KSessionState_Unlocked /* connect to existing */);
+    fIsValid = !session.isNull();
 
-    /* Search for the max available filter index: */
-    int iMaxSnapShotIndex = 0;
-    QString snapShotName = tr("Snapshot %1");
-    QRegExp regExp(QString("^") + snapShotName.arg("([0-9]+)") + QString("$"));
-    QTreeWidgetItemIterator iterator(mTreeWidget);
-    while (*iterator)
+    if (fIsValid)
     {
-        QString snapShot = static_cast<SnapshotWgtItem*>(*iterator)->text(0);
-        int pos = regExp.indexIn(snapShot);
-        if (pos != -1)
-            iMaxSnapShotIndex = regExp.cap(1).toInt() > iMaxSnapShotIndex ? regExp.cap(1).toInt() : iMaxSnapShotIndex;
-        ++iterator;
-    }
-    dlg.mLeName->setText(snapShotName.arg(iMaxSnapShotIndex + 1));
-
-    /* Show 'take new snapshot' dialog: */
-    if (dlg.exec() == QDialog::Accepted)
-    {
-        /* Open a direct session (this call will handle all errors): */
-        bool busy = mSessionState != KSessionState_Unlocked;
-        CSession session = vboxGlobal().openSession(mMachineId, busy /* aExisting */);
-        if (session.isNull())
-            return false;
-
-        /* Take new snapshot: */
+        /* Get corresponding console object also: */
         CConsole console = session.GetConsole();
-        CProgress progress = console.TakeSnapshot(dlg.mLeName->text().trimmed(), dlg.mTeDescription->toPlainText());
-        if (console.isOk())
+        /* Remember runtime state: */
+        bool fAtRuntime = mMachine.GetState() == KMachineState_Running;
+        /* Remember paused state: */
+        bool fWasPaused = mMachine.GetState() == KMachineState_Paused ||
+                          mMachine.GetState() == KMachineState_TeleportingPausedVM;
+
+        /* Pause VM if necessary: */
+        if (fIsValid && fAtRuntime && !fWasPaused)
         {
-            /* Show the progress dialog */
-            vboxProblem().showModalProgressDialog(progress, mMachine.GetName(), ":/progress_snapshot_create_90px.png",
-                                                  vboxProblem().mainWindowShown(), true);
-            if (progress.GetResultCode() != 0)
-                vboxProblem().cannotTakeSnapshot(progress);
+            /* Pausing VM: */
+            console.Pause();
+            if (!console.isOk())
+            {
+                msgCenter().cannotPauseMachine(console);
+                fIsValid = false;
+            }
         }
-        else
-            vboxProblem().cannotTakeSnapshot(console);
+
+        /* Create 'take new snapshot' dialog: */
+        if (fIsValid)
+        {
+            /* Prepare dialog: */
+            VBoxTakeSnapshotDlg dlg(this, mMachine);
+            dlg.mLbIcon->setPixmap(vboxGlobal().vmGuestOSTypeIcon(mMachine.GetOSTypeId()));
+
+            /* Search for the max available snapshot index: */
+            int iMaxSnapShotIndex = 0;
+            QString snapShotName = tr("Snapshot %1");
+            QRegExp regExp(QString("^") + snapShotName.arg("([0-9]+)") + QString("$"));
+            QTreeWidgetItemIterator iterator(mTreeWidget);
+            while (*iterator)
+            {
+                QString snapShot = static_cast<SnapshotWgtItem*>(*iterator)->text(0);
+                int pos = regExp.indexIn(snapShot);
+                if (pos != -1)
+                    iMaxSnapShotIndex = regExp.cap(1).toInt() > iMaxSnapShotIndex ? regExp.cap(1).toInt() : iMaxSnapShotIndex;
+                ++iterator;
+            }
+            dlg.mLeName->setText(snapShotName.arg(iMaxSnapShotIndex + 1));
+
+            /* Show 'take new snapshot' dialog: */
+            if (dlg.exec() == QDialog::Accepted)
+            {
+                /* Take new snapshot: */
+                CProgress progress = console.TakeSnapshot(dlg.mLeName->text().trimmed(), dlg.mTeDescription->toPlainText());
+                if (console.isOk())
+                {
+                    /* Show the progress dialog: */
+                    msgCenter().showModalProgressDialog(progress, mMachine.GetName(), ":/progress_snapshot_create_90px.png",
+                                                        msgCenter().mainWindowShown(), true);
+                    if (progress.GetResultCode() != 0)
+                    {
+                        msgCenter().cannotTakeSnapshot(progress);
+                        fIsValid = false;
+                    }
+                }
+                else
+                {
+                    msgCenter().cannotTakeSnapshot(console);
+                    fIsValid = false;
+                }
+            }
+        }
+
+        /* Resume VM if necessary: */
+        if (fIsValid && fAtRuntime && !fWasPaused)
+        {
+            /* Resuming VM: */
+            console.Resume();
+            if (!console.isOk())
+            {
+                msgCenter().cannotResumeMachine(console);
+                fIsValid = false;
+            }
+        }
 
         /* Unlock machine finally: */
         session.UnlockMachine();
-
-        return true;
     }
-    return false;
+
+    /* Return result: */
+    return fIsValid;
 }
 
 void VBoxSnapshotsWgt::refreshAll()

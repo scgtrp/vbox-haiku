@@ -4,7 +4,7 @@
  */
 
 /*
- * Copyright (C) 2007-2010 Oracle Corporation
+ * Copyright (C) 2007-2011 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -67,7 +67,7 @@
  */
 VMMR0DECL(int) PGMR0PhysAllocateHandyPages(PVM pVM, PVMCPU pVCpu)
 {
-    Assert(PDMCritSectIsOwnerEx(&pVM->pgm.s.CritSect, pVCpu->idCpu));
+    Assert(PDMCritSectIsOwnerEx(&pVM->pgm.s.CritSect, pVCpu));
 
     /*
      * Check for error injection.
@@ -86,6 +86,7 @@ VMMR0DECL(int) PGMR0PhysAllocateHandyPages(PVM pVM, PVMCPU pVCpu)
     int rc = GMMR0AllocateHandyPages(pVM, pVCpu->idCpu, cPages, cPages, &pVM->pgm.s.aHandyPages[iFirst]);
     if (RT_SUCCESS(rc))
     {
+#ifdef VBOX_STRICT
         for (uint32_t i = 0; i < RT_ELEMENTS(pVM->pgm.s.aHandyPages); i++)
         {
             Assert(pVM->pgm.s.aHandyPages[i].idPage != NIL_GMM_PAGEID);
@@ -94,6 +95,7 @@ VMMR0DECL(int) PGMR0PhysAllocateHandyPages(PVM pVM, PVMCPU pVCpu)
             Assert(pVM->pgm.s.aHandyPages[i].HCPhysGCPhys != NIL_RTHCPHYS);
             Assert(!(pVM->pgm.s.aHandyPages[i].HCPhysGCPhys & ~X86_PTE_PAE_PG_MASK));
         }
+#endif
 
         pVM->pgm.s.cHandyPages = RT_ELEMENTS(pVM->pgm.s.aHandyPages);
     }
@@ -120,10 +122,10 @@ VMMR0DECL(int) PGMR0PhysAllocateHandyPages(PVM pVM, PVMCPU pVCpu)
              */
             do
             {
-                cPages >>= 2;
+                cPages >>= 1;
                 if (cPages + iFirst < PGM_HANDY_PAGES_MIN)
                     cPages = PGM_HANDY_PAGES_MIN - iFirst;
-                rc = GMMR0AllocateHandyPages(pVM, pVCpu->idCpu, cPages, cPages, &pVM->pgm.s.aHandyPages[iFirst]);
+                rc = GMMR0AllocateHandyPages(pVM, pVCpu->idCpu, 0, cPages, &pVM->pgm.s.aHandyPages[iFirst]);
             } while (   (   rc == VERR_GMM_HIT_GLOBAL_LIMIT
                          || rc == VERR_GMM_HIT_VM_ACCOUNT_LIMIT)
                      && cPages + iFirst > PGM_HANDY_PAGES_MIN);
@@ -180,7 +182,7 @@ VMMR0DECL(int) PGMR0PhysAllocateHandyPages(PVM pVM, PVMCPU pVCpu)
  */
 VMMR0DECL(int) PGMR0PhysAllocateLargeHandyPage(PVM pVM, PVMCPU pVCpu)
 {
-    Assert(PDMCritSectIsOwnerEx(&pVM->pgm.s.CritSect, pVCpu->idCpu));
+    Assert(PDMCritSectIsOwnerEx(&pVM->pgm.s.CritSect, pVCpu));
 
     Assert(!pVM->pgm.s.cLargeHandyPages);
     int rc = GMMR0AllocateLargePage(pVM, pVCpu->idCpu, _2M, &pVM->pgm.s.aLargeHandyPage[0].idPage, &pVM->pgm.s.aLargeHandyPage[0].HCPhysGCPhys);
@@ -465,7 +467,7 @@ VMMR0DECL(int) PGMR0Trap0eHandlerNestedPaging(PVM pVM, PVMCPU pVCpu, PGMMODE enm
     }
     if (fLockTaken)
     {
-        Assert(PGMIsLockOwner(pVM));
+        PGM_LOCK_ASSERT_OWNER(pVM);
         pgmUnlock(pVM);
     }
 

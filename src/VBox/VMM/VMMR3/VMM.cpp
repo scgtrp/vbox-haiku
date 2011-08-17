@@ -102,7 +102,6 @@
 #include <VBox/err.h>
 #include <VBox/param.h>
 #include <VBox/version.h>
-#include <VBox/x86.h>
 #include <VBox/vmm/hwaccm.h>
 #include <iprt/assert.h>
 #include <iprt/alloc.h>
@@ -113,6 +112,7 @@
 #include <iprt/string.h>
 #include <iprt/stdarg.h>
 #include <iprt/ctype.h>
+#include <iprt/x86.h>
 
 
 
@@ -338,6 +338,7 @@ static int vmmR3InitStacks(PVM pVM)
 static int vmmR3InitLoggers(PVM pVM)
 {
     int rc;
+#define RTLogCalcSizeForR0(cGroups, fFlags) (RT_OFFSETOF(VMMR0LOGGER, Logger.afGroups[cGroups]) + PAGE_SIZE)
 
     /*
      * Allocate RC & R0 Logger instances (they are finalized in the relocator).
@@ -353,18 +354,17 @@ static int vmmR3InitLoggers(PVM pVM)
         pVM->vmm.s.pRCLoggerRC = MMHyperR3ToRC(pVM, pVM->vmm.s.pRCLoggerR3);
 
 # ifdef VBOX_WITH_R0_LOGGING
+        size_t const cbLogger = RTLogCalcSizeForR0(pLogger->cGroups, 0);
         for (VMCPUID i = 0; i < pVM->cCpus; i++)
         {
             PVMCPU pVCpu = &pVM->aCpus[i];
-
-            rc = MMR3HyperAllocOnceNoRelEx(pVM, RT_OFFSETOF(VMMR0LOGGER, Logger.afGroups[pLogger->cGroups]),
-                                           0, MM_TAG_VMM, MMHYPER_AONR_FLAGS_KERNEL_MAPPING,
+            rc = MMR3HyperAllocOnceNoRelEx(pVM, cbLogger, PAGE_SIZE, MM_TAG_VMM, MMHYPER_AONR_FLAGS_KERNEL_MAPPING,
                                            (void **)&pVCpu->vmm.s.pR0LoggerR3);
             if (RT_FAILURE(rc))
                 return rc;
-            pVCpu->vmm.s.pR0LoggerR3->pVM = pVM->pVMR0;
+            pVCpu->vmm.s.pR0LoggerR3->pVM        = pVM->pVMR0;
             //pVCpu->vmm.s.pR0LoggerR3->fCreated = false;
-            pVCpu->vmm.s.pR0LoggerR3->cbLogger = RT_OFFSETOF(RTLOGGER, afGroups[pLogger->cGroups]);
+            pVCpu->vmm.s.pR0LoggerR3->cbLogger   = (uint32_t)cbLogger;
             pVCpu->vmm.s.pR0LoggerR0 = MMHyperR3ToR0(pVM, pVCpu->vmm.s.pR0LoggerR3);
         }
 # endif
@@ -449,6 +449,7 @@ static void vmmR3InitRegisterStats(PVM pVM)
     STAM_REG(pVM, &pVM->vmm.s.StatRZRetPatchTPR,            STAMTYPE_COUNTER, "/VMM/RZRet/PatchTPR",            STAMUNIT_OCCURENCES, "Number of VINF_EM_HWACCM_PATCH_TPR_INSTR returns.");
     STAM_REG(pVM, &pVM->vmm.s.StatRZRetCallRing3,           STAMTYPE_COUNTER, "/VMM/RZCallR3/Misc",             STAMUNIT_OCCURENCES, "Number of Other ring-3 calls.");
     STAM_REG(pVM, &pVM->vmm.s.StatRZCallPDMLock,            STAMTYPE_COUNTER, "/VMM/RZCallR3/PDMLock",          STAMUNIT_OCCURENCES, "Number of VMMCALLRING3_PDM_LOCK calls.");
+    STAM_REG(pVM, &pVM->vmm.s.StatRZCallPDMCritSectEnter,   STAMTYPE_COUNTER, "/VMM/RZCallR3/PDMCritSectEnter", STAMUNIT_OCCURENCES, "Number of VMMCALLRING3_PDM_CRITSECT_ENTER calls.");
     STAM_REG(pVM, &pVM->vmm.s.StatRZCallPGMLock,            STAMTYPE_COUNTER, "/VMM/RZCallR3/PGMLock",          STAMUNIT_OCCURENCES, "Number of VMMCALLRING3_PGM_LOCK calls.");
     STAM_REG(pVM, &pVM->vmm.s.StatRZCallPGMPoolGrow,        STAMTYPE_COUNTER, "/VMM/RZCallR3/PGMPoolGrow",      STAMUNIT_OCCURENCES, "Number of VMMCALLRING3_PGM_POOL_GROW calls.");
     STAM_REG(pVM, &pVM->vmm.s.StatRZCallPGMMapChunk,        STAMTYPE_COUNTER, "/VMM/RZCallR3/PGMMapChunk",      STAMUNIT_OCCURENCES, "Number of VMMCALLRING3_PGM_MAP_CHUNK calls.");
@@ -511,7 +512,7 @@ VMMR3_INT_DECL(int) VMMR3InitR0(PVM pVM)
 #ifdef LOG_ENABLED
         if (    pVCpu->vmm.s.pR0LoggerR3
             &&  pVCpu->vmm.s.pR0LoggerR3->Logger.offScratch > 0)
-            RTLogFlushToLogger(&pVCpu->vmm.s.pR0LoggerR3->Logger, NULL);
+            RTLogFlushR0(NULL, &pVCpu->vmm.s.pR0LoggerR3->Logger);
 #endif
         if (rc != VINF_VMM_CALL_HOST)
             break;
@@ -859,7 +860,7 @@ VMMR3_INT_DECL(int) VMMR3UpdateLoggers(PVM pVM)
 
         pVM->vmm.s.pRCLoggerRC = MMHyperR3ToRC(pVM, pVM->vmm.s.pRCLoggerR3);
         rc = RTLogCloneRC(NULL /* default */, pVM->vmm.s.pRCLoggerR3, pVM->vmm.s.cbRCLogger,
-                          RCPtrLoggerWrapper,  RCPtrLoggerFlush, RTLOGFLAGS_BUFFERED);
+                          RCPtrLoggerWrapper, RCPtrLoggerFlush, RTLOGFLAGS_BUFFERED);
         AssertReleaseMsgRC(rc, ("RTLogCloneRC failed! rc=%Rra\n", rc));
     }
 
@@ -872,7 +873,7 @@ VMMR3_INT_DECL(int) VMMR3UpdateLoggers(PVM pVM)
 
         pVM->vmm.s.pRCRelLoggerRC = MMHyperR3ToRC(pVM, pVM->vmm.s.pRCRelLoggerR3);
         rc = RTLogCloneRC(RTLogRelDefaultInstance(), pVM->vmm.s.pRCRelLoggerR3, pVM->vmm.s.cbRCRelLogger,
-                          RCPtrLoggerWrapper,  RCPtrLoggerFlush, RTLOGFLAGS_BUFFERED);
+                          RCPtrLoggerWrapper, RCPtrLoggerFlush, RTLOGFLAGS_BUFFERED);
         AssertReleaseMsgRC(rc, ("RTLogCloneRC failed! rc=%Rra\n", rc));
     }
 #endif /* VBOX_WITH_RC_RELEASE_LOGGING */
@@ -882,6 +883,7 @@ VMMR3_INT_DECL(int) VMMR3UpdateLoggers(PVM pVM)
      * For the ring-0 EMT logger, we use a per-thread logger instance
      * in ring-0. Only initialize it once.
      */
+    PRTLOGGER const pDefault = RTLogDefaultInstance();
     for (VMCPUID i = 0; i < pVM->cCpus; i++)
     {
         PVMCPU       pVCpu = &pVM->aCpus[i];
@@ -898,15 +900,15 @@ VMMR3_INT_DECL(int) VMMR3UpdateLoggers(PVM pVM)
                 rc = PDMR3LdrGetSymbolR0(pVM, VMMR0_MAIN_MODULE_NAME, "vmmR0LoggerFlush", &pfnLoggerFlush);
                 AssertReleaseMsgRCReturn(rc, ("vmmR0LoggerFlush not found! rc=%Rra\n", rc), rc);
 
-                rc = RTLogCreateForR0(&pR0LoggerR3->Logger, pR0LoggerR3->cbLogger,
-                                      *(PFNRTLOGGER *)&pfnLoggerWrapper, *(PFNRTLOGFLUSH *)&pfnLoggerFlush,
+                rc = RTLogCreateForR0(&pR0LoggerR3->Logger, pR0LoggerR3->cbLogger, pVCpu->vmm.s.pR0LoggerR0 + RT_OFFSETOF(VMMR0LOGGER, Logger),
+                                      pfnLoggerWrapper, pfnLoggerFlush,
                                       RTLOGFLAGS_BUFFERED, RTLOGDEST_DUMMY);
                 AssertReleaseMsgRCReturn(rc, ("RTLogCreateForR0 failed! rc=%Rra\n", rc), rc);
 
                 RTR0PTR pfnLoggerPrefix = NIL_RTR0PTR;
                 rc = PDMR3LdrGetSymbolR0(pVM, VMMR0_MAIN_MODULE_NAME, "vmmR0LoggerPrefix", &pfnLoggerPrefix);
                 AssertReleaseMsgRCReturn(rc, ("vmmR0LoggerPrefix not found! rc=%Rra\n", rc), rc);
-                rc = RTLogSetCustomPrefixCallback(&pR0LoggerR3->Logger, *(PFNRTLOGPREFIX *)&pfnLoggerPrefix, NULL);
+                rc = RTLogSetCustomPrefixCallbackForR0(&pR0LoggerR3->Logger, pVCpu->vmm.s.pR0LoggerR0 + RT_OFFSETOF(VMMR0LOGGER, Logger), pfnLoggerPrefix, NIL_RTR0PTR);
                 AssertReleaseMsgRCReturn(rc, ("RTLogSetCustomPrefixCallback failed! rc=%Rra\n", rc), rc);
 
                 pR0LoggerR3->idCpu = i;
@@ -915,7 +917,8 @@ VMMR3_INT_DECL(int) VMMR3UpdateLoggers(PVM pVM)
 
             }
 
-            rc = RTLogCopyGroupsAndFlags(&pR0LoggerR3->Logger, NULL /* default */, pVM->vmm.s.pRCLoggerR3->fFlags, RTLOGFLAGS_BUFFERED);
+            rc = RTLogCopyGroupsAndFlagsForR0(&pR0LoggerR3->Logger, pVCpu->vmm.s.pR0LoggerR0 + RT_OFFSETOF(VMMR0LOGGER, Logger), pDefault,
+                                              RTLOGFLAGS_BUFFERED, UINT32_MAX);
             AssertRC(rc);
         }
     }
@@ -1289,7 +1292,7 @@ VMMR3_INT_DECL(int) VMMR3HwAccRunGC(PVM pVM, PVMCPU pVCpu)
         PVMMR0LOGGER pR0LoggerR3 = pVCpu->vmm.s.pR0LoggerR3;
         if (    pR0LoggerR3
             &&  pR0LoggerR3->Logger.offScratch > 0)
-            RTLogFlushToLogger(&pR0LoggerR3->Logger, NULL);
+            RTLogFlushR0(NULL, &pR0LoggerR3->Logger);
 #endif /* !LOG_ENABLED */
         if (rc != VINF_VMM_CALL_HOST)
         {
@@ -1976,7 +1979,7 @@ VMMR3DECL(int) VMMR3CallR0(PVM pVM, uint32_t uOperation, uint64_t u64Arg, PSUPVM
 #ifdef LOG_ENABLED
         if (    pVCpu->vmm.s.pR0LoggerR3
             &&  pVCpu->vmm.s.pR0LoggerR3->Logger.offScratch > 0)
-            RTLogFlushToLogger(&pVCpu->vmm.s.pR0LoggerR3->Logger, NULL);
+            RTLogFlushR0(NULL, &pVCpu->vmm.s.pR0LoggerR3->Logger);
 #endif
         if (rc != VINF_VMM_CALL_HOST)
             break;
@@ -2071,6 +2074,16 @@ static int vmmR3ServiceCallRing3Request(PVM pVM, PVMCPU pVCpu)
 
     switch (pVCpu->vmm.s.enmCallRing3Operation)
     {
+        /*
+         * Acquire a critical section.
+         */
+        case VMMCALLRING3_PDM_CRIT_SECT_ENTER:
+        {
+            pVCpu->vmm.s.rcCallRing3 = PDMR3CritSectEnterEx((PPDMCRITSECT)(uintptr_t)pVCpu->vmm.s.u64CallRing3Arg,
+                                                            true /*fCallRing3*/);
+            break;
+        }
+
         /*
          * Acquire the PDM lock.
          */

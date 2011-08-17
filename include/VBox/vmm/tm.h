@@ -156,7 +156,7 @@ typedef DECLCALLBACK(void) FNTMTIMERDEV(PPDMDEVINS pDevIns, PTMTIMER pTimer, voi
 typedef FNTMTIMERDEV *PFNTMTIMERDEV;
 
 /**
- * Device timer callback function.
+ * USB device timer callback function.
  *
  * @param   pUsbIns         The USB device instance the timer is associated
  *                          with.
@@ -211,26 +211,31 @@ typedef FNTMTIMEREXT *PFNTMTIMEREXT;
 VMMDECL(PTMTIMERR3)     TMTimerR3Ptr(PTMTIMER pTimer);
 VMMDECL(PTMTIMERR0)     TMTimerR0Ptr(PTMTIMER pTimer);
 VMMDECL(PTMTIMERRC)     TMTimerRCPtr(PTMTIMER pTimer);
+VMMDECL(int)            TMTimerLock(PTMTIMER pTimer, int rcBusy);
+VMMDECL(void)           TMTimerUnlock(PTMTIMER pTimer);
+VMMDECL(bool)           TMTimerIsLockOwner(PTMTIMER pTimer);
 VMMDECL(int)            TMTimerSet(PTMTIMER pTimer, uint64_t u64Expire);
 VMMDECL(int)            TMTimerSetRelative(PTMTIMER pTimer, uint64_t cTicksToNext, uint64_t *pu64Now);
+VMMDECL(int)            TMTimerSetFrequencyHint(PTMTIMER pTimer, uint32_t uHz);
+VMMDECL(uint64_t)       TMTimerGet(PTMTIMER pTimer);
+VMMDECL(int)            TMTimerStop(PTMTIMER pTimer);
+VMMDECL(bool)           TMTimerIsActive(PTMTIMER pTimer);
+
 VMMDECL(int)            TMTimerSetMillies(PTMTIMER pTimer, uint32_t cMilliesToNext);
 VMMDECL(int)            TMTimerSetMicro(PTMTIMER pTimer, uint64_t cMicrosToNext);
 VMMDECL(int)            TMTimerSetNano(PTMTIMER pTimer, uint64_t cNanosToNext);
-VMMDECL(int)            TMTimerSetFrequencyHint(PTMTIMER pTimer, uint32_t uHz);
-VMMDECL(uint64_t)       TMTimerGet(PTMTIMER pTimer);
 VMMDECL(uint64_t)       TMTimerGetNano(PTMTIMER pTimer);
 VMMDECL(uint64_t)       TMTimerGetMicro(PTMTIMER pTimer);
 VMMDECL(uint64_t)       TMTimerGetMilli(PTMTIMER pTimer);
 VMMDECL(uint64_t)       TMTimerGetFreq(PTMTIMER pTimer);
 VMMDECL(uint64_t)       TMTimerGetExpire(PTMTIMER pTimer);
-VMMDECL(uint64_t)       TMTimerToNano(PTMTIMER pTimer, uint64_t u64Ticks);
-VMMDECL(uint64_t)       TMTimerToMicro(PTMTIMER pTimer, uint64_t u64Ticks);
-VMMDECL(uint64_t)       TMTimerToMilli(PTMTIMER pTimer, uint64_t u64Ticks);
-VMMDECL(uint64_t)       TMTimerFromNano(PTMTIMER pTimer, uint64_t u64NanoTS);
-VMMDECL(uint64_t)       TMTimerFromMicro(PTMTIMER pTimer, uint64_t u64MicroTS);
-VMMDECL(uint64_t)       TMTimerFromMilli(PTMTIMER pTimer, uint64_t u64MilliTS);
-VMMDECL(int)            TMTimerStop(PTMTIMER pTimer);
-VMMDECL(bool)           TMTimerIsActive(PTMTIMER pTimer);
+VMMDECL(uint64_t)       TMTimerToNano(PTMTIMER pTimer, uint64_t cTicks);
+VMMDECL(uint64_t)       TMTimerToMicro(PTMTIMER pTimer, uint64_t cTicks);
+VMMDECL(uint64_t)       TMTimerToMilli(PTMTIMER pTimer, uint64_t cTicks);
+VMMDECL(uint64_t)       TMTimerFromNano(PTMTIMER pTimer, uint64_t cNanoSecs);
+VMMDECL(uint64_t)       TMTimerFromMicro(PTMTIMER pTimer, uint64_t cMicroSecs);
+VMMDECL(uint64_t)       TMTimerFromMilli(PTMTIMER pTimer, uint64_t cMilliSecs);
+
 VMMDECL(bool)           TMTimerPollBool(PVM pVM, PVMCPU pVCpu);
 VMM_INT_DECL(void)      TMTimerPollVoid(PVM pVM, PVMCPU pVCpu);
 VMM_INT_DECL(uint64_t)  TMTimerPollGIP(PVM pVM, PVMCPU pVCpu, uint64_t *pu64Delta);
@@ -250,18 +255,20 @@ VMM_INT_DECL(int)       TMR3Term(PVM pVM);
 VMM_INT_DECL(void)      TMR3Reset(PVM pVM);
 VMM_INT_DECL(int)       TMR3GetImportRC(PVM pVM, const char *pszSymbol, PRTRCPTR pRCPtrValue);
 VMM_INT_DECL(int)       TMR3TimerCreateDevice(PVM pVM, PPDMDEVINS pDevIns, TMCLOCK enmClock, PFNTMTIMERDEV pfnCallback, void *pvUser, uint32_t fFlags, const char *pszDesc, PPTMTIMERR3 ppTimer);
+VMM_INT_DECL(int)       TMR3TimerCreateUsb(PVM pVM, PPDMUSBINS pUsbIns, TMCLOCK enmClock, PFNTMTIMERUSB pfnCallback, void *pvUser, uint32_t fFlags, const char *pszDesc, PPTMTIMERR3 ppTimer);
 VMM_INT_DECL(int)       TMR3TimerCreateDriver(PVM pVM, PPDMDRVINS pDrvIns, TMCLOCK enmClock, PFNTMTIMERDRV pfnCallback, void *pvUser, uint32_t fFlags, const char *pszDesc, PPTMTIMERR3 ppTimer);
 VMMR3DECL(int)          TMR3TimerCreateInternal(PVM pVM, TMCLOCK enmClock, PFNTMTIMERINT pfnCallback, void *pvUser, const char *pszDesc, PPTMTIMERR3 ppTimer);
 VMMR3DECL(PTMTIMERR3)   TMR3TimerCreateExternal(PVM pVM, TMCLOCK enmClock, PFNTMTIMEREXT pfnCallback, void *pvUser, const char *pszDesc);
 VMMR3DECL(int)          TMR3TimerDestroy(PTMTIMER pTimer);
 VMM_INT_DECL(int)       TMR3TimerDestroyDevice(PVM pVM, PPDMDEVINS pDevIns);
+VMM_INT_DECL(int)       TMR3TimerDestroyUsb(PVM pVM, PPDMUSBINS pUsbIns);
 VMM_INT_DECL(int)       TMR3TimerDestroyDriver(PVM pVM, PPDMDRVINS pDrvIns);
 VMMR3DECL(int)          TMR3TimerSave(PTMTIMERR3 pTimer, PSSMHANDLE pSSM);
 VMMR3DECL(int)          TMR3TimerLoad(PTMTIMERR3 pTimer, PSSMHANDLE pSSM);
 VMMR3DECL(int)          TMR3TimerSetCritSect(PTMTIMERR3 pTimer, PPDMCRITSECT pCritSect);
 VMMR3DECL(void)         TMR3TimerQueuesDo(PVM pVM);
-VMM_INT_DECL(void)      TMR3VirtualSyncFF(PVM pVM, PVMCPU pVCpu);
-VMM_INT_DECL(PRTTIMESPEC) TMR3UtcNow(PVM pVM, PRTTIMESPEC pTime);
+VMMR3_INT_DECL(void)    TMR3VirtualSyncFF(PVM pVM, PVMCPU pVCpu);
+VMMR3_INT_DECL(PRTTIMESPEC) TMR3UtcNow(PVM pVM, PRTTIMESPEC pTime);
 /** @} */
 #endif /* IN_RING3 */
 

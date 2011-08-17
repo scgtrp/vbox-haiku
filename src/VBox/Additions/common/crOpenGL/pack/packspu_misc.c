@@ -106,7 +106,8 @@ void PACKSPU_APIENTRY packspu_Finish( void )
 void PACKSPU_APIENTRY packspu_Flush( void )
 {
     GET_THREAD(thread);
-    int writeback = 1;
+    int writeback=1;
+    int found=0;
 
     if (!thread->bInjectThread)
     {
@@ -125,20 +126,24 @@ void PACKSPU_APIENTRY packspu_Flush( void )
 
         crLockMutex(&_PackMutex);
 
-        /*Make sure we process commands in order they should appear, so flush thread being injected first*/
+        /*Make sure we process commands in order they should appear, so flush other threads first*/
         for (i=0; i<MAX_THREADS; ++i)
         {
             if (pack_spu.thread[i].inUse
                 && (thread != &pack_spu.thread[i]) && pack_spu.thread[i].netServer.conn
-                && (pack_spu.thread[i].netServer.conn->u32ClientID == thread->netServer.conn->u32InjectClientID)
                 && pack_spu.thread[i].packer && pack_spu.thread[i].packer->currentBuffer)
             {
                 packspuFlush((void *) &pack_spu.thread[i]);
-                break;
+
+                if (pack_spu.thread[i].netServer.conn->u32ClientID == thread->netServer.conn->u32InjectClientID)
+                {
+                    found=1;
+                }
+
             }
         }
 
-        if (i>=MAX_THREADS)
+        if (!found)
         {
             /*Thread we're supposed to inject commands for has been detached,
               so there's nothing to sync with and we should just pass commands through our own connection.
@@ -146,9 +151,9 @@ void PACKSPU_APIENTRY packspu_Flush( void )
             thread->netServer.conn->u32InjectClientID=0;
         }
 
-        crUnlockMutex(&_PackMutex);
-
         packspuFlush((void *) thread);
+
+        crUnlockMutex(&_PackMutex);
     }
 }
 
@@ -370,6 +375,31 @@ void PACKSPU_APIENTRY packspu_GetPixelMapusv( GLenum map, GLushort * values )
     }
 }
 
+static void packspuFluchOnThreadSwitch(GLboolean fEnable)
+{
+    GET_THREAD(thread);
+    if (thread->currentContext->fAutoFlush == fEnable)
+        return;
+
+    thread->currentContext->fAutoFlush = fEnable;
+    thread->currentContext->currentThread = fEnable ? thread : NULL;
+}
+
+void PACKSPU_APIENTRY packspu_ChromiumParameteriCR(GLenum target, GLint value)
+{
+    if (GL_FLUSH_ON_THREAD_SWITCH_CR==target)
+    {
+        /* this is a pure packspu state, don't propagate it any further */
+        packspuFluchOnThreadSwitch(value);
+        return;
+    }
+    if (GL_SHARE_CONTEXT_RESOURCES_CR==target)
+    {
+        crStateShareContext(value);
+    }
+    crPackChromiumParameteriCR(target, value);
+}
+
 #ifdef CHROMIUM_THREADSAFE
 void PACKSPU_APIENTRY packspu_VBoxPackSetInjectThread(void)
 {
@@ -512,6 +542,16 @@ void PACKSPU_APIENTRY packspu_VBoxPackDetachThread()
                 }
 
                 break;
+            }
+        }
+
+        for (i=0; i<CR_MAX_CONTEXTS; ++i)
+        {
+            ContextInfo *ctx = &pack_spu.context[i];
+            if (ctx->currentThread == thread)
+            {
+                CRASSERT(ctx->fAutoFlush);
+                ctx->currentThread = NULL;
             }
         }
 

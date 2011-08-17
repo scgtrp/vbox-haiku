@@ -45,7 +45,6 @@
 #ifndef VBOX
 #include <stdint.h>
 
-
 #ifdef __OpenBSD__
 #include <sys/types.h>
 #endif
@@ -53,7 +52,7 @@
 /* XXX: This may be wrong for 64-bit ILP32 hosts.  */
 typedef void * host_reg_t;
 
-#ifdef HOST_BSD
+#ifdef CONFIG_BSD
 typedef struct __sFILE FILE;
 #else
 typedef struct FILE FILE;
@@ -61,8 +60,6 @@ typedef struct FILE FILE;
 extern int fprintf(FILE *, const char *, ...);
 extern int fputs(const char *, FILE *);
 extern int printf(const char *, ...);
-#undef NULL
-#define NULL 0
 
 #else  /* VBOX */
 
@@ -75,68 +72,41 @@ typedef void * host_reg_t;
 #endif /* VBOX */
 
 #if defined(__i386__)
-#ifndef VBOX
+# ifndef VBOX
 #define AREG0 "ebp"
-#define AREG1 "ebx"
-#define AREG2 "esi"
-#else  /* VBOX - why are we different? */
-# define AREG0 "esi"
-# define AREG1 "edi"
-#endif /* VBOX */
+# else  /* VBOX - why are we different? frame-pointer optimizations on mac? */
+#  define AREG0 "esi"
+# endif /* VBOX */
 #elif defined(__x86_64__)
 #define AREG0 "r14"
-#define AREG1 "r15"
-#define AREG2 "r12"
 #elif defined(_ARCH_PPC)
 #define AREG0 "r27"
-#define AREG1 "r24"
-#define AREG2 "r25"
 #elif defined(__arm__)
 #define AREG0 "r7"
-#define AREG1 "r4"
-#define AREG2 "r5"
 #elif defined(__hppa__)
 #define AREG0 "r17"
-#define AREG1 "r14"
-#define AREG2 "r15"
 #elif defined(__mips__)
-#define AREG0 "fp"
-#define AREG1 "s0"
-#define AREG2 "s1"
+#define AREG0 "s0"
 #elif defined(__sparc__)
-#ifdef HOST_SOLARIS
+#ifdef CONFIG_SOLARIS
 #define AREG0 "g2"
-#define AREG1 "g3"
-#define AREG2 "g4"
 #else
 #ifdef __sparc_v9__
 #define AREG0 "g5"
-#define AREG1 "g6"
-#define AREG2 "g7"
 #else
 #define AREG0 "g6"
-#define AREG1 "g1"
-#define AREG2 "g2"
 #endif
 #endif
 #elif defined(__s390__)
 #define AREG0 "r10"
-#define AREG1 "r7"
-#define AREG2 "r8"
 #elif defined(__alpha__)
 /* Note $15 is the frame pointer, so anything in op-i386.c that would
    require a frame pointer, like alloca, would probably loose.  */
 #define AREG0 "$15"
-#define AREG1 "$9"
-#define AREG2 "$10"
 #elif defined(__mc68000)
 #define AREG0 "%a5"
-#define AREG1 "%a4"
-#define AREG2 "%d7"
 #elif defined(__ia64__)
 #define AREG0 "r7"
-#define AREG1 "r4"
-#define AREG2 "r5"
 #else
 #error unsupported CPU
 #endif
@@ -148,7 +118,7 @@ typedef void * host_reg_t;
 
 /* The return address may point to the start of the next instruction.
    Subtracting one gets us the call instruction itself.  */
-#if defined(__s390__)
+#if defined(__s390__) && !defined(__s390x__)
 # define GETPC() ((void*)(((unsigned long)__builtin_return_address(0) & 0x7fffffffUL) - 1))
 #elif defined(__arm__)
 /* Thumb return addresses have the low bit set, so we need to subtract two.

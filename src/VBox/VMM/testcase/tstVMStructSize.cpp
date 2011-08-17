@@ -56,7 +56,7 @@
 #include <VBox/vmm/uvm.h>
 #include <VBox/vmm/gvm.h>
 #include <VBox/param.h>
-#include <VBox/x86.h>
+#include <iprt/x86.h>
 
 #include "tstHelp.h"
 #include <stdio.h>
@@ -377,7 +377,7 @@ int main()
     PRINT_OFFSET(VM, StatGCToQemu);
 #endif
 
-    CHECK_MEMBER_ALIGNMENT(IOM, EmtLock, sizeof(uintptr_t));
+    CHECK_MEMBER_ALIGNMENT(IOM, CritSect, sizeof(uintptr_t));
     CHECK_MEMBER_ALIGNMENT(EM, CritSectREM, sizeof(uintptr_t));
     CHECK_MEMBER_ALIGNMENT(PGM, CritSect, sizeof(uintptr_t));
     CHECK_MEMBER_ALIGNMENT(PDM, CritSect, sizeof(uintptr_t));
@@ -389,7 +389,7 @@ int main()
     CHECK_MEMBER_ALIGNMENT(HWACCM, vmx.msr.feature_ctrl, 8);
     CHECK_MEMBER_ALIGNMENT(HWACCM, StatTPRPatchSuccess, 8);
     CHECK_MEMBER_ALIGNMENT(HWACCMCPU, StatEntry, 8);
-    CHECK_MEMBER_ALIGNMENT(HWACCMCPU, vmx.pVMCSPhys, sizeof(RTHCPHYS));
+    CHECK_MEMBER_ALIGNMENT(HWACCMCPU, vmx.HCPhysVMCS, sizeof(RTHCPHYS));
     CHECK_MEMBER_ALIGNMENT(HWACCMCPU, vmx.proc_ctls, 8);
     CHECK_MEMBER_ALIGNMENT(HWACCMCPU, Event.intInfo, 8);
 
@@ -500,19 +500,21 @@ int main()
 
 #undef AssertFatal
 #define AssertFatal(expr) do { } while (0)
+#undef Assert
+#define Assert(expr)      do { } while (0)
 
     PGM_PAGE_CLEAR(&Page);
-    CHECK_EXPR(PGM_PAGE_GET_HCPHYS(&Page) == 0);
-    PGM_PAGE_SET_HCPHYS(&Page, UINT64_C(0x0000fffeff1ff000));
-    CHECK_EXPR(PGM_PAGE_GET_HCPHYS(&Page) == UINT64_C(0x0000fffeff1ff000));
-    PGM_PAGE_SET_HCPHYS(&Page, UINT64_C(0x0000000000001000));
-    CHECK_EXPR(PGM_PAGE_GET_HCPHYS(&Page) == UINT64_C(0x0000000000001000));
+    CHECK_EXPR(PGM_PAGE_GET_HCPHYS_NA(&Page) == 0);
+    PGM_PAGE_SET_HCPHYS(NULL, &Page, UINT64_C(0x0000fffeff1ff000));
+    CHECK_EXPR(PGM_PAGE_GET_HCPHYS_NA(&Page) == UINT64_C(0x0000fffeff1ff000));
+    PGM_PAGE_SET_HCPHYS(NULL, &Page, UINT64_C(0x0000000000001000));
+    CHECK_EXPR(PGM_PAGE_GET_HCPHYS_NA(&Page) == UINT64_C(0x0000000000001000));
 
     PGM_PAGE_INIT(&Page, UINT64_C(0x0000feedfacef000), UINT32_C(0x12345678), PGMPAGETYPE_RAM, PGM_PAGE_STATE_ALLOCATED);
-    CHECK_EXPR(PGM_PAGE_GET_HCPHYS(&Page) == UINT64_C(0x0000feedfacef000));
+    CHECK_EXPR(PGM_PAGE_GET_HCPHYS_NA(&Page) == UINT64_C(0x0000feedfacef000));
     CHECK_EXPR(PGM_PAGE_GET_PAGEID(&Page) == UINT32_C(0x12345678));
-    CHECK_EXPR(PGM_PAGE_GET_TYPE(&Page)   == PGMPAGETYPE_RAM);
-    CHECK_EXPR(PGM_PAGE_GET_STATE(&Page)  == PGM_PAGE_STATE_ALLOCATED);
+    CHECK_EXPR(PGM_PAGE_GET_TYPE_NA(&Page)   == PGMPAGETYPE_RAM);
+    CHECK_EXPR(PGM_PAGE_GET_STATE_NA(&Page)  == PGM_PAGE_STATE_ALLOCATED);
 
 
     /*

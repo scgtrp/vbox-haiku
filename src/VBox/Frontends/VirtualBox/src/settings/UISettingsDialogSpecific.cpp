@@ -28,7 +28,7 @@
 #include "UISettingsDialogSpecific.h"
 #include "UISettingsDefs.h"
 #include "VBoxGlobal.h"
-#include "VBoxProblemReporter.h"
+#include "UIMessageCenter.h"
 #include "QIWidgetValidator.h"
 #include "VBoxSettingsSelector.h"
 #include "UIVirtualBoxEventHandler.h"
@@ -39,6 +39,7 @@
 #include "UIGlobalSettingsLanguage.h"
 #include "UIGlobalSettingsNetwork.h"
 #include "UIGlobalSettingsExtension.h"
+#include "UIGlobalSettingsProxy.h"
 
 #include "UIMachineSettingsGeneral.h"
 #include "UIMachineSettingsSystem.h"
@@ -384,6 +385,15 @@ UISettingsDialogGlobal::UISettingsDialogGlobal(QWidget *pParent)
                             iPageIndex, "#extension", pSettingsPage);
                     break;
                 }
+                /* Proxy page: */
+                case GLSettingsPage_Proxy:
+                {
+                    pSettingsPage = new UIGlobalSettingsProxy;
+                    addItem(":/proxy_32px.png", ":/proxy_disabled_32px.png",
+                            ":/proxy_16px.png", ":/proxy_disabled_16px.png",
+                            iPageIndex, "#proxy", pSettingsPage);
+                    break;
+                }
                 default:
                     break;
             }
@@ -448,7 +458,7 @@ void UISettingsDialogGlobal::saveData()
     VBoxGlobalSettings newSettings = pGlobalSettingsSaver->data().value<UISettingsDataGlobal>().m_settings;
     /* If properties are not OK => show the error: */
     if (!newProperties.isOk())
-        vboxProblem().cannotSetSystemProperties(newProperties);
+        msgCenter().cannotSetSystemProperties(newProperties);
     /* Else save the new settings if they were changed: */
     else if (!(newSettings == settings))
         vboxGlobal().setSettings(newSettings);
@@ -459,6 +469,9 @@ void UISettingsDialogGlobal::saveData()
 
 void UISettingsDialogGlobal::retranslateUi()
 {
+    /* Base-class UI translation: */
+    UISettingsDialog::retranslateUi();
+
     /* Set dialog's name: */
     setWindowTitle(title());
 
@@ -483,11 +496,11 @@ void UISettingsDialogGlobal::retranslateUi()
     /* Extension page: */
     m_pSelector->setItemText(GLSettingsPage_Extension, tr("Extensions"));
 
+    /* Proxy page: */
+    m_pSelector->setItemText(GLSettingsPage_Proxy, tr("Proxy"));
+
     /* Translate the selector: */
     m_pSelector->polish();
-
-    /* Base-class UI translation: */
-    UISettingsDialog::retranslateUi();
 }
 
 QString UISettingsDialogGlobal::title() const
@@ -509,7 +522,7 @@ bool UISettingsDialogGlobal::isPageAvailable(int iPageId)
             CHost host = vboxGlobal().virtualBox().GetHost();
             /* Show the host error message if any: */
             if (!host.isReallyOk())
-                vboxProblem().cannotAccessUSB(host);
+                msgCenter().cannotAccessUSB(host);
             /* Check if USB is implemented: */
             CHostUSBDeviceFilterVector filters = host.GetUSBDeviceFilters();
             Q_UNUSED(filters);
@@ -548,7 +561,7 @@ UISettingsDialogMachine::UISettingsDialogMachine(QWidget *pParent, const QString
     /* Allow to reset first-run flag just when medium enumeration was finished: */
     connect(&vboxGlobal(), SIGNAL(mediumEnumFinished(const VBoxMediaList &)), this, SLOT(sltAllowResetFirstRunFlag()));
 
-    /* Get corresponding machine (required to determine dialog type): */
+    /* Get corresponding machine (required to determine dialog type and page availability): */
     m_machine = vboxGlobal().virtualBox().FindMachine(m_strMachineId);
     AssertMsg(!m_machine.isNull(), ("Can't find corresponding machine!\n"));
     /* Assign current dialog type: */
@@ -760,6 +773,9 @@ void UISettingsDialogMachine::saveData()
     /* Call for base-class: */
     UISettingsDialog::saveData();
 
+    /* Disconnect global VBox events from this dialog: */
+    gVBoxEvents->disconnect(this);
+
     /* Prepare session: */
     bool fSessionShared = dialogType() != SettingsDialogType_Offline;
     m_session = dialogType() == SettingsDialogType_Wrong ? CSession() : vboxGlobal().openSession(m_strMachineId, fSessionShared);
@@ -829,7 +845,7 @@ void UISettingsDialogMachine::saveData()
 
     /* If machine is NOT ok => show the error message: */
     if (!m_machine.isOk())
-        vboxProblem().cannotSaveMachineSettings(m_machine);
+        msgCenter().cannotSaveMachineSettings(m_machine);
 
     /* Mark page processed: */
     sltMarkSaved();
@@ -837,13 +853,22 @@ void UISettingsDialogMachine::saveData()
 
 void UISettingsDialogMachine::retranslateUi()
 {
+    /* We have to make sure that the Network, Serial & Parallel pages are retranslated
+     * before they are revalidated. Cause: They do string comparing within
+     * vboxGlobal which is retranslated at that point already: */
+    QEvent event(QEvent::LanguageChange);
+    if (QWidget *pPage = m_pSelector->idToPage(VMSettingsPage_Network))
+        qApp->sendEvent(pPage, &event);
+    if (QWidget *pPage = m_pSelector->idToPage(VMSettingsPage_Serial))
+        qApp->sendEvent(pPage, &event);
+    if (QWidget *pPage = m_pSelector->idToPage(VMSettingsPage_Parallel))
+        qApp->sendEvent(pPage, &event);
+
+    /* Base-class UI translation: */
+    UISettingsDialog::retranslateUi();
+
     /* Set dialog's name: */
     setWindowTitle(title());
-
-    /* We have to make sure that the Serial & Network subpages are retranslated
-     * before they are revalidated. Cause: They do string comparing within
-     * vboxGlobal which is retranslated at that point already. */
-    QEvent event(QEvent::LanguageChange);
 
     /* General page: */
     m_pSelector->setItemText(VMSettingsPage_General, tr("General"));
@@ -862,21 +887,15 @@ void UISettingsDialogMachine::retranslateUi()
 
     /* Network page: */
     m_pSelector->setItemText(VMSettingsPage_Network, tr("Network"));
-    if (QWidget *pPage = m_pSelector->idToPage(VMSettingsPage_Network))
-        qApp->sendEvent(pPage, &event);
 
     /* Ports page: */
     m_pSelector->setItemText(VMSettingsPage_Ports, tr("Ports"));
 
     /* Serial page: */
     m_pSelector->setItemText(VMSettingsPage_Serial, tr("Serial Ports"));
-    if (QWidget *pPage = m_pSelector->idToPage(VMSettingsPage_Serial))
-        qApp->sendEvent(pPage, &event);
 
     /* Parallel page: */
     m_pSelector->setItemText(VMSettingsPage_Parallel, tr("Parallel Ports"));
-    if (QWidget *pPage = m_pSelector->idToPage(VMSettingsPage_Parallel))
-        qApp->sendEvent(pPage, &event);
 
     /* USB page: */
     m_pSelector->setItemText(VMSettingsPage_USB, tr("USB"));
@@ -886,143 +905,57 @@ void UISettingsDialogMachine::retranslateUi()
 
     /* Translate the selector: */
     m_pSelector->polish();
-
-    /* Base-class UI translation: */
-    UISettingsDialog::retranslateUi();
-
-    /* Revalidate all pages to retranslate the warning messages also: */
-    QList<QIWidgetValidator*> validators = findChildren<QIWidgetValidator*>();
-    for (int i = 0; i < validators.size(); ++i)
-    {
-        QIWidgetValidator *pValidator = validators[i];
-        if (!pValidator->isValid())
-            sltRevalidate(pValidator);
-    }
 }
 
 QString UISettingsDialogMachine::title() const
 {
     QString strDialogTitle;
-    if (!m_machine.isNull())
-        strDialogTitle = tr("%1 - %2").arg(m_machine.GetName()).arg(titleExtension());
+    /* Get corresponding machine (required to compose dialog title): */
+    const CMachine &machine = vboxGlobal().virtualBox().FindMachine(m_strMachineId);
+    if (!machine.isNull())
+        strDialogTitle = tr("%1 - %2").arg(machine.GetName()).arg(titleExtension());
     return strDialogTitle;
 }
 
-bool UISettingsDialogMachine::recorrelate(QWidget *pPage, QString &strWarning)
+void UISettingsDialogMachine::recorrelate(UISettingsPage *pSettingsPage)
 {
-    /* This method performs correlation option check
-     * between different pages of VM Settings dialog: */
-
-    if (pPage == m_pSelector->idToPage(VMSettingsPage_General))
+    switch (pSettingsPage->id())
     {
-        /* Get General & System pages: */
-        UIMachineSettingsGeneral *pGeneralPage =
-            qobject_cast<UIMachineSettingsGeneral*>(m_pSelector->idToPage(VMSettingsPage_General));
-        UIMachineSettingsSystem *pSystemPage =
-            qobject_cast<UIMachineSettingsSystem*>(m_pSelector->idToPage(VMSettingsPage_System));
-
-        /* Guest OS type & VT-x/AMD-V option correlation test: */
-        if (pGeneralPage && pSystemPage &&
-            pGeneralPage->is64BitOSTypeSelected() && !pSystemPage->isHWVirtExEnabled())
+        case VMSettingsPage_General:
         {
-            strWarning = tr(
-                "you have selected a 64-bit guest OS type for this VM. As such guests "
-                "require hardware virtualization (VT-x/AMD-V), this feature will be enabled "
-                "automatically.");
-            return true;
+            UIMachineSettingsGeneral *pGeneralPage = qobject_cast<UIMachineSettingsGeneral*>(pSettingsPage);
+            UIMachineSettingsSystem *pSystemPage = qobject_cast<UIMachineSettingsSystem*>(m_pSelector->idToPage(VMSettingsPage_System));
+            if (pGeneralPage && pSystemPage)
+                pGeneralPage->setHWVirtExEnabled(pSystemPage->isHWVirtExEnabled());
+            break;
         }
-    }
-
-#if defined(VBOX_WITH_VIDEOHWACCEL) || defined(VBOX_WITH_CRHGSMI)
-    /* 2D Video Acceleration is available for Windows guests only: */
-    if (pPage == m_pSelector->idToPage(VMSettingsPage_Display))
-    {
-        /* Get General & Display pages: */
-        UIMachineSettingsGeneral *pGeneralPage =
-            qobject_cast<UIMachineSettingsGeneral*>(m_pSelector->idToPage(VMSettingsPage_General));
-        UIMachineSettingsDisplay *pDisplayPage =
-            qobject_cast<UIMachineSettingsDisplay*>(m_pSelector->idToPage(VMSettingsPage_Display));
-#ifdef VBOX_WITH_CRHGSMI
-        if (pGeneralPage && pDisplayPage)
+        case VMSettingsPage_Display:
         {
-            bool bWddmSupported = pGeneralPage->isWddmSupportedForOSType();
-            pDisplayPage->setWddmMode(bWddmSupported);
+            UIMachineSettingsDisplay *pDisplayPage = qobject_cast<UIMachineSettingsDisplay*>(pSettingsPage);
+            UIMachineSettingsGeneral *pGeneralPage = qobject_cast<UIMachineSettingsGeneral*>(m_pSelector->idToPage(VMSettingsPage_General));
+            if (pDisplayPage && pGeneralPage)
+                pDisplayPage->setGuestOSType(pGeneralPage->guestOSType());
+            break;
         }
-#endif
-#ifdef VBOX_WITH_VIDEOHWACCEL
-        if (pGeneralPage && pDisplayPage &&
-            pDisplayPage->isAcceleration2DVideoSelected() && !pGeneralPage->isWindowsOSTypeSelected())
+        case VMSettingsPage_System:
         {
-            strWarning = tr(
-                "you have 2D Video Acceleration enabled. As 2D Video Acceleration "
-                "is supported for Windows guests only, this feature will be disabled.");
-            return true;
+            UIMachineSettingsSystem *pSystemPage = qobject_cast<UIMachineSettingsSystem*>(pSettingsPage);
+            UIMachineSettingsUSB *pUsbPage = qobject_cast<UIMachineSettingsUSB*>(m_pSelector->idToPage(VMSettingsPage_USB));
+            if (pSystemPage && pUsbPage)
+                pSystemPage->setOHCIEnabled(pUsbPage->isOHCIEnabled());
+            break;
         }
-#endif
-    }
-#endif /* VBOX_WITH_VIDEOHWACCEL */
-
-    if (pPage == m_pSelector->idToPage(VMSettingsPage_System))
-    {
-        /* Get System & USB pages: */
-        UIMachineSettingsSystem *pSystemPage =
-            qobject_cast<UIMachineSettingsSystem*>(m_pSelector->idToPage(VMSettingsPage_System));
-        UIMachineSettingsUSB *pUsbPage =
-            qobject_cast<UIMachineSettingsUSB*>(m_pSelector->idToPage(VMSettingsPage_USB));
-        if (pSystemPage && pUsbPage &&
-            pSystemPage->isHIDEnabled() && !pUsbPage->isOHCIEnabled())
+        case VMSettingsPage_Storage:
         {
-            strWarning = tr(
-                "you have enabled a USB HID (Human Interface Device). "
-                "This will not work unless USB emulation is also enabled. "
-                "This will be done automatically when you accept the VM Settings "
-                "by pressing the OK button.");
-            return true;
-        }
-    }
-
-    if (pPage == m_pSelector->idToPage(VMSettingsPage_Storage))
-    {
-        /* Get System & Storage pages: */
-        UIMachineSettingsSystem *pSystemPage =
-            qobject_cast<UIMachineSettingsSystem*>(m_pSelector->idToPage(VMSettingsPage_System));
-        UIMachineSettingsStorage *pStoragePage =
-            qobject_cast<UIMachineSettingsStorage*>(m_pSelector->idToPage(VMSettingsPage_Storage));
-        if (pSystemPage && pStoragePage)
-        {
-            /* Update chiset type for the Storage settings page: */
-            if (pStoragePage->chipsetType() != pSystemPage->chipsetType())
+            UIMachineSettingsStorage *pStoragePage = qobject_cast<UIMachineSettingsStorage*>(pSettingsPage);
+            UIMachineSettingsSystem *pSystemPage = qobject_cast<UIMachineSettingsSystem*>(m_pSelector->idToPage(VMSettingsPage_System));
+            if (pStoragePage && pSystemPage)
                 pStoragePage->setChipsetType(pSystemPage->chipsetType());
-            /* Check for excessive controllers on Storage page controllers list: */
-            QStringList excessiveList;
-            QMap<KStorageBus, int> currentType = pStoragePage->currentControllerTypes();
-            QMap<KStorageBus, int> maximumType = pStoragePage->maximumControllerTypes();
-            for (int iStorageBusType = KStorageBus_IDE; iStorageBusType <= KStorageBus_SAS; ++iStorageBusType)
-            {
-                if (currentType[(KStorageBus)iStorageBusType] > maximumType[(KStorageBus)iStorageBusType])
-                {
-                    QString strExcessiveRecord = QString("%1 (%2)");
-                    strExcessiveRecord = strExcessiveRecord.arg(QString("<b>%1</b>").arg(vboxGlobal().toString((KStorageBus)iStorageBusType)));
-                    strExcessiveRecord = strExcessiveRecord.arg(maximumType[(KStorageBus)iStorageBusType] == 1 ?
-                                                                tr("at most one supported") :
-                                                                tr("up to %1 supported").arg(maximumType[(KStorageBus)iStorageBusType]));
-                    excessiveList << strExcessiveRecord;
-                }
-            }
-            if (!excessiveList.isEmpty())
-            {
-                strWarning = tr(
-                    "you are currently using more storage controllers than a %1 chipset supports. "
-                    "Please change the chipset type on the System settings page or reduce the number "
-                    "of the following storage controllers on the Storage settings page: %2.")
-                    .arg(vboxGlobal().toString(pStoragePage->chipsetType()))
-                    .arg(excessiveList.join(", "));
-                return false;
-            }
+            break;
         }
+        default:
+            break;
     }
-
-    return true;
 }
 
 void UISettingsDialogMachine::sltMarkLoaded()
@@ -1081,8 +1014,15 @@ void UISettingsDialogMachine::sltMachineStateChanged(QString strMachineId, KMach
     if (dialogType() == newDialogType)
         return;
 
+    /* Should we show a warning about leaving 'offline' state? */
+    bool fShouldWe = dialogType() == SettingsDialogType_Offline;
+
     /* Update current dialog type: */
     setDialogType(newDialogType);
+
+    /* Show a warning about leaving 'offline' state if we should: */
+    if (isSettingsChanged() && fShouldWe)
+        msgCenter().warnAboutStateChange(this);
 }
 
 void UISettingsDialogMachine::sltMachineDataChanged(QString strMachineId)
@@ -1092,7 +1032,7 @@ void UISettingsDialogMachine::sltMachineDataChanged(QString strMachineId)
         return;
 
     /* Check if user had changed something and warn him about he will loose settings on reloading: */
-    if (isSettingsChanged() && !vboxProblem().confirmedSettingsReloading(this))
+    if (isSettingsChanged() && !msgCenter().confirmedSettingsReloading(this))
         return;
 
     /* Reload data: */
@@ -1157,7 +1097,7 @@ bool UISettingsDialogMachine::isPageAvailable(int iPageId)
             CUSBController controller = m_machine.GetUSBController();
             /* Show the machine error message if any: */
             if (!m_machine.isReallyOk() && !controller.isNull() && controller.GetEnabled())
-                vboxProblem().cannotAccessUSB(m_machine);
+                msgCenter().cannotAccessUSB(m_machine);
             /* Check if USB is implemented: */
             if (controller.isNull() || !controller.GetProxyAvailable())
                 return false;

@@ -72,23 +72,32 @@ static const uint8_t broadcast_ethaddr[6] =
 static int rt_lookup_in_cache(PNATState pData, uint32_t dst, uint8_t *ether)
 {
     int rc;
+    LogFlowFunc(("ENTER: dst:%RTnaipv4, ether:%p\n", dst, ether));
     if (dst == INADDR_BROADCAST)
     {
         memcpy(ether, broadcast_ethaddr, ETH_ALEN);
+        LogFlowFunc(("LEAVE: VINF_SUCCESS\n"));
         return VINF_SUCCESS;
     }
 
     rc = slirp_arp_lookup_ether_by_ip(pData, dst, ether);
     if (RT_SUCCESS(rc))
+    {
+        LogFlowFunc(("LEAVE: %Rrc\n", rc));
         return rc;
+    }
 
     rc = bootp_cache_lookup_ether_by_ip(pData, dst, ether);
     if (RT_SUCCESS(rc))
+    {
+        LogFlowFunc(("LEAVE: %Rrc\n", rc));
         return rc;
+    }
     /*
      * no chance to send this packet, sorry, we will request ether address via ARP
      */
     slirp_arp_who_has(pData, dst);
+    LogFlowFunc(("LEAVE: VERR_NOT_FOUND\n"));
     return VERR_NOT_FOUND;
 }
 
@@ -119,7 +128,7 @@ ip_output0(PNATState pData, struct socket *so, struct mbuf *m0, int urg)
 
     STAM_PROFILE_START(&pData->StatIP_output, a);
 
-    LogFlow(("ip_output: so = %lx, m0 = %lx\n", (long)so, (long)m0));
+    LogFlowFunc(("ip_output: so = %R[natsock], m0 = %lx\n", so, (long)m0));
 
     M_ASSERTPKTHDR(m);
     Assert(m->m_pkthdr.header);
@@ -132,6 +141,7 @@ ip_output0(PNATState pData, struct socket *so, struct mbuf *m0, int urg)
     }
 #endif
     ip = mtod(m, struct ip *);
+    LogFunc(("ip(src:%RTnaipv4, dst:%RTnaipv4)\n", ip->ip_src, ip->ip_dst));
     /*
      * Fill in IP header.
      */
@@ -179,6 +189,8 @@ ip_output0(PNATState pData, struct socket *so, struct mbuf *m0, int urg)
 
         memcpy(eh->h_source, eth_dst, ETH_ALEN);
 
+        LogFlowFunc(("ip(ip_src:%RTnaipv4, ip_dst:%RTnaipv4)\n",
+                     ip->ip_src, ip->ip_dst));
         if_encap(pData, ETH_P_IP, m, urg? ETH_ENCAP_URG : 0);
         goto done;
      }
@@ -328,10 +340,12 @@ send_or_free:
 
 done:
     STAM_PROFILE_STOP(&pData->StatIP_output, a);
+    LogFlowFunc(("LEAVE: %d\n", error));
     return error;
 
 exit_drop_package:
     m_freem(pData, m0);
     STAM_PROFILE_STOP(&pData->StatIP_output, a);
+    LogFlowFunc(("LEAVE: %d\n", error));
     return error;
 }

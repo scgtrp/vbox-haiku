@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2010 Oracle Corporation
+ * Copyright (C) 2011 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -87,7 +87,9 @@ enum eProcessStatus
  * @{
  */
 #define VBOXSERVICE_TOOL_CAT        "vbox_cat"
+#define VBOXSERVICE_TOOL_LS         "vbox_ls"
 #define VBOXSERVICE_TOOL_MKDIR      "vbox_mkdir"
+#define VBOXSERVICE_TOOL_STAT       "vbox_stat"
 /** @} */
 
 /**
@@ -108,7 +110,8 @@ enum eInputStatus
 };
 
 /**
- * Document me.
+ * The guest control callback data header. Must come first
+ * on each callback structure defined below this struct.
  */
 typedef struct VBoxGuestCtrlCallbackHeader
 {
@@ -118,6 +121,13 @@ typedef struct VBoxGuestCtrlCallbackHeader
     uint32_t u32ContextID;
 } CALLBACKHEADER;
 typedef CALLBACKHEADER *PCALLBACKHEADER;
+
+typedef struct VBoxGuestCtrlCallbackDataClientDisconnected
+{
+    /** Callback data header. */
+    CALLBACKHEADER hdr;
+} CALLBACKDATACLIENTDISCONNECTED;
+typedef CALLBACKDATACLIENTDISCONNECTED *PCALLBACKDATACLIENTDISCONNECTED;
 
 /**
  * Data structure to pass to the service extension callback.  We use this to
@@ -172,28 +182,19 @@ typedef struct VBoxGuestCtrlCallbackDataExecInStatus
 } CALLBACKDATAEXECINSTATUS;
 typedef CALLBACKDATAEXECINSTATUS *PCALLBACKDATAEXECINSTATUS;
 
-typedef struct VBoxGuestCtrlCallbackDataClientDisconnected
+enum eVBoxGuestCtrlCallbackDataMagic
 {
-    /** Callback data header. */
-    CALLBACKHEADER hdr;
-} CALLBACKDATACLIENTDISCONNECTED;
-typedef CALLBACKDATACLIENTDISCONNECTED *PCALLBACKDATACLIENTDISCONNECTED;
+    CALLBACKDATAMAGIC_CLIENT_DISCONNECTED = 0x08041984,
 
-enum
-{
-    /** Magic number for sanity checking the CALLBACKDATACLIENTDISCONNECTED structure. */
-    CALLBACKDATAMAGICCLIENTDISCONNECTED = 0x08041984,
-    /** Magic number for sanity checking the CALLBACKDATAEXECSTATUS structure. */
-    CALLBACKDATAMAGICEXECSTATUS = 0x26011982,
-    /** Magic number for sanity checking the CALLBACKDATAEXECOUT structure. */
-    CALLBACKDATAMAGICEXECOUT = 0x11061949,
-    /** Magic number for sanity checking the CALLBACKDATAEXECIN structure. */
-    CALLBACKDATAMAGICEXECINSTATUS = 0x19091951
+    CALLBACKDATAMAGIC_EXEC_STATUS = 0x26011982,
+    CALLBACKDATAMAGIC_EXEC_OUT = 0x11061949,
+    CALLBACKDATAMAGIC_EXEC_IN_STATUS = 0x19091951
 };
 
 enum eVBoxGuestCtrlCallbackType
 {
     VBOXGUESTCTRLCALLBACKTYPE_UNKNOWN = 0,
+
     VBOXGUESTCTRLCALLBACKTYPE_EXEC_START = 1,
     VBOXGUESTCTRLCALLBACKTYPE_EXEC_OUTPUT = 2,
     VBOXGUESTCTRLCALLBACKTYPE_EXEC_INPUT_STATUS = 3
@@ -208,6 +209,11 @@ enum eHostFn
      * The host asks the client to cancel all pending waits and exit.
      */
     HOST_CANCEL_PENDING_WAITS = 0,
+
+    /*
+     * Execution handling.
+     */
+
     /**
      * The host wants to execute something in the guest. This can be a command line
      * or starting a program.
@@ -246,6 +252,11 @@ enum eGuestFn
      * detected when calling service::clientDisconnect().
      */
     GUEST_DISCONNECTED = 3,
+
+    /*
+     * Process execution.
+     */
+
     /**
      * Guests sends output from an executed process.
      */

@@ -973,6 +973,11 @@ void Display::handleDisplayUpdate (unsigned uScreenId, int x, int y, int w, int 
     }
 }
 
+/**
+ * Returns the upper left and lower right corners of the virtual framebuffer.
+ * The lower right is "exclusive" (i.e. first pixel beyond the framebuffer),
+ * and the origin is (0, 0), not (1, 1) like the GUI returns.
+ */
 void Display::getFramebufferDimensions(int32_t *px1, int32_t *py1,
                                        int32_t *px2, int32_t *py2)
 {
@@ -991,6 +996,8 @@ void Display::getFramebufferDimensions(int32_t *px1, int32_t *py1,
      * will still work as it should. */
     if (!(maFramebuffers[0].fDisabled))
     {
+        x1 = (int32_t)maFramebuffers[0].xOrigin;
+        y1 = (int32_t)maFramebuffers[0].yOrigin;
         x2 = mpDrv->IConnector.cx + (int32_t)maFramebuffers[0].xOrigin;
         y2 = mpDrv->IConnector.cy + (int32_t)maFramebuffers[0].yOrigin;
     }
@@ -1047,7 +1054,8 @@ static bool displayIntersectRect(RTRECT *prectResult,
 
 int Display::handleSetVisibleRegion(uint32_t cRect, PRTRECT pRect)
 {
-    RTRECT *pVisibleRegion = (RTRECT *)RTMemTmpAlloc(cRect * sizeof (RTRECT));
+    RTRECT *pVisibleRegion = (RTRECT *)RTMemTmpAlloc(  RT_MAX(cRect, 1)
+                                                     * sizeof (RTRECT));
     if (!pVisibleRegion)
     {
         return VERR_NO_TMP_MEMORY;
@@ -1102,10 +1110,7 @@ int Display::handleSetVisibleRegion(uint32_t cRect, PRTRECT pRect)
                 }
             }
 
-            if (cRectVisibleRegion > 0)
-            {
-                pFBInfo->pFramebuffer->SetVisibleRegion((BYTE *)pVisibleRegion, cRectVisibleRegion);
-            }
+            pFBInfo->pFramebuffer->SetVisibleRegion((BYTE *)pVisibleRegion, cRectVisibleRegion);
         }
     }
 

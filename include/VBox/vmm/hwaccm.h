@@ -35,21 +35,6 @@
  * @{
  */
 
-/**
- * HWACCM state
- */
-typedef enum HWACCMSTATE
-{
-    /* Not yet set */
-    HWACCMSTATE_UNINITIALIZED = 0,
-    /* Enabled */
-    HWACCMSTATE_ENABLED,
-    /* Disabled */
-    HWACCMSTATE_DISABLED,
-    /** The usual 32-bit hack. */
-    HWACCMSTATE_32BIT_HACK = 0x7fffffff
-} HWACCMSTATE;
-
 RT_C_DECLS_BEGIN
 
 /**
@@ -149,7 +134,7 @@ VMMR0DECL(int)          HWACCMR0Enter(PVM pVM, PVMCPU pVCpu);
 VMMR0DECL(int)          HWACCMR0Leave(PVM pVM, PVMCPU pVCpu);
 VMMR0DECL(int)          HWACCMR0InvalidatePage(PVM pVM, PVMCPU pVCpu);
 VMMR0DECL(int)          HWACCMR0FlushTLB(PVM pVM);
-VMMR0DECL(bool)         HWACCMR0SuspendPending();
+VMMR0DECL(bool)         HWACCMR0SuspendPending(void);
 
 # if HC_ARCH_BITS == 32 && defined(VBOX_WITH_64_BITS_GUESTS)
 VMMR0DECL(int)          HWACCMR0SaveFPUState(PVM pVM, PVMCPU pVCpu, PCPUMCTX pCtx);

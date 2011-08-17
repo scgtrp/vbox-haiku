@@ -337,6 +337,13 @@ HRESULT showVMInfo(ComPtr<IVirtualBox> virtualBox,
     else
         RTPrintf("VRAM size:       %uMB\n", vramSize);
 
+    ULONG cpuCap;
+    rc = machine->COMGETTER(CPUExecutionCap)(&cpuCap);
+    if (details == VMINFO_MACHINEREADABLE)
+        RTPrintf("cpuexecutioncap=%u\n", cpuCap);
+    else
+        RTPrintf("CPU exec cap:    %u%%\n", cpuCap);
+
     BOOL fHpetEnabled;
     machine->COMGETTER(HpetEnabled)(&fHpetEnabled);
     if (details == VMINFO_MACHINEREADABLE)
@@ -765,17 +772,26 @@ HRESULT showVMInfo(ComPtr<IVirtualBox> virtualBox,
         {
             for (ULONG k = 0; k < cDevices; ++ k)
             {
+                ComPtr<IMediumAttachment> mediumAttach;
+                machine->GetMediumAttachment(storageCtlName.raw(),
+                                             i, k,
+                                             mediumAttach.asOutParam());
+                BOOL fIsEjected = FALSE;
+                BOOL fTempEject = FALSE;
+                DeviceType_T devType = DeviceType_Null;
+                if (mediumAttach)
+                {
+                    mediumAttach->COMGETTER(TemporaryEject)(&fTempEject);
+                    mediumAttach->COMGETTER(IsEjected)(&fIsEjected);
+                    mediumAttach->COMGETTER(Type)(&devType);
+                }
                 rc = machine->GetMedium(storageCtlName.raw(), i, k,
                                         medium.asOutParam());
                 if (SUCCEEDED(rc) && medium)
                 {
-                    BOOL fPassthrough;
-                    ComPtr<IMediumAttachment> mediumAttach;
+                    BOOL fPassthrough = FALSE;
 
-                    rc = machine->GetMediumAttachment(storageCtlName.raw(),
-                                                      i, k,
-                                                      mediumAttach.asOutParam());
-                    if (SUCCEEDED(rc) && mediumAttach)
+                    if (mediumAttach)
                         mediumAttach->COMGETTER(Passthrough)(&fPassthrough);
 
                     medium->COMGETTER(Location)(filePath.asOutParam());
@@ -790,6 +806,13 @@ HRESULT showVMInfo(ComPtr<IVirtualBox> virtualBox,
                         if (fPassthrough)
                             RTPrintf("\"%lS-dvdpassthrough\"=\"%s\"\n", storageCtlName.raw(),
                                      fPassthrough ? "on" : "off");
+                        if (devType == DeviceType_DVD)
+                        {
+                            RTPrintf("\"%lS-tempeject\"=\"%s\"\n", storageCtlName.raw(),
+                                     fTempEject ? "on" : "off");
+                            RTPrintf("\"%lS-IsEjected\"=\"%s\"\n", storageCtlName.raw(),
+                                     fIsEjected ? "on" : "off");
+                        }
                     }
                     else
                     {
@@ -798,15 +821,31 @@ HRESULT showVMInfo(ComPtr<IVirtualBox> virtualBox,
                                  Utf8Str(uuid).c_str());
                         if (fPassthrough)
                             RTPrintf(" (passthrough enabled)");
+                        if (fTempEject)
+                            RTPrintf(" (temp eject)");
+                        if (fIsEjected)
+                            RTPrintf(" (ejected)");
                         RTPrintf("\n");
                     }
                 }
                 else if (SUCCEEDED(rc))
                 {
                     if (details == VMINFO_MACHINEREADABLE)
+                    {
                         RTPrintf("\"%lS-%d-%d\"=\"emptydrive\"\n", storageCtlName.raw(), i, k);
+                        if (devType == DeviceType_DVD)
+                            RTPrintf("\"%lS-IsEjected\"=\"%s\"\n", storageCtlName.raw(),
+                                     fIsEjected ? "on" : "off");
+                    }
                     else
-                        RTPrintf("%lS (%d, %d): Empty\n", storageCtlName.raw(), i, k);
+                    {
+                        RTPrintf("%lS (%d, %d): Empty", storageCtlName.raw(), i, k);
+                        if (fTempEject)
+                            RTPrintf(" (temp eject)");
+                        if (fIsEjected)
+                            RTPrintf(" (ejected)");
+                        RTPrintf("\n");
+                    }
                 }
                 else
                 {
@@ -954,7 +993,7 @@ HRESULT showVMInfo(ComPtr<IVirtualBox> virtualBox,
                     case NetworkAttachmentType_Bridged:
                     {
                         Bstr strBridgeAdp;
-                        nic->COMGETTER(HostInterface)(strBridgeAdp.asOutParam());
+                        nic->COMGETTER(BridgedInterface)(strBridgeAdp.asOutParam());
                         if (details == VMINFO_MACHINEREADABLE)
                         {
                             RTPrintf("bridgeadapter%d=\"%lS\"\n", currentNIC + 1, strBridgeAdp.raw());
@@ -979,11 +1018,10 @@ HRESULT showVMInfo(ComPtr<IVirtualBox> virtualBox,
                         break;
                     }
 
-#if defined(VBOX_WITH_NETFLT)
                     case NetworkAttachmentType_HostOnly:
                     {
                         Bstr strHostonlyAdp;
-                        nic->COMGETTER(HostInterface)(strHostonlyAdp.asOutParam());
+                        nic->COMGETTER(HostOnlyInterface)(strHostonlyAdp.asOutParam());
                         if (details == VMINFO_MACHINEREADABLE)
                         {
                             RTPrintf("hostonlyadapter%d=\"%lS\"\n", currentNIC + 1, strHostonlyAdp.raw());
@@ -993,22 +1031,36 @@ HRESULT showVMInfo(ComPtr<IVirtualBox> virtualBox,
                             strAttachment = Utf8StrFmt("Host-only Interface '%lS'", strHostonlyAdp.raw());
                         break;
                     }
-#endif
-#ifdef VBOX_WITH_VDE
-                    case NetworkAttachmentType_VDE:
+                    case NetworkAttachmentType_Generic:
                     {
-                        Bstr strVDEAdp;
-                        nic->COMGETTER(VDENetwork)(strVDEAdp.asOutParam());
+                        Bstr strGenericDriver;
+                        nic->COMGETTER(GenericDriver)(strGenericDriver.asOutParam());
                         if (details == VMINFO_MACHINEREADABLE)
                         {
-                            RTPrintf("vdenet%d=\"%lS\"\n", currentNIC + 1, strVDEAdp.raw());
-                            strAttachment = "VDE";
+                            RTPrintf("generic%d=\"%lS\"\n", currentNIC + 1, strGenericDriver.raw());
+                            strAttachment = "Generic";
                         }
                         else
-                            strAttachment = Utf8StrFmt("VDE Network '%lS'", strVDEAdp.raw());
+                        {
+                            strAttachment = Utf8StrFmt("Generic '%lS'", strGenericDriver.raw());
+
+                            // show the generic properties
+                            com::SafeArray<BSTR> aProperties;
+                            com::SafeArray<BSTR> aValues;
+                            rc = nic->GetProperties(NULL,
+                                                    ComSafeArrayAsOutParam(aProperties),
+                                                    ComSafeArrayAsOutParam(aValues));
+                            if (SUCCEEDED(rc))
+                            {
+                                strAttachment += " { ";
+                                for (unsigned i = 0; i < aProperties.size(); ++i)
+                                    strAttachment += Utf8StrFmt(!i ? "%lS='%lS'" : ", %lS='%lS'",
+                                                                aProperties[i], aValues[i]);
+                                strAttachment += " }";
+                            }
+                        }
                         break;
                     }
-#endif
                     default:
                         strAttachment = "unknown";
                         break;
@@ -1817,7 +1869,7 @@ HRESULT showVMInfo(ComPtr<IVirtualBox> virtualBox,
              {
                  RTPrintf("\nAttached physical PCI devices:\n\n");
              }
-             
+
              for (size_t index = 0; index < assignments.size(); ++index)
              {
                  ComPtr<IPciDeviceAttachment> Assignment = assignments[index];
@@ -1836,7 +1888,7 @@ HRESULT showVMInfo(ComPtr<IVirtualBox> virtualBox,
                  else
                      RTPrintf("   Host device %lS at %s attached as %s\n", DevName.raw(), szHostPciAddress, szGuestPciAddress);
              }
-             
+
              if (assignments.size() > 0 && (details != VMINFO_MACHINEREADABLE))
              {
                  RTPrintf("\n");

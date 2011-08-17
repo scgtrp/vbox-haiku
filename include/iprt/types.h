@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2006-2010 Oracle Corporation
+ * Copyright (C) 2006-2011 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -1476,11 +1476,11 @@ typedef RTCONDVAR                                  *PRTCONDVAR;
 #define NIL_RTCONDVAR                               0
 
 /** File handle. */
-typedef RTUINT                                      RTFILE;
+typedef R3R0PTRTYPE(struct RTFILEINT *)             RTFILE;
 /** Pointer to file handle. */
 typedef RTFILE                                     *PRTFILE;
 /** Nil file handle. */
-#define NIL_RTFILE                                  (~(RTFILE)0)
+#define NIL_RTFILE                                  ((RTFILE)~(RTHCINTPTR)0)
 
 /** Async I/O request handle. */
 typedef R3PTRTYPE(struct RTFILEAIOREQINTERNAL *)    RTFILEAIOREQ;
@@ -1631,6 +1631,13 @@ typedef PRTTCPSERVER                               *PPRTTCPSERVER;
 /** Nil RTTCPSERVER handle. */
 #define NIL_RTTCPSERVER                            ((PRTTCPSERVER)0)
 
+/** Pointer to a RTUDPSERVER handle. */
+typedef struct RTUDPSERVER                         *PRTUDPSERVER;
+/** Pointer to a RTUDPSERVER handle. */
+typedef PRTUDPSERVER                               *PPRTUDPSERVER;
+/** Nil RTUDPSERVER handle. */
+#define NIL_RTUDPSERVER                            ((PRTUDPSERVER)0)
+
 /** Thread handle.*/
 typedef R3R0PTRTYPE(struct RTTHREADINT *)           RTTHREAD;
 /** Pointer to thread handle. */
@@ -1646,6 +1653,18 @@ typedef RTTLS                                      *PRTTLS;
 typedef RTTLS const                                *PCRTTLS;
 /** NIL TLS index value. */
 #define NIL_RTTLS                                   ((RTTLS)-1)
+
+/** Trace buffer handle.
+ * @remarks This is not a R3/R0 type like most other handles!
+ */
+typedef struct RTTRACEBUFINT                        *RTTRACEBUF;
+/** Poiner to a trace buffer handle. */
+typedef RTTRACEBUF                                  *PRTTRACEBUF;
+/** Nil trace buffer handle. */
+#define NIL_RTTRACEBUF                              ((RTTRACEBUF)0)
+/** The handle of the default trace buffer.
+ * This can be used with any of the RTTraceBufAdd APIs. */
+#define RTTRACEBUF_DEFAULT                          ((RTTRACEBUF)-2)
 
 /** Handle to a simple heap. */
 typedef R3R0PTRTYPE(struct RTHEAPSIMPLEINTERNAL *)  RTHEAPSIMPLE;

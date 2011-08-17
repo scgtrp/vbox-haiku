@@ -78,7 +78,7 @@ int suplibOsInit(PSUPLIBDATA pThis, bool fPreInited)
      */
     if (fPreInited)
         return VINF_SUCCESS;
-    Assert(pThis->hDevice == NIL_RTFILE);
+    Assert(pThis->hDevice == (intptr_t)NIL_RTFILE);
 
     /*
      * Check if madvise works.
@@ -144,11 +144,11 @@ int suplibOsTerm(PSUPLIBDATA pThis)
     /*
      * Close the device if it's actually open.
      */
-    if (pThis->hDevice != NIL_RTFILE)
+    if (pThis->hDevice != (intptr_t)NIL_RTFILE)
     {
         if (close(pThis->hDevice))
             AssertFailed();
-        pThis->hDevice = NIL_RTFILE;
+        pThis->hDevice = (intptr_t)NIL_RTFILE;
     }
 
     return 0;
@@ -171,7 +171,7 @@ int suplibOsUninstall(void)
 
 int suplibOsIOCtl(PSUPLIBDATA pThis, uintptr_t uFunction, void *pvReq, size_t cbReq)
 {
-    AssertMsg(pThis->hDevice != NIL_RTFILE, ("SUPLIB not initiated successfully!\n"));
+    AssertMsg(pThis->hDevice != (intptr_t)NIL_RTFILE, ("SUPLIB not initiated successfully!\n"));
 
     /*
      * Issue device iocontrol.
@@ -266,11 +266,16 @@ int suplibOsQueryVTxSupported(void)
 
         rc = RTStrToUInt32Ex(szBuf, &pszNext, 10, &uA);
         if (   RT_SUCCESS(rc)
-                && *pszNext == '.')
+            && *pszNext == '.')
         {
+            /*
+             * new version number scheme starting with Linux 3.0
+             */
+            if (uA >= 3)
+                return VINF_SUCCESS;
             rc = RTStrToUInt32Ex(pszNext+1, &pszNext, 10, &uB);
             if (   RT_SUCCESS(rc)
-                    && *pszNext == '.')
+                && *pszNext == '.')
             {
                 rc = RTStrToUInt32Ex(pszNext+1, &pszNext, 10, &uC);
                 if (RT_SUCCESS(rc))

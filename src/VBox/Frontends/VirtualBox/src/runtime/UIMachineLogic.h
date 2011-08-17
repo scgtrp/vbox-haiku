@@ -37,7 +37,6 @@ class CSnapshot;
 class CUSBDevice;
 class CVirtualBoxErrorInfo;
 class UISession;
-class UIActionsPool;
 class UIKeyboardHandler;
 class UIMouseHandler;
 class UIMachineWindow;
@@ -53,7 +52,6 @@ public:
     /* Factory function to create required logic sub-child: */
     static UIMachineLogic* create(QObject *pParent,
                                   UISession *pSession,
-                                  UIActionsPool *pActionsPool,
                                   UIVisualStateType visualStateType);
 
     /* Check if this mode is available: */
@@ -64,8 +62,7 @@ public:
 
     /* Main getters/setters: */
     UISession* uisession() const { return m_pSession; }
-    CSession& session();
-    UIActionsPool* actionsPool() const { return m_pActionsPool; }
+    CSession& session() const;
     UIVisualStateType visualStateType() const { return m_visualStateType; }
     const QList<UIMachineWindow*>& machineWindows() const { return m_machineWindowsList; }
     UIKeyboardHandler* keyboardHandler() const { return m_pKeyboardHandler; }
@@ -93,7 +90,6 @@ protected:
     /* Machine logic constructor/destructor: */
     UIMachineLogic(QObject *pParent,
                    UISession *pSession,
-                   UIActionsPool *pActionsPool,
                    UIVisualStateType visualStateType);
     virtual ~UIMachineLogic();
 
@@ -160,7 +156,9 @@ private slots:
 #ifdef Q_WS_X11
     void sltTypeCABS();
 #endif
+
     void sltTakeSnapshot();
+    void sltTakeScreenshot();
     void sltShowInformationDialog();
     void sltReset();
     void sltPause(bool fOn);
@@ -199,9 +197,10 @@ private:
                                       const CSnapshot &snapshot,
                                       const QString &strNameTemplate);
 
+    void takeScreenshot(const QString &strFile, const QString &strFormat /* = "png" */) const;
+
     /* Private variables: */
     UISession *m_pSession;
-    UIActionsPool *m_pActionsPool;
     UIVisualStateType m_visualStateType;
     UIKeyboardHandler *m_pKeyboardHandler;
     UIMouseHandler *m_pMouseHandler;

@@ -388,6 +388,10 @@ public:
     STDMETHOD(COMSETTER(CPUHotPlugEnabled))(BOOL enabled);
     STDMETHOD(COMGETTER(CPUExecutionCap))(ULONG *aExecutionCap);
     STDMETHOD(COMSETTER(CPUExecutionCap))(ULONG aExecutionCap);
+    STDMETHOD(COMGETTER(EmulatedUSBCardReaderEnabled))(BOOL *enabled);
+    STDMETHOD(COMSETTER(EmulatedUSBCardReaderEnabled))(BOOL enabled);
+    STDMETHOD(COMGETTER(EmulatedUSBWebcameraEnabled))(BOOL *enabled);
+    STDMETHOD(COMSETTER(EmulatedUSBWebcameraEnabled))(BOOL enabled);
     STDMETHOD(COMGETTER(HpetEnabled))(BOOL *enabled);
     STDMETHOD(COMSETTER(HpetEnabled))(BOOL enabled);
     STDMETHOD(COMGETTER(MemoryBalloonSize))(ULONG *memoryBalloonSize);
@@ -472,6 +476,8 @@ public:
                             LONG aDevice, DeviceType_T aType, IMedium *aMedium);
     STDMETHOD(DetachDevice)(IN_BSTR aControllerName, LONG aControllerPort, LONG aDevice);
     STDMETHOD(PassthroughDevice)(IN_BSTR aControllerName, LONG aControllerPort, LONG aDevice, BOOL aPassthrough);
+    STDMETHOD(TemporaryEjectDevice)(IN_BSTR aControllerName, LONG aControllerPort, LONG aDevice, BOOL aTempEject);
+    STDMETHOD(NonRotationalDevice)(IN_BSTR aControllerName, LONG aControllerPort, LONG aDevice, BOOL aNonRotational);
     STDMETHOD(SetBandwidthGroupForDevice)(IN_BSTR aControllerName, LONG aControllerPort,
                                           LONG aDevice, IBandwidthGroup *aBandwidthGroup);
     STDMETHOD(MountMedium)(IN_BSTR aControllerName, LONG aControllerPort,
@@ -528,7 +534,7 @@ public:
     STDMETHOD(ReadLog(ULONG aIdx, LONG64 aOffset, LONG64 aSize, ComSafeArrayOut(BYTE, aData)));
     STDMETHOD(AttachHostPciDevice(LONG hostAddress, LONG desiredGuestAddress, BOOL tryToUnbind));
     STDMETHOD(DetachHostPciDevice(LONG hostAddress));
-    STDMETHOD(CloneTo(IMachine *aTarget, BOOL aFullClone, IProgress **aProgress));
+    STDMETHOD(CloneTo(IMachine *pTarget, CloneMode_T mode, ComSafeArrayIn(CloneOptions_T, options), IProgress **pProgress));
     // public methods only for internal purposes
 
     virtual bool isSnapshotMachine() const
@@ -566,6 +572,16 @@ public:
      * one) or after doing addCaller() manually.
      */
     VirtualBox* getVirtualBox() const { return mParent; }
+
+    /**
+     * Checks if this machine is accessible, without attempting to load the
+     * config file.
+     *
+     * @note This method doesn't check this object's readiness. Intended to be
+     * used by ready Machine children (whose readiness is bound to the parent's
+     * one) or after doing addCaller() manually.
+     */
+    bool isAccessible() const { return mData->mAccessible; }
 
     /**
      * Returns this machine ID.
@@ -619,6 +635,16 @@ public:
         IsModified_Snapshots            = 0x0800,
         IsModified_BandwidthControl     = 0x1000
     };
+
+    /**
+     * Checks if this machine is accessible, without attempting to load the
+     * config file.
+     *
+     * @note This method doesn't check this object's readiness. Intended to be
+     * used by ready Machine children (whose readiness is bound to the parent's
+     * one) or after doing addCaller() manually.
+     */
+    ChipsetType_T getChipsetType() const { return mHWData->mChipsetType; }
 
     void setModified(uint32_t fl);
     void setModifiedLock(uint32_t fl);
@@ -820,6 +846,7 @@ protected:
                          AutoWriteLock &writeLock,
                          Snapshot *pSnapshot,
                          GuidList *pllRegistriesThatNeedSaving);
+
     HRESULT detachAllMedia(AutoWriteLock &writeLock,
                            Snapshot *pSnapshot,
                            CleanupMode_T cleanupMode,
@@ -838,10 +865,6 @@ protected:
     struct DeleteTask;
     static DECLCALLBACK(int) deleteThread(RTTHREAD Thread, void *pvUser);
     HRESULT deleteTaskWorker(DeleteTask &task);
-
-    struct CloneVMTask;
-    static DECLCALLBACK(int) cloneVMThread(RTTHREAD Thread, void *pvUser);
-    HRESULT cloneVMTaskWorker(CloneVMTask *pTask);
 
 #ifdef VBOX_WITH_GUEST_PROPS
     HRESULT getGuestPropertyFromService(IN_BSTR aName, BSTR *aValue,
@@ -900,6 +923,8 @@ protected:
     friend class SnapshotMachine;
     friend class Appliance;
     friend class VirtualBox;
+
+    friend class MachineCloneVM;
 };
 
 // SessionMachine class
@@ -965,7 +990,8 @@ public:
                                    BOOL fTakingSnapshotOnline,
                                    BSTR *aStateFilePath);
     STDMETHOD(EndTakingSnapshot)(BOOL aSuccess);
-    STDMETHOD(DeleteSnapshot)(IConsole *aInitiator, IN_BSTR aId,
+    STDMETHOD(DeleteSnapshot)(IConsole *aInitiator, IN_BSTR aStartId,
+                              IN_BSTR aEndID, BOOL fDeleteAllChildren,
                               MachineState_T *aMachineState, IProgress **aProgress);
     STDMETHOD(FinishOnlineMergeMedium)(IMediumAttachment *aMediumAttachment,
                                        IMedium *aSource, IMedium *aTarget,
@@ -982,6 +1008,8 @@ public:
                                   LONG64 aTimestamp, IN_BSTR aFlags);
     STDMETHOD(LockMedia)()   { return lockMedia(); }
     STDMETHOD(UnlockMedia)() { unlockMedia(); return S_OK; }
+    STDMETHOD(EjectMedium)(IMediumAttachment *aAttachment,
+                           IMediumAttachment **aNewAttachment);
 
     // public methods only for internal purposes
 

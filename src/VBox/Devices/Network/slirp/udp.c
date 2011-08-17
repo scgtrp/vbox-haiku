@@ -94,9 +94,9 @@ udp_input(PNATState pData, register struct mbuf *m, int iphlen)
     int ret;
     int ttl;
 
-    LogFlow(("udp_input: m = %lx, iphlen = %d\n", (long)m, iphlen));
+    LogFlowFunc(("ENTER: m = %p, iphlen = %d\n", m, iphlen));
     ip = mtod(m, struct ip *);
-    Log2(("%R[IP4] iphlen = %d\n", &ip->ip_dst, iphlen));
+    Log2(("%RTnaipv4 iphlen = %d\n", ip->ip_dst, iphlen));
 
     udpstat.udps_ipackets++;
 
@@ -193,6 +193,7 @@ udp_input(PNATState pData, register struct mbuf *m, int iphlen)
         m->m_data += sizeof(struct udpiphdr);
         m->m_len -= sizeof(struct udpiphdr);
         udp_output2(pData, NULL, m, &src, &dst, IPTOS_LOWDELAY);
+        LogFlowFuncLeave();
         return;
     }
     /*
@@ -295,10 +296,11 @@ udp_input(PNATState pData, register struct mbuf *m, int iphlen)
         m->m_len += iphlen;
         m->m_data -= iphlen;
         *ip = save_ip;
-        Log2(("NAT: UDP tx errno = %d (%s) on sent to %R[IP4]\n",
-              errno, strerror(errno), &ip->ip_dst));
+        Log2(("NAT: UDP tx errno = %d (%s) on sent to %RTnaipv4\n",
+              errno, strerror(errno), ip->ip_dst));
         icmp_error(pData, m, ICMP_UNREACH, ICMP_UNREACH_NET, 0, strerror(errno));
         so->so_m = NULL;
+        LogFlowFuncLeave();
         return;
     }
 
@@ -310,10 +312,11 @@ udp_input(PNATState pData, register struct mbuf *m, int iphlen)
     m->m_data -= iphlen;
     *ip = save_ip;
     so->so_m = m;         /* ICMP backup */
+    LogFlowFuncLeave();
     return;
 
 bad_free_mbuf:
-    Log2(("NAT: UDP(id: %hd) datagram to %R[IP4] with size(%d) claimed as bad\n",
+    Log2(("NAT: UDP(id: %hd) datagram to %RTnaipv4 with size(%d) claimed as bad\n",
         ip->ip_id, &ip->ip_dst, ip->ip_len));
 
 done_free_mbuf:
@@ -322,6 +325,7 @@ done_free_mbuf:
      * buffers here.
      */
     m_freem(pData, m);
+    LogFlowFuncLeave();
     return;
 }
 
@@ -338,8 +342,8 @@ int udp_output2(PNATState pData, struct socket *so, struct mbuf *m,
     int error;
     int mlen = 0;
 
-    LogFlow(("udp_output: so = %lx, m = %lx, saddr = %lx, daddr = %lx\n",
-            (long)so, (long)m, (long)saddr->sin_addr.s_addr, (long)daddr->sin_addr.s_addr));
+    LogFlowFunc(("ENTER: so = %R[natsock], m = %lx, saddr = %lx, daddr = %lx\n",
+                 so, (long)m, (long)saddr->sin_addr.s_addr, (long)daddr->sin_addr.s_addr));
 
     /*
      * Adjust for header
@@ -488,15 +492,21 @@ udp_listen(PNATState pData, u_int32_t bind_addr, u_int port, u_int32_t laddr, u_
     struct socket *so;
     socklen_t addrlen = sizeof(struct sockaddr_in);
     int opt = 1;
+    LogFlowFunc(("ENTER: bind_addr:%RTnaipv4, port:%d, laddr:%RTnaipv4, lport:%d, flags:%x\n",
+                 bind_addr, RT_N2H_U16(port), laddr, RT_N2H_U16(lport), flags));
 
     if ((so = socreate()) == NULL)
+    {
+        LogFlowFunc(("LEAVE: NULL\n"));
         return NULL;
+    }
 
     so->s = socket(AF_INET, SOCK_DGRAM, 0);
     if (so->s == -1)
     {
         LogRel(("NAT: can't create datagram socket\n"));
         RTMemFree(so);
+        LogFlowFunc(("LEAVE: NULL\n"));
         return NULL;
     }
     so->so_expire = curtime + SO_EXPIRE;
@@ -517,8 +527,9 @@ udp_listen(PNATState pData, u_int32_t bind_addr, u_int port, u_int32_t laddr, u_
 
     if (bind(so->s,(struct sockaddr *)&addr, addrlen) < 0)
     {
-        LogRel(("NAT: bind to %R[IP4] has been failed\n", &addr.sin_addr));
+        LogRel(("NAT: bind to %RTnaipv4 has been failed\n", addr.sin_addr));
         udp_detach(pData, so);
+        LogFlowFunc(("LEAVE: NULL\n"));
         return NULL;
     }
     setsockopt(so->s, SOL_SOCKET, SO_REUSEADDR,(char *)&opt, sizeof(int));
@@ -541,5 +552,6 @@ udp_listen(PNATState pData, u_int32_t bind_addr, u_int port, u_int32_t laddr, u_
 
     so->so_state = SS_ISFCONNECTED;
 
+    LogFlowFunc(("LEAVE: %R[natsock]\n", so));
     return so;
 }

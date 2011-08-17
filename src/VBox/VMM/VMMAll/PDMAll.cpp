@@ -300,8 +300,9 @@ VMMDECL(int) PDMApicGetTPR(PVMCPU pVCpu, uint8_t *pu8TPR, bool *pfPending)
     return VERR_PDM_NO_APIC_INSTANCE;
 }
 
+
 /**
- * Write MSR in APIC range.
+ * Write a MSR in APIC range.
  *
  * @returns VBox status code.
  * @param   pVM             VM handle.
@@ -313,17 +314,15 @@ VMMDECL(int) PDMApicWriteMSR(PVM pVM, VMCPUID iCpu, uint32_t u32Reg, uint64_t u6
 {
     if (pVM->pdm.s.Apic.CTX_SUFF(pDevIns))
     {
-        Assert(pVM->pdm.s.Apic.CTX_SUFF(pfnWriteMSR));
-        pdmLock(pVM);
-        pVM->pdm.s.Apic.CTX_SUFF(pfnWriteMSR)(pVM->pdm.s.Apic.CTX_SUFF(pDevIns), iCpu, u32Reg, u64Value);
-        pdmUnlock(pVM);
-        return VINF_SUCCESS;
+        AssertPtr(pVM->pdm.s.Apic.CTX_SUFF(pfnWriteMSR));
+        return pVM->pdm.s.Apic.CTX_SUFF(pfnWriteMSR)(pVM->pdm.s.Apic.CTX_SUFF(pDevIns), iCpu, u32Reg, u64Value);
     }
     return VERR_PDM_NO_APIC_INSTANCE;
 }
 
+
 /**
- * Read MSR in APIC range.
+ * Read a MSR in APIC range.
  *
  * @returns VBox status code.
  * @param   pVM             VM handle.
@@ -335,11 +334,11 @@ VMMDECL(int) PDMApicReadMSR(PVM pVM, VMCPUID iCpu, uint32_t u32Reg, uint64_t *pu
 {
     if (pVM->pdm.s.Apic.CTX_SUFF(pDevIns))
     {
-        Assert(pVM->pdm.s.Apic.CTX_SUFF(pfnReadMSR));
+        AssertPtr(pVM->pdm.s.Apic.CTX_SUFF(pfnReadMSR));
         pdmLock(pVM);
-        pVM->pdm.s.Apic.CTX_SUFF(pfnReadMSR)(pVM->pdm.s.Apic.CTX_SUFF(pDevIns), iCpu, u32Reg, pu64Value);
+        int rc = pVM->pdm.s.Apic.CTX_SUFF(pfnReadMSR)(pVM->pdm.s.Apic.CTX_SUFF(pDevIns), iCpu, u32Reg, pu64Value);
         pdmUnlock(pVM);
-        return VINF_SUCCESS;
+        return rc;
     }
     return VERR_PDM_NO_APIC_INSTANCE;
 }

@@ -23,8 +23,7 @@
 #include "COMDefs.h"
 #include "QIWithRetranslateUI.h"
 #include "VBoxGlobal.h"
-#include "VBoxHelpActions.h"
-#include "VBoxProblemReporter.h"
+#include "UIMessageCenter.h"
 
 /* Global includes */
 #include <QMainWindow>
@@ -70,6 +69,7 @@ public slots:
     void vmNew();
     void vmAdd(const QString &strFile = "");
     void vmSettings(const QString &aCategory = QString::null, const QString &aControl = QString::null, const QString & = QString::null);
+    void vmClone(const QString & = QString::null);
     void vmDelete(const QString & = QString::null);
     void vmStart(const QString & = QString::null);
     void vmDiscard(const QString & = QString::null);
@@ -94,6 +94,7 @@ public slots:
     const QAction *vmNewAction() const { return mVmNewAction; }
     const QAction *vmAddAction() const { return mVmAddAction; }
     const QAction *vmConfigAction() const { return mVmConfigAction; }
+    const QAction *vmCloneAction() const { return mVmCloneAction; }
     const QAction *vmDeleteAction() const { return mVmDeleteAction; }
     const QAction *vmStartAction() const { return mVmStartAction; }
     const QAction *vmDiscardAction() const { return mVmDiscardAction; }
@@ -132,16 +133,19 @@ private slots:
     void trayIconChanged(bool fEnabled);
 #endif
 
-    void sltDownloaderUserManualEmbed();
+    void sltEmbedDownloaderForUserManual();
+    void sltEmbedDownloaderForExtensionPack();
 
     void showViewContextMenu(const QPoint &pos);
 
 private:
 
+    /* Helping stuff: */
+    void prepareMenuHelp(QMenu *pMenu);
+
     /* Main menus */
     QMenu *mFileMenu;
     QMenu *mVMMenu;
-    QMenu *mHelpMenu;
 
     /* Central splitter window */
     QISplitter *m_pSplitter;
@@ -164,6 +168,7 @@ private:
     QAction *mVmNewAction;
     QAction *mVmAddAction;
     QAction *mVmConfigAction;
+    QAction *mVmCloneAction;
     QAction *mVmDeleteAction;
     QAction *mVmStartAction;
     QAction *mVmDiscardAction;
@@ -172,8 +177,6 @@ private:
     QAction *mVmShowLogsAction;
     QAction *mVmOpenInFileManagerAction;
     QAction *mVmCreateShortcut;
-
-    VBoxHelpActions mHelpActions;
 
 #ifdef VBOX_GUI_WITH_SYSTRAY
     /* The systray icon */

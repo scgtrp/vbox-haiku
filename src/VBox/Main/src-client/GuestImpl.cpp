@@ -122,7 +122,7 @@ void Guest::uninit()
         /* Clean up callback data. */
         CallbackMapIter it;
         for (it = mCallbackMap.begin(); it != mCallbackMap.end(); it++)
-            destroyCtrlCallbackContext(it);
+            callbackDestroy(it->first);
 
         /* Clear process map. */
         mGuestProcessMap.clear();
@@ -711,7 +711,7 @@ void Guest::setAdditionsStatus(VBoxGuestFacilityType enmFacility, VBoxGuestFacil
         mData.mAdditionsRunLevel = AdditionsRunLevelType_System;
     }
     else /* Should never happen! */
-        AssertMsgFailed(("Invalid facility status/run level detected! uCurFacility=%ld\n", uCurFacility));
+        AssertMsgFailed(("Invalid facility status/run level detected! uCurFacility=%d\n", uCurFacility));
 
     /*
      * Set a specific facility status.

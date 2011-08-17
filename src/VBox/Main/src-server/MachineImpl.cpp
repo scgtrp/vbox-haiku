@@ -49,6 +49,7 @@
 #include "DisplayImpl.h"
 #include "DisplayUtils.h"
 #include "BandwidthControlImpl.h"
+#include "MachineImplCloneVM.h"
 
 // generated header
 #include "VBoxEvents.h"
@@ -792,6 +793,11 @@ void Machine::uninit()
 
     // uninit media from this machine's media registry, if they're still there
     Guid uuidMachine(getId());
+
+    /* XXX This will fail with
+     *   "cannot be closed because it is still attached to 1 virtual machines"
+     * because at this point we did not call uninitDataAndChildObjects() yet
+     * and therefore also removeBackReference() for all these mediums was not called! */
     if (!uuidMachine.isEmpty())     // can be empty if we're called from a failure of Machine::init
         mParent->unregisterMachineMedia(uuidMachine);
 
@@ -1449,7 +1455,7 @@ STDMETHODIMP Machine::COMSETTER(CPUHotPlugEnabled)(BOOL enabled)
             if (   (cCpusAttached != mHWData->mCPUCount)
                 || (iHighestId >= mHWData->mCPUCount))
                 return setError(E_INVALIDARG,
-                                tr("CPU hotplugging can't be disabled because the maximum number of CPUs is not equal to the amount of CPUs attached\n"));
+                                tr("CPU hotplugging can't be disabled because the maximum number of CPUs is not equal to the amount of CPUs attached"));
 
             setModified(IsModified_MachineData);
             mHWData.backup();
@@ -1459,6 +1465,30 @@ STDMETHODIMP Machine::COMSETTER(CPUHotPlugEnabled)(BOOL enabled)
     mHWData->mCPUHotPlugEnabled = enabled;
 
     return rc;
+}
+
+STDMETHODIMP Machine::COMGETTER(EmulatedUSBCardReaderEnabled)(BOOL *enabled)
+{
+    NOREF(enabled);
+    return E_NOTIMPL;
+}
+
+STDMETHODIMP Machine::COMSETTER(EmulatedUSBCardReaderEnabled)(BOOL enabled)
+{
+    NOREF(enabled);
+    return E_NOTIMPL;
+}
+
+STDMETHODIMP Machine::COMGETTER(EmulatedUSBWebcameraEnabled)(BOOL *enabled)
+{
+    NOREF(enabled);
+    return E_NOTIMPL;
+}
+
+STDMETHODIMP Machine::COMSETTER(EmulatedUSBWebcameraEnabled)(BOOL enabled)
+{
+    NOREF(enabled);
+    return E_NOTIMPL;
 }
 
 STDMETHODIMP Machine::COMGETTER(HpetEnabled)(BOOL *enabled)
@@ -1816,7 +1846,7 @@ STDMETHODIMP Machine::GetCPUIDLeaf(ULONG aId, ULONG *aValEax, ULONG *aValEbx, UL
         case 0x9:
         case 0xA:
             if (mHWData->mCpuIdStdLeafs[aId].ulId != aId)
-                return setError(E_INVALIDARG, tr("CpuId override leaf %#x is not set"), aId);
+                return E_INVALIDARG;
 
             *aValEax = mHWData->mCpuIdStdLeafs[aId].ulEax;
             *aValEbx = mHWData->mCpuIdStdLeafs[aId].ulEbx;
@@ -1836,7 +1866,7 @@ STDMETHODIMP Machine::GetCPUIDLeaf(ULONG aId, ULONG *aValEax, ULONG *aValEbx, UL
         case 0x80000009:
         case 0x8000000A:
             if (mHWData->mCpuIdExtLeafs[aId - 0x80000000].ulId != aId)
-                return setError(E_INVALIDARG, tr("CpuId override leaf %#x is not set"), aId);
+                return E_INVALIDARG;
 
             *aValEax = mHWData->mCpuIdExtLeafs[aId - 0x80000000].ulEax;
             *aValEbx = mHWData->mCpuIdExtLeafs[aId - 0x80000000].ulEbx;
@@ -3423,8 +3453,8 @@ STDMETHODIMP Machine::AttachDevice(IN_BSTR aControllerName,
 
     if (fHotplug && !isControllerHotplugCapable(ctrlType))
         return setError(VBOX_E_INVALID_VM_STATE,
-                        tr("Invalid machine state: %s"),
-                        Global::stringifyMachineState(mData->mMachineState));
+                        tr("Controller '%ls' does not support hotplugging"),
+                        aControllerName);
 
     // check that the port and device are not out of range
     rc = ctl->checkPortAndDeviceValid(aControllerPort, aDevice);
@@ -3772,6 +3802,9 @@ STDMETHODIMP Machine::AttachDevice(IN_BSTR aControllerName,
                           aDevice,
                           aType,
                           fIndirect,
+                          false /* fPassthrough */,
+                          false /* fTempEject */,
+                          false /* fNonRotational */,
                           Utf8Str::Empty);
     if (FAILED(rc)) return rc;
 
@@ -3809,7 +3842,7 @@ STDMETHODIMP Machine::DetachDevice(IN_BSTR aControllerName, LONG aControllerPort
 {
     CheckComArgStrNotEmptyOrNull(aControllerName);
 
-    LogFlowThisFunc(("aControllerName=\"%ls\" aControllerPort=%ld aDevice=%ld\n",
+    LogFlowThisFunc(("aControllerName=\"%ls\" aControllerPort=%d aDevice=%d\n",
                      aControllerName, aControllerPort, aDevice));
 
     AutoCaller autoCaller(this);
@@ -3843,8 +3876,8 @@ STDMETHODIMP Machine::DetachDevice(IN_BSTR aControllerName, LONG aControllerPort
 
     if (fHotplug && !isControllerHotplugCapable(ctrlType))
         return setError(VBOX_E_INVALID_VM_STATE,
-                        tr("Invalid machine state: %s"),
-                        Global::stringifyMachineState(mData->mMachineState));
+                        tr("Controller '%ls' does not support hotplugging"),
+                        aControllerName);
 
     MediumAttachment *pAttach = findAttachment(mMediaData->mAttachments,
                                                aControllerName,
@@ -3883,7 +3916,7 @@ STDMETHODIMP Machine::PassthroughDevice(IN_BSTR aControllerName, LONG aControlle
 {
     CheckComArgStrNotEmptyOrNull(aControllerName);
 
-    LogFlowThisFunc(("aControllerName=\"%ls\" aControllerPort=%ld aDevice=%ld aPassthrough=%d\n",
+    LogFlowThisFunc(("aControllerName=\"%ls\" aControllerPort=%d aDevice=%d aPassthrough=%d\n",
                      aControllerName, aControllerPort, aDevice, aPassthrough));
 
     AutoCaller autoCaller(this);
@@ -3925,12 +3958,99 @@ STDMETHODIMP Machine::PassthroughDevice(IN_BSTR aControllerName, LONG aControlle
     return S_OK;
 }
 
+STDMETHODIMP Machine::TemporaryEjectDevice(IN_BSTR aControllerName, LONG aControllerPort,
+                                           LONG aDevice, BOOL aTemporaryEject)
+{
+    CheckComArgStrNotEmptyOrNull(aControllerName);
+
+    LogFlowThisFunc(("aControllerName=\"%ls\" aControllerPort=%d aDevice=%d aTemporaryEject=%d\n",
+                     aControllerName, aControllerPort, aDevice, aTemporaryEject));
+
+    AutoCaller autoCaller(this);
+    if (FAILED(autoCaller.rc())) return autoCaller.rc();
+
+    AutoWriteLock alock(this COMMA_LOCKVAL_SRC_POS);
+
+    HRESULT rc = checkStateDependency(MutableStateDep);
+    if (FAILED(rc)) return rc;
+
+    MediumAttachment *pAttach = findAttachment(mMediaData->mAttachments,
+                                               aControllerName,
+                                               aControllerPort,
+                                               aDevice);
+    if (!pAttach)
+        return setError(VBOX_E_OBJECT_NOT_FOUND,
+                        tr("No storage device attached to device slot %d on port %d of controller '%ls'"),
+                        aDevice, aControllerPort, aControllerName);
+
+
+    setModified(IsModified_Storage);
+    mMediaData.backup();
+
+    AutoWriteLock attLock(pAttach COMMA_LOCKVAL_SRC_POS);
+
+    if (pAttach->getType() != DeviceType_DVD)
+        return setError(E_INVALIDARG,
+                        tr("Setting temporary eject flag rejected as the device attached to device slot %d on port %d of controller '%ls' is not a DVD"),
+                        aDevice, aControllerPort, aControllerName);
+    pAttach->updateTempEject(!!aTemporaryEject);
+
+    return S_OK;
+}
+
+STDMETHODIMP Machine::NonRotationalDevice(IN_BSTR aControllerName, LONG aControllerPort,
+                                          LONG aDevice, BOOL aNonRotational)
+{
+    CheckComArgStrNotEmptyOrNull(aControllerName);
+
+    LogFlowThisFunc(("aControllerName=\"%ls\" aControllerPort=%d aDevice=%d aNonRotational=%d\n",
+                     aControllerName, aControllerPort, aDevice, aNonRotational));
+
+    AutoCaller autoCaller(this);
+    if (FAILED(autoCaller.rc())) return autoCaller.rc();
+
+    AutoWriteLock alock(this COMMA_LOCKVAL_SRC_POS);
+
+    HRESULT rc = checkStateDependency(MutableStateDep);
+    if (FAILED(rc)) return rc;
+
+    AssertReturn(mData->mMachineState != MachineState_Saved, E_FAIL);
+
+    if (Global::IsOnlineOrTransient(mData->mMachineState))
+        return setError(VBOX_E_INVALID_VM_STATE,
+                        tr("Invalid machine state: %s"),
+                        Global::stringifyMachineState(mData->mMachineState));
+
+    MediumAttachment *pAttach = findAttachment(mMediaData->mAttachments,
+                                               aControllerName,
+                                               aControllerPort,
+                                               aDevice);
+    if (!pAttach)
+        return setError(VBOX_E_OBJECT_NOT_FOUND,
+                        tr("No storage device attached to device slot %d on port %d of controller '%ls'"),
+                        aDevice, aControllerPort, aControllerName);
+
+
+    setModified(IsModified_Storage);
+    mMediaData.backup();
+
+    AutoWriteLock attLock(pAttach COMMA_LOCKVAL_SRC_POS);
+
+    if (pAttach->getType() != DeviceType_HardDisk)
+        return setError(E_INVALIDARG,
+                        tr("Setting the non-rotational medium flag rejected as the device attached to device slot %d on port %d of controller '%ls' is not a hard disk"),
+                        aDevice, aControllerPort, aControllerName);
+    pAttach->updateNonRotational(!!aNonRotational);
+
+    return S_OK;
+}
+
 STDMETHODIMP Machine::SetBandwidthGroupForDevice(IN_BSTR aControllerName, LONG aControllerPort,
                                                  LONG aDevice, IBandwidthGroup *aBandwidthGroup)
 {
     CheckComArgStrNotEmptyOrNull(aControllerName);
 
-    LogFlowThisFunc(("aControllerName=\"%ls\" aControllerPort=%ld aDevice=%ld\n",
+    LogFlowThisFunc(("aControllerName=\"%ls\" aControllerPort=%d aDevice=%d\n",
                      aControllerName, aControllerPort, aDevice));
 
     AutoCaller autoCaller(this);
@@ -3996,7 +4116,7 @@ STDMETHODIMP Machine::MountMedium(IN_BSTR aControllerName,
                                   BOOL aForce)
 {
     int rc = S_OK;
-    LogFlowThisFunc(("aControllerName=\"%ls\" aControllerPort=%ld aDevice=%ld aForce=%d\n",
+    LogFlowThisFunc(("aControllerName=\"%ls\" aControllerPort=%d aDevice=%d aForce=%d\n",
                      aControllerName, aControllerPort, aDevice, aForce));
 
     CheckComArgStrNotEmptyOrNull(aControllerName);
@@ -4114,7 +4234,7 @@ STDMETHODIMP Machine::GetMedium(IN_BSTR aControllerName,
                                 LONG aDevice,
                                 IMedium **aMedium)
 {
-    LogFlowThisFunc(("aControllerName=\"%ls\" aControllerPort=%ld aDevice=%ld\n",
+    LogFlowThisFunc(("aControllerName=\"%ls\" aControllerPort=%d aDevice=%d\n",
                      aControllerName, aControllerPort, aDevice));
 
     CheckComArgStrNotEmptyOrNull(aControllerName);
@@ -4510,6 +4630,7 @@ STDMETHODIMP Machine::Unregister(CleanupMode_T cleanupMode,
 struct Machine::DeleteTask
 {
     ComObjPtr<Machine>          pMachine;
+    RTCList< ComPtr<IMedium> >  llMediums;
     std::list<Utf8Str>          llFilesToDelete;
     ComObjPtr<Progress>         pProgress;
     GuidList                    llRegistriesThatNeedSaving;
@@ -4543,20 +4664,15 @@ STDMETHODIMP Machine::Delete(ComSafeArrayIn(IMedium*, aMedia), IProgress **aProg
         IMedium *pIMedium(sfaMedia[i]);
         ComObjPtr<Medium> pMedium = static_cast<Medium*>(pIMedium);
         if (pMedium.isNull())
-            return setError(E_INVALIDARG, "The given medium pointer %d is invalid", i);
-        AutoCaller mediumAutoCaller(pMedium);
-        if (FAILED(mediumAutoCaller.rc())) return mediumAutoCaller.rc();
-
-        Utf8Str bstrLocation = pMedium->getLocationFull();
-
-        bool fDoesMediumNeedFileDeletion = pMedium->isMediumFormatFile();
-
-        // close the medium now; if that succeeds, then that means the medium is no longer
-        // in use and we can add it to the list of files to delete
-        rc = pMedium->close(&pTask->llRegistriesThatNeedSaving,
-                            mediumAutoCaller);
-        if (SUCCEEDED(rc) && fDoesMediumNeedFileDeletion)
-            pTask->llFilesToDelete.push_back(bstrLocation);
+            return setError(E_INVALIDARG, "The given medium pointer with index %d is invalid", i);
+        SafeArray<BSTR> ids;
+        rc = pMedium->COMGETTER(MachineIds)(ComSafeArrayAsOutParam(ids));
+        if (FAILED(rc)) return rc;
+        /* At this point the medium should not have any back references
+         * anymore. If it has it is attached to another VM and *must* not
+         * deleted. */
+        if (ids.size() < 1)
+            pTask->llMediums.append(pMedium);
     }
     if (mData->pMachineConfigFile->fileExists())
         pTask->llFilesToDelete.push_back(mData->m_strConfigFileFull);
@@ -4566,7 +4682,7 @@ STDMETHODIMP Machine::Delete(ComSafeArrayIn(IMedium*, aMedia), IProgress **aProg
                            static_cast<IMachine*>(this) /* aInitiator */,
                            Bstr(tr("Deleting files")).raw(),
                            true /* fCancellable */,
-                           pTask->llFilesToDelete.size() + 1,   // cOperations
+                           pTask->llFilesToDelete.size() + pTask->llMediums.size() + 1,   // cOperations
                            BstrFmt(tr("Deleting '%s'"), pTask->llFilesToDelete.front().c_str()).raw());
 
     int vrc = RTThreadCreate(NULL,
@@ -4631,96 +4747,147 @@ HRESULT Machine::deleteTaskWorker(DeleteTask &task)
 
     AutoWriteLock alock(this COMMA_LOCKVAL_SRC_POS);
 
-    ULONG uLogHistoryCount = 3;
-    ComPtr<ISystemProperties> systemProperties;
-    mParent->COMGETTER(SystemProperties)(systemProperties.asOutParam());
-    if (!systemProperties.isNull())
-        systemProperties->COMGETTER(LogHistoryCount)(&uLogHistoryCount);
+    HRESULT rc = S_OK;
 
-    // delete the files pushed on the task list by Machine::Delete()
-    // (this includes saved states of the machine and snapshots and
-    // medium storage files from the IMedium list passed in, and the
-    // machine XML file)
-    std::list<Utf8Str>::const_iterator it = task.llFilesToDelete.begin();
-    while (it != task.llFilesToDelete.end())
+    try
     {
-        const Utf8Str &strFile = *it;
-        LogFunc(("Deleting file %s\n", strFile.c_str()));
-        RTFileDelete(strFile.c_str());
+        ULONG uLogHistoryCount = 3;
+        ComPtr<ISystemProperties> systemProperties;
+        rc = mParent->COMGETTER(SystemProperties)(systemProperties.asOutParam());
+        if (FAILED(rc)) throw rc;
 
-        ++it;
-        if (it == task.llFilesToDelete.end())
+        if (!systemProperties.isNull())
         {
-            task.pProgress->SetNextOperation(Bstr(tr("Cleaning up machine directory")).raw(), 1);
-            break;
+            rc = systemProperties->COMGETTER(LogHistoryCount)(&uLogHistoryCount);
+            if (FAILED(rc)) throw rc;
         }
 
-        task.pProgress->SetNextOperation(BstrFmt(tr("Deleting '%s'"), it->c_str()).raw(), 1);
-    }
-
-    /* delete the settings only when the file actually exists */
-    if (mData->pMachineConfigFile->fileExists())
-    {
-        /* Delete any backup or uncommitted XML files. Ignore failures.
-           See the fSafe parameter of xml::XmlFileWriter::write for details. */
-        /** @todo Find a way to avoid referring directly to iprt/xml.h here. */
-        Utf8Str otherXml = Utf8StrFmt("%s%s", mData->m_strConfigFileFull.c_str(), xml::XmlFileWriter::s_pszTmpSuff);
-        RTFileDelete(otherXml.c_str());
-        otherXml = Utf8StrFmt("%s%s", mData->m_strConfigFileFull.c_str(), xml::XmlFileWriter::s_pszPrevSuff);
-        RTFileDelete(otherXml.c_str());
-
-        /* delete the Logs folder, nothing important should be left
-         * there (we don't check for errors because the user might have
-         * some private files there that we don't want to delete) */
-        Utf8Str logFolder;
-        getLogFolder(logFolder);
-        Assert(logFolder.length());
-        if (RTDirExists(logFolder.c_str()))
+        MachineState_T oldState = mData->mMachineState;
+        setMachineState(MachineState_SettingUp);
+        alock.release();
+        for (size_t i = 0; i < task.llMediums.size(); ++i)
         {
-            /* Delete all VBox.log[.N] files from the Logs folder
-             * (this must be in sync with the rotation logic in
-             * Console::powerUpThread()). Also, delete the VBox.png[.N]
-             * files that may have been created by the GUI. */
-            Utf8Str log = Utf8StrFmt("%s%cVBox.log",
-                                     logFolder.c_str(), RTPATH_DELIMITER);
-            RTFileDelete(log.c_str());
-            log = Utf8StrFmt("%s%cVBox.png",
-                             logFolder.c_str(), RTPATH_DELIMITER);
-            RTFileDelete(log.c_str());
-            for (int i = uLogHistoryCount; i > 0; i--)
+            ComObjPtr<Medium> pMedium = (Medium*)(IMedium*)task.llMediums.at(i);
             {
-                log = Utf8StrFmt("%s%cVBox.log.%d",
-                                 logFolder.c_str(), RTPATH_DELIMITER, i);
-                RTFileDelete(log.c_str());
-                log = Utf8StrFmt("%s%cVBox.png.%d",
-                                 logFolder.c_str(), RTPATH_DELIMITER, i);
-                RTFileDelete(log.c_str());
+                AutoCaller mac(pMedium);
+                if (FAILED(mac.rc())) throw mac.rc();
+                Utf8Str strLocation = pMedium->getLocationFull();
+                rc = task.pProgress->SetNextOperation(BstrFmt(tr("Deleting '%s'"), strLocation.c_str()).raw(), 1);
+                if (FAILED(rc)) throw rc;
+                LogFunc(("Deleting file %s\n", strLocation.c_str()));
+            }
+            ComPtr<IProgress> pProgress2;
+            rc = pMedium->DeleteStorage(pProgress2.asOutParam());
+            if (FAILED(rc)) throw rc;
+            rc = task.pProgress->WaitForAsyncProgressCompletion(pProgress2);
+            if (FAILED(rc)) throw rc;
+            /* Check the result of the asynchrony process. */
+            LONG iRc;
+            rc = pProgress2->COMGETTER(ResultCode)(&iRc);
+            if (FAILED(rc)) throw rc;
+            if (FAILED(iRc))
+            {
+                /* If the thread of the progress object has an error, then
+                 * retrieve the error info from there, or it'll be lost. */
+                ProgressErrorInfo info(pProgress2);
+                throw setError(iRc, Utf8Str(info.getText()).c_str());
+            }
+        }
+        setMachineState(oldState);
+        alock.acquire();
+
+        // delete the files pushed on the task list by Machine::Delete()
+        // (this includes saved states of the machine and snapshots and
+        // medium storage files from the IMedium list passed in, and the
+        // machine XML file)
+        std::list<Utf8Str>::const_iterator it = task.llFilesToDelete.begin();
+        while (it != task.llFilesToDelete.end())
+        {
+            const Utf8Str &strFile = *it;
+            LogFunc(("Deleting file %s\n", strFile.c_str()));
+            int vrc = RTFileDelete(strFile.c_str());
+            if (RT_FAILURE(vrc))
+                throw setError(VBOX_E_IPRT_ERROR,
+                               tr("Could not delete file '%s' (%Rrc)"), strFile.c_str(), vrc);
+
+            ++it;
+            if (it == task.llFilesToDelete.end())
+            {
+                rc = task.pProgress->SetNextOperation(Bstr(tr("Cleaning up machine directory")).raw(), 1);
+                if (FAILED(rc)) throw rc;
+                break;
             }
 
-            RTDirRemove(logFolder.c_str());
+            rc = task.pProgress->SetNextOperation(BstrFmt(tr("Deleting '%s'"), it->c_str()).raw(), 1);
+            if (FAILED(rc)) throw rc;
         }
 
-        /* delete the Snapshots folder, nothing important should be left
-         * there (we don't check for errors because the user might have
-         * some private files there that we don't want to delete) */
-        Utf8Str strFullSnapshotFolder;
-        calculateFullPath(mUserData->s.strSnapshotFolder, strFullSnapshotFolder);
-        Assert(!strFullSnapshotFolder.isEmpty());
-        if (RTDirExists(strFullSnapshotFolder.c_str()))
-            RTDirRemove(strFullSnapshotFolder.c_str());
+        /* delete the settings only when the file actually exists */
+        if (mData->pMachineConfigFile->fileExists())
+        {
+            /* Delete any backup or uncommitted XML files. Ignore failures.
+               See the fSafe parameter of xml::XmlFileWriter::write for details. */
+            /** @todo Find a way to avoid referring directly to iprt/xml.h here. */
+            Utf8Str otherXml = Utf8StrFmt("%s%s", mData->m_strConfigFileFull.c_str(), xml::XmlFileWriter::s_pszTmpSuff);
+            RTFileDelete(otherXml.c_str());
+            otherXml = Utf8StrFmt("%s%s", mData->m_strConfigFileFull.c_str(), xml::XmlFileWriter::s_pszPrevSuff);
+            RTFileDelete(otherXml.c_str());
 
-        // delete the directory that contains the settings file, but only
-        // if it matches the VM name
-        Utf8Str settingsDir;
-        if (isInOwnDir(&settingsDir))
-            RTDirRemove(settingsDir.c_str());
+            /* delete the Logs folder, nothing important should be left
+             * there (we don't check for errors because the user might have
+             * some private files there that we don't want to delete) */
+            Utf8Str logFolder;
+            getLogFolder(logFolder);
+            Assert(logFolder.length());
+            if (RTDirExists(logFolder.c_str()))
+            {
+                /* Delete all VBox.log[.N] files from the Logs folder
+                 * (this must be in sync with the rotation logic in
+                 * Console::powerUpThread()). Also, delete the VBox.png[.N]
+                 * files that may have been created by the GUI. */
+                Utf8Str log = Utf8StrFmt("%s%cVBox.log",
+                                         logFolder.c_str(), RTPATH_DELIMITER);
+                RTFileDelete(log.c_str());
+                log = Utf8StrFmt("%s%cVBox.png",
+                                 logFolder.c_str(), RTPATH_DELIMITER);
+                RTFileDelete(log.c_str());
+                for (int i = uLogHistoryCount; i > 0; i--)
+                {
+                    log = Utf8StrFmt("%s%cVBox.log.%d",
+                                     logFolder.c_str(), RTPATH_DELIMITER, i);
+                    RTFileDelete(log.c_str());
+                    log = Utf8StrFmt("%s%cVBox.png.%d",
+                                     logFolder.c_str(), RTPATH_DELIMITER, i);
+                    RTFileDelete(log.c_str());
+                }
+
+                RTDirRemove(logFolder.c_str());
+            }
+
+            /* delete the Snapshots folder, nothing important should be left
+             * there (we don't check for errors because the user might have
+             * some private files there that we don't want to delete) */
+            Utf8Str strFullSnapshotFolder;
+            calculateFullPath(mUserData->s.strSnapshotFolder, strFullSnapshotFolder);
+            Assert(!strFullSnapshotFolder.isEmpty());
+            if (RTDirExists(strFullSnapshotFolder.c_str()))
+                RTDirRemove(strFullSnapshotFolder.c_str());
+
+            // delete the directory that contains the settings file, but only
+            // if it matches the VM name
+            Utf8Str settingsDir;
+            if (isInOwnDir(&settingsDir))
+                RTDirRemove(settingsDir.c_str());
+        }
+
+        alock.release();
+
+        rc = mParent->saveRegistries(task.llRegistriesThatNeedSaving);
+        if (FAILED(rc)) throw rc;
     }
+    catch (HRESULT aRC) { rc = aRC; }
 
-    alock.release();
-
-    mParent->saveRegistries(task.llRegistriesThatNeedSaving);
-
-    return S_OK;
+    return rc;
 }
 
 STDMETHODIMP Machine::FindSnapshot(IN_BSTR aNameOrId, ISnapshot **aSnapshot)
@@ -6072,380 +6239,38 @@ STDMETHODIMP Machine::COMGETTER(BandwidthControl)(IBandwidthControl **aBandwidth
     return S_OK;
 }
 
-struct Machine::CloneVMTask
-{
-    ComObjPtr<Machine>          pSrcMachine;
-    ComObjPtr<Machine>          pTrgMachine;
-    ComObjPtr<Progress>         pProgress;
-    bool                        fLink;
-    typedef struct
-    {
-        ComPtr<IMedium>         pMedium;
-        uint64_t                uSize;
-    }MediumTask;
-    typedef RTCList<MediumTask> MediumTaskChain;
-    RTCList<MediumTaskChain>    llMedias;
-};
-
-STDMETHODIMP Machine::CloneTo(IMachine *pTarget, BOOL fFullClone, IProgress **pProgress)
+STDMETHODIMP Machine::CloneTo(IMachine *pTarget, CloneMode_T mode, ComSafeArrayIn(CloneOptions_T, options), IProgress **pProgress)
 {
     LogFlowFuncEnter();
 
     CheckComArgNotNull(pTarget);
     CheckComArgOutPointerValid(pProgress);
 
+    /* Convert the options. */
+    RTCList<CloneOptions_T> optList;
+    if (options != NULL)
+        optList = com::SafeArray<CloneOptions_T>(ComSafeArrayInArg(options)).toList();
+
+    if (optList.contains(CloneOptions_Link))
+    {
+        if (!isSnapshotMachine())
+            return setError(E_INVALIDARG,
+                            tr("Linked clone can only be created from a snapshot"));
+        if (mode != CloneMode_MachineState)
+            return setError(E_INVALIDARG,
+                            tr("Linked clone can only be created for a single machine state"));
+    }
+    AssertReturn(!(optList.contains(CloneOptions_KeepAllMACs) && optList.contains(CloneOptions_KeepNATMACs)), E_INVALIDARG);
+
     AutoCaller autoCaller(this);
     if (FAILED(autoCaller.rc())) return autoCaller.rc();
 
-    AutoReadLock srcLock(this COMMA_LOCKVAL_SRC_POS);
 
-    CloneVMTask *pTask = NULL;
+    MachineCloneVM *pWorker = new MachineCloneVM(this, static_cast<Machine*>(pTarget), mode, optList);
 
-    HRESULT rc;
-    try
-    {
-        pTask = new CloneVMTask;
-        pTask->pSrcMachine = this;
-        pTask->pTrgMachine = static_cast<Machine*>(pTarget);
-        pTask->fLink       = !fFullClone;
-
-        AutoWriteLock trgLock(pTask->pTrgMachine COMMA_LOCKVAL_SRC_POS);
-
-        ULONG uCount       = 2; /* One init task and the machine creation. */
-        ULONG uTotalWeight = 2; /* The init task and the machine creation is worth one. */
-        for (MediaData::AttachmentList::iterator it = mMediaData->mAttachments.begin();
-             it != mMediaData->mAttachments.end();
-             ++it)
-        {
-            /* Query some info of the source image. */
-            const ComObjPtr<MediumAttachment> &pAtt = *it;
-            DeviceType_T type;
-            rc = pAtt->COMGETTER(Type)(&type);
-            if (FAILED(rc)) throw rc;
-
-            /* Only harddisk's are of interest. */
-            if (type != DeviceType_HardDisk)
-                continue;
-
-            /* Valid medium attached? */
-            ComPtr<IMedium> pSrcMedium;
-            rc = pAtt->COMGETTER(Medium)(pSrcMedium.asOutParam());
-            if (FAILED(rc)) throw rc;
-            if (pSrcMedium.isNull())
-                continue;
-
-            /* Build up a child->parent list of this attachment. (Note: we are
-             * not interested of any child's not attached to this VM. So this
-             * will not create a full copy of the base/child relationship.) */
-            Machine::CloneVMTask::MediumTaskChain mtc;
-            while(!pSrcMedium.isNull())
-            {
-                /* Refresh the state so that the file size get read. */
-                MediumState_T e;
-                rc = pSrcMedium->RefreshState(&e);
-                if (FAILED(rc)) throw rc;
-                LONG64 lSize;
-                rc = pSrcMedium->COMGETTER(Size)(&lSize);
-                if (FAILED(rc)) throw rc;
-
-                /* Save the current medium, for later cloning. */
-                Machine::CloneVMTask::MediumTask mt;
-                mt.pMedium = pSrcMedium;
-                mt.uSize   = lSize;
-                mtc.append(mt);
-
-                /* Calculate progress data */
-                ++uCount;
-                uTotalWeight += lSize;
-
-                /* Query next parent. */
-                rc = pSrcMedium->COMGETTER(Parent)(pSrcMedium.asOutParam());
-                if (FAILED(rc)) throw rc;
-            };
-            pTask->llMedias.append(mtc);
-        }
-
-        rc = pTask->pProgress.createObject();
-        if (FAILED(rc)) throw rc;
-        rc = pTask->pProgress->init(getVirtualBox(),
-                                    static_cast<IMachine*>(this) /* aInitiator */,
-                                    Bstr(tr("Cloning Machine")).raw(),
-                                    true /* fCancellable */,
-                                    uCount,
-                                    uTotalWeight,
-                                    Bstr(tr("Initialize Cloning")).raw(),
-                                    1);
-        if (FAILED(rc)) throw rc;
-
-        int vrc = RTThreadCreate(NULL,
-                                 Machine::cloneVMThread,
-                                 static_cast<void*>(pTask),
-                                 0,
-                                 RTTHREADTYPE_MAIN_WORKER,
-                                 0,
-                                 "MachineClone");
-        if (RT_FAILURE(vrc))
-            throw setError(E_FAIL, "Could not create Machine clone thread (%Rrc)", vrc);
-    }
-    catch (HRESULT rc2)
-    {
-        if (pTask)
-            delete pTask;
-        rc = rc2;
-    }
-
-    if (SUCCEEDED(rc))
-        pTask->pProgress.queryInterfaceTo(pProgress);
+    HRESULT rc = pWorker->start(pProgress);
 
     LogFlowFuncLeave();
-
-    return rc;
-}
-
-/**
- * Static task wrapper passed to RTThreadCreate() in Machine::CloneTo() which then
- * calls Machine::cloneVMTaskWorker() on the actual machine object.
- * @param Thread
- * @param pvUser
- * @return
- */
-/* static */
-DECLCALLBACK(int) Machine::cloneVMThread(RTTHREAD /* Thread */, void *pvUser)
-{
-    LogFlowFuncEnter();
-
-    CloneVMTask *pTask = static_cast<CloneVMTask*>(pvUser);
-    AssertReturn(pTask,              VERR_INVALID_POINTER);
-    AssertReturn(pTask->pSrcMachine, VERR_INVALID_POINTER);
-    AssertReturn(pTask->pTrgMachine, VERR_INVALID_POINTER);
-    AssertReturn(pTask->pProgress,   VERR_INVALID_POINTER);
-
-    HRESULT rc = pTask->pSrcMachine->cloneVMTaskWorker(pTask);
-    pTask->pProgress->notifyComplete(rc);
-
-    delete pTask;
-
-    LogFlowFuncLeave();
-
-    return VINF_SUCCESS;
-}
-
-/**
- * Task thread implementation for Machine::CloneTo(), called from Machine::cloneVMThread().
- * @param task
- * @return
- */
-HRESULT Machine::cloneVMTaskWorker(CloneVMTask *pTask)
-{
-    AutoCaller autoCaller(this);
-    if (FAILED(autoCaller.rc())) return autoCaller.rc();
-
-    AutoReadLock  srcLock(this COMMA_LOCKVAL_SRC_POS);
-    AutoWriteLock trgLock(pTask->pTrgMachine COMMA_LOCKVAL_SRC_POS);
-
-    HRESULT rc = S_OK;
-
-    /*
-     * Todo:
-     * - Regardless where the old media comes from (e.g. snapshots folder) it
-     *   goes to the new main VM folder. Maybe we like to be a little bit
-     *   smarter here.
-     * - Snapshot diffs (can) have the uuid as name. After cloning this isn't
-     *   right anymore. Is it worth to change to the new uuid? Or should the
-     *   cloned disks called exactly as the original one or should all new disks
-     *   get a new name with the new VM name in it.
-     */
-
-    /* Where should all the media go? */
-    Utf8Str strTrgMachineFolder = pTask->pTrgMachine->getSettingsFileFull();
-    strTrgMachineFolder.stripFilename();
-
-    RTCList< ComObjPtr<Medium> > newMedias; /* All created images */
-    try
-    {
-        /* Copy all the configuration from this machine to an empty
-         * configuration dataset. */
-        settings::MachineConfigFile *pTrgMCF = new settings::MachineConfigFile(0);
-        *pTrgMCF = *mData->pMachineConfigFile;
-
-        /* Reset media registry. */
-        pTrgMCF->mediaRegistry.llHardDisks.clear();
-        /* Reset all snapshots. */
-        pTrgMCF->llFirstSnapshot.clear();
-        pTrgMCF->uuidCurrentSnapshot.clear();
-        pTrgMCF->strStateFile = "";
-        /* Force writing of setting file. */
-        pTrgMCF->fCurrentStateModified = true;
-        /* Set the new name. */
-        pTrgMCF->machineUserData.strName = pTask->pTrgMachine->mUserData->s.strName;
-        pTrgMCF->uuid = pTask->pTrgMachine->mData->mUuid;
-
-        for (size_t i = 0; i < pTask->llMedias.size(); ++i)
-        {
-            const Machine::CloneVMTask::MediumTaskChain &mtc = pTask->llMedias.at(i);
-            ComObjPtr<Medium> pNewParent;
-            for (size_t a = mtc.size(); a > 0; --a)
-            {
-                const Machine::CloneVMTask::MediumTask &mt = mtc.at(a - 1);
-                ComPtr<IMedium> pMedium = mt.pMedium;
-
-                Bstr bstrSrcName;
-                rc = pMedium->COMGETTER(Name)(bstrSrcName.asOutParam());
-                if (FAILED(rc)) throw rc;
-
-                rc = pTask->pProgress->SetNextOperation(BstrFmt(tr("Cloning Disk '%ls' ..."), bstrSrcName.raw()).raw(), mt.uSize);
-                if (FAILED(rc)) throw rc;
-
-                ComPtr<IMediumFormat> pSrcFormat;
-                rc = pMedium->COMGETTER(MediumFormat)(pSrcFormat.asOutParam());
-                ULONG uSrcCaps = 0;
-                rc = pSrcFormat->COMGETTER(Capabilities)(&uSrcCaps);
-                if (FAILED(rc)) throw rc;
-
-                Bstr bstrSrcFormat     = "VDI";
-                ULONG srcVar = MediumVariant_Standard;
-                /* Is the source file based? */
-                if ((uSrcCaps & MediumFormatCapabilities_File) == MediumFormatCapabilities_File)
-                {
-                    /* Yes, just use the source format. Otherwise the defaults
-                     * will be used. */
-                    rc = pMedium->COMGETTER(Format)(bstrSrcFormat.asOutParam());
-                    if (FAILED(rc)) throw rc;
-                    rc = pMedium->COMGETTER(Variant)(&srcVar);
-                    if (FAILED(rc)) throw rc;
-                }
-
-                /* Start creating the clone. */
-                ComObjPtr<Medium> pTarget;
-                rc = pTarget.createObject();
-                if (FAILED(rc)) throw rc;
-
-                Utf8Str strFile = Utf8StrFmt("%s%c%lS", strTrgMachineFolder.c_str(), RTPATH_DELIMITER, bstrSrcName.raw());
-                rc = pTarget->init(mParent,
-                                   Utf8Str(bstrSrcFormat),
-                                   strFile,
-                                   pTask->pTrgMachine->mData->mUuid,  /* media registry */
-                                   NULL                               /* llRegistriesThatNeedSaving */);
-                if (FAILED(rc)) throw rc;
-
-                /* Do the disk cloning. */
-                ComPtr<IProgress> progress2;
-                rc = pMedium->CloneTo(pTarget,
-                                      srcVar,
-                                      pNewParent,
-                                      progress2.asOutParam());
-                if (FAILED(rc)) throw rc;
-
-                /* Wait until the asynchrony process has finished. */
-                srcLock.release();
-                rc = pTask->pProgress->WaitForAsyncProgressCompletion(progress2);
-                srcLock.acquire();
-                if (FAILED(rc)) throw rc;
-
-                /* Check the result of the asynchrony process. */
-                LONG iRc;
-                rc = progress2->COMGETTER(ResultCode)(&iRc);
-                if (FAILED(rc)) throw rc;
-                if (FAILED(iRc))
-                {
-                    /* If the thread of the progress object has an error, then
-                     * retrieve the error info from there, or it'll be lost. */
-                    ProgressErrorInfo info(progress2);
-                    throw setError(iRc, Utf8Str(info.getText()).c_str());
-                }
-                /* Remember created medias. */
-                newMedias.append(pTarget);
-                /* This medium becomes the parent of the next medium in the
-                 * chain. */
-                pNewParent = pTarget;
-            }
-
-            Bstr bstrSrcId;
-            rc = mtc.first().pMedium->COMGETTER(Id)(bstrSrcId.asOutParam());
-            if (FAILED(rc)) throw rc;
-            Bstr bstrTrgId;
-            rc = pNewParent->COMGETTER(Id)(bstrTrgId.asOutParam());
-            if (FAILED(rc)) throw rc;
-            /* We have to patch the configuration, so it contains the new
-             * medium uuid instead of the old one. */
-            settings::StorageControllersList::iterator it3;
-            for (it3 = pTrgMCF->storageMachine.llStorageControllers.begin();
-                 it3 != pTrgMCF->storageMachine.llStorageControllers.end();
-                 ++it3)
-            {
-                settings::AttachedDevicesList &llAttachments = it3->llAttachedDevices;
-                settings::AttachedDevicesList::iterator it4;
-                for (it4 = llAttachments.begin();
-                     it4 != llAttachments.end();
-                     ++it4)
-                {
-                    if (   it4->deviceType == DeviceType_HardDisk
-                        && it4->uuid == bstrSrcId)
-                        it4->uuid = bstrTrgId;
-                }
-            }
-        }
-
-        {
-            rc = pTask->pProgress->SetNextOperation(BstrFmt(tr("Create Machine Clone '%s' ..."), pTrgMCF->machineUserData.strName.c_str()).raw(), 1);
-            if (FAILED(rc)) throw rc;
-            /* After modifying the new machine config, we can copy the stuff
-             * over to the new machine. The machine have to be mutable for
-             * this. */
-            rc = pTask->pTrgMachine->checkStateDependency(MutableStateDep);
-            if (FAILED(rc)) throw rc;
-            rc = pTask->pTrgMachine->loadMachineDataFromSettings(*pTrgMCF,
-                                                                 &pTask->pTrgMachine->mData->mUuid);
-            if (FAILED(rc)) throw rc;
-        }
-
-        /* The medias are created before the machine was there. We have to make
-         * sure the new medias know of there new parent or we get in trouble
-         * when the media registry is saved for this VM, especially in case of
-         * difference image chain's. See VirtualBox::saveMediaRegistry.*/
-//        for (size_t i = 0; i < newBaseMedias.size(); ++i)
-//        {
-//            rc = newBaseMedias.at(i)->addRegistry(pTask->pTrgMachine->mData->mUuid, true /* fRecursive */);
-//            if (FAILED(rc)) throw rc;
-//        }
-
-        /* Now save the new configuration to disk. */
-        rc = pTask->pTrgMachine->SaveSettings();
-        if (FAILED(rc)) throw rc;
-    }
-    catch(HRESULT rc2)
-    {
-        rc = rc2;
-    }
-    catch (...)
-    {
-        rc = VirtualBox::handleUnexpectedExceptions(RT_SRC_POS);
-    }
-
-    /* Cleanup on failure (CANCEL also) */
-    if (FAILED(rc))
-    {
-        /* Delete all already created medias. (Reverse, cause there could be
-         * parent->child relations.) */
-        for (size_t i = newMedias.size(); i > 0; --i)
-        {
-            ComObjPtr<Medium> &pMedium = newMedias.at(i - 1);
-            AutoCaller mac(pMedium);
-            if (FAILED(mac.rc())) return mac.rc();
-            AutoReadLock mlock(pMedium COMMA_LOCKVAL_SRC_POS);
-            bool fFile = pMedium->isMediumFormatFile();
-            Utf8Str strLoc = pMedium->getLocationFull();
-            mlock.release();
-            /* Close the medium. If this succeed, delete it finally from the
-             * disk. */
-            HRESULT rc1 = pMedium->close(NULL, mac);
-            if (   SUCCEEDED(rc1)
-                && fFile)
-                RTFileDelete(strLoc.c_str());
-        }
-        /* Delete the machine folder when not empty. */
-        RTDirRemove(strTrgMachineFolder.c_str());
-    }
 
     return rc;
 }
@@ -7682,6 +7507,11 @@ HRESULT Machine::loadMachineDataFromSettings(const settings::MachineConfigFile &
     rc = COMSETTER(SnapshotFolder)(Bstr(config.machineUserData.strSnapshotFolder).raw());
     if (FAILED(rc)) return rc;
 
+    /* Copy the extra data items (Not in any case config is already the same as
+     * mData->pMachineConfigFile, like when the xml files are read from disk. So
+     * make sure the extra data map is copied). */
+    mData->pMachineConfigFile->mapExtraDataItems = config.mapExtraDataItems;
+
     /* currentStateModified (optional, default is true) */
     mData->mCurrentStateModified = config.fCurrentStateModified;
 
@@ -7741,7 +7571,6 @@ HRESULT Machine::loadMachineDataFromSettings(const settings::MachineConfigFile &
     /* set the machine state to Aborted or Saved when appropriate */
     if (config.fAborted)
     {
-        Assert(!mSSData->strStateFilePath.isEmpty());
         mSSData->strStateFilePath.setNull();
 
         /* no need to use setMachineState() during init() */
@@ -8324,7 +8153,10 @@ HRESULT Machine::loadStorageDevices(StorageController *aStorageController,
                                dev.lPort,
                                dev.lDevice,
                                dev.deviceType,
+                               false,
                                dev.fPassThrough,
+                               dev.fTempEject,
+                               dev.fNonRotational,
                                pBwGroup.isNull() ? Utf8Str::Empty : pBwGroup->getName());
         if (FAILED(rc)) break;
 
@@ -8339,6 +8171,8 @@ HRESULT Machine::loadStorageDevices(StorageController *aStorageController,
                 rc = medium->addBackReference(mData->mUuid, *puuidSnapshot);
             else
                 rc = medium->addBackReference(mData->mUuid);
+            /* If the medium->addBackReference fails it sets an appropriate
+             * error message, so no need to do any guesswork here. */
 
             if (puuidRegistry)
                 // caller wants registry ID to be set on all attached media (OVF import case)
@@ -9269,6 +9103,8 @@ HRESULT Machine::saveStorageDevices(ComObjPtr<StorageController> aStorageControl
             else
                 dev.uuid = pMedium->getId();
             dev.fPassThrough = pAttach->getPassthrough();
+            dev.fTempEject = pAttach->getTempEject();
+            dev.fNonRotational = pAttach->getNonRotational();
         }
 
         dev.strBwGroup = pAttach->getBandwidthGroup();
@@ -9370,7 +9206,7 @@ void Machine::addMediumToRegistry(ComObjPtr<Medium> &pMedium,
 
     if (pMedium->addRegistry(uuid, false /* fRecurse */))
         // registry actually changed:
-        mParent->addGuidToListUniquely(llRegistriesThatNeedSaving, uuid);
+        VirtualBox::addGuidToListUniquely(llRegistriesThatNeedSaving, uuid);
 
     if (puuid)
         *puuid = uuid;
@@ -9590,6 +9426,9 @@ HRESULT Machine::createImplicitDiffs(IProgress *aProgress,
                                   pAtt->getDevice(),
                                   DeviceType_HardDisk,
                                   true /* aImplicit */,
+                                  false /* aPassthrough */,
+                                  false /* aTempEject */,
+                                  pAtt->getNonRotational(),
                                   pAtt->getBandwidthGroup());
             if (FAILED(rc)) throw rc;
 
@@ -9605,8 +9444,8 @@ HRESULT Machine::createImplicitDiffs(IProgress *aProgress,
     {
         ErrorInfoKeeper eik;
 
-        rc = lockedMediaMap->Clear();
-        AssertComRC(rc);
+        HRESULT rc1 = lockedMediaMap->Clear();
+        AssertComRC(rc1);
     }
 
     if (FAILED(rc))
@@ -9621,9 +9460,9 @@ HRESULT Machine::createImplicitDiffs(IProgress *aProgress,
 
 /**
  * Deletes implicit differencing hard disks created either by
- * #createImplicitDiffs() or by #AttachMedium() and rolls back mMediaData.
+ * #createImplicitDiffs() or by #AttachDevice() and rolls back mMediaData.
  *
- * Note that to delete hard disks created by #AttachMedium() this method is
+ * Note that to delete hard disks created by #AttachDevice() this method is
  * called from #fixupMedia() when the changes are rolled back.
  *
  * @param pllRegistriesThatNeedSaving Optional pointer to a list of UUIDs to receive the registry IDs that need saving
@@ -9919,12 +9758,41 @@ HRESULT Machine::detachAllMedia(AutoWriteLock &writeLock,
 
         if (!pMedium.isNull())
         {
+            AutoCaller mac(pMedium);
+            if (FAILED(mac.rc())) return mac.rc();
+            AutoReadLock lock(pMedium COMMA_LOCKVAL_SRC_POS);
             DeviceType_T devType = pMedium->getDeviceType();
             if (    (    cleanupMode == CleanupMode_DetachAllReturnHardDisksOnly
                       && devType == DeviceType_HardDisk)
                  || (cleanupMode == CleanupMode_Full)
                )
+            {
                 llMedia.push_back(pMedium);
+                ComObjPtr<Medium> pParent = pMedium->getParent();
+                /*
+                 * Search for medias which are not attached to any machine, but
+                 * in the chain to an attached disk. Mediums are only consided
+                 * if they are:
+                 * - have only one child
+                 * - no references to any machines
+                 * - are of normal medium type
+                 */
+                while (!pParent.isNull())
+                {
+                    AutoCaller mac1(pParent);
+                    if (FAILED(mac1.rc())) return mac1.rc();
+                    AutoReadLock lock1(pParent COMMA_LOCKVAL_SRC_POS);
+                    if (pParent->getChildren().size() == 1)
+                    {
+                        if (   pParent->getMachineBackRefCount() == 0
+                            && pParent->getType() == MediumType_Normal
+                            && find(llMedia.begin(), llMedia.end(), pParent) == llMedia.end())
+                            llMedia.push_back(pParent);
+                    }else
+                        break;
+                    pParent = pParent->getParent();
+                }
+            }
         }
 
         // real machine: then we need to use the proper method
@@ -11911,6 +11779,85 @@ STDMETHODIMP SessionMachine::PushGuestProperty(IN_BSTR aName,
 #else
     ReturnComNotImplemented();
 #endif
+}
+
+STDMETHODIMP SessionMachine::EjectMedium(IMediumAttachment *aAttachment,
+                                         IMediumAttachment **aNewAttachment)
+{
+    CheckComArgNotNull(aAttachment);
+    CheckComArgOutPointerValid(aNewAttachment);
+
+    AutoCaller autoCaller(this);
+    if (FAILED(autoCaller.rc())) return autoCaller.rc();
+
+    // request the host lock first, since might be calling Host methods for getting host drives;
+    // next, protect the media tree all the while we're in here, as well as our member variables
+    AutoMultiWriteLock3 multiLock(mParent->host()->lockHandle(),
+                                  this->lockHandle(),
+                                  &mParent->getMediaTreeLockHandle() COMMA_LOCKVAL_SRC_POS);
+
+    ComObjPtr<MediumAttachment> pAttach = static_cast<MediumAttachment *>(aAttachment);
+
+    Bstr ctrlName;
+    LONG lPort;
+    LONG lDevice;
+    bool fTempEject;
+    {
+        AutoCaller autoAttachCaller(this);
+        if (FAILED(autoAttachCaller.rc())) return autoAttachCaller.rc();
+
+        AutoReadLock attLock(pAttach COMMA_LOCKVAL_SRC_POS);
+
+        /* Need to query the details first, as the IMediumAttachment reference
+         * might be to the original settings, which we are going to change. */
+        ctrlName = pAttach->getControllerName();
+        lPort = pAttach->getPort();
+        lDevice = pAttach->getDevice();
+        fTempEject = pAttach->getTempEject();
+    }
+
+    if (!fTempEject)
+    {
+        /* Remember previously mounted medium. The medium before taking the
+         * backup is not necessarily the same thing. */
+        ComObjPtr<Medium> oldmedium;
+        oldmedium = pAttach->getMedium();
+
+        setModified(IsModified_Storage);
+        mMediaData.backup();
+
+        // The backup operation makes the pAttach reference point to the
+        // old settings. Re-get the correct reference.
+        pAttach = findAttachment(mMediaData->mAttachments,
+                                 ctrlName.raw(),
+                                 lPort,
+                                 lDevice);
+
+        {
+            AutoCaller autoAttachCaller(this);
+            if (FAILED(autoAttachCaller.rc())) return autoAttachCaller.rc();
+
+            AutoWriteLock attLock(pAttach COMMA_LOCKVAL_SRC_POS);
+            if (!oldmedium.isNull())
+                oldmedium->removeBackReference(mData->mUuid);
+
+            pAttach->updateMedium(NULL);
+            pAttach->updateEjected();
+        }
+
+        setModified(IsModified_Storage);
+    }
+    else
+    {
+        {
+            AutoWriteLock attLock(pAttach COMMA_LOCKVAL_SRC_POS);
+            pAttach->updateEjected();
+        }
+    }
+
+    pAttach.queryInterfaceTo(aNewAttachment);
+
+    return S_OK;
 }
 
 // public methods only for internal purposes

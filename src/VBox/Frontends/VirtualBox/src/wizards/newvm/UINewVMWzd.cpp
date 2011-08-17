@@ -22,10 +22,10 @@
 
 /* Local includes */
 #include "UIIconPool.h"
-#include "UINewHDWzd.h"
+#include "UINewHDWizard.h"
 #include "UINewVMWzd.h"
 #include "QIFileDialog.h"
-#include "VBoxProblemReporter.h"
+#include "UIMessageCenter.h"
 #include "UIMachineSettingsStorage.h"
 
 /* Globals */
@@ -49,7 +49,7 @@ static const osTypePattern gs_OSTypePattern[] =
     { QRegExp("(Wi.*NT)|(NT4)", Qt::CaseInsensitive), "WindowsNT4" },
     { QRegExp("((Wi.*XP)|(\\bXP\\b)).*64", Qt::CaseInsensitive), "WindowsXP_64" },
     { QRegExp("(Wi.*XP)|(\\bXP\\b)", Qt::CaseInsensitive), "WindowsXP" },
-    { QRegExp("((Wi.*2003)|(W2K3).*64", Qt::CaseInsensitive), "Windows2003_64" },
+    { QRegExp("((Wi.*2003)|(W2K3)).*64", Qt::CaseInsensitive), "Windows2003_64" },
     { QRegExp("(Wi.*2003)|(W2K3)", Qt::CaseInsensitive), "Windows2003" },
     { QRegExp("((Wi.*V)|(Vista)).*64", Qt::CaseInsensitive), "WindowsVista_64" },
     { QRegExp("(Wi.*V)|(Vista)", Qt::CaseInsensitive), "WindowsVista" },
@@ -75,12 +75,12 @@ static const osTypePattern gs_OSTypePattern[] =
     { QRegExp("OS[/|!-]{,1}2", Qt::CaseInsensitive), "OS2" },
 
     /* Code names for Linux distributions */
-    { QRegExp("((edgy)|(feisty)|(gutsy)|(hardy)|(intrepid)|(jaunty)|(karmic)|(lucid)|(maverick)|(natty)).*64", Qt::CaseInsensitive), "Ubuntu_64" },
-    { QRegExp("(edgy)|(feisty)|(gutsy)|(hardy)|(intrepid)|(jaunty)|(karmic)|(lucid)|(maverick)|(natty)", Qt::CaseInsensitive), "Ubuntu" },
+    { QRegExp("((edgy)|(feisty)|(gutsy)|(hardy)|(intrepid)|(jaunty)|(karmic)|(lucid)|(maverick)|(natty)|(oneiric)).*64", Qt::CaseInsensitive), "Ubuntu_64" },
+    { QRegExp("(edgy)|(feisty)|(gutsy)|(hardy)|(intrepid)|(jaunty)|(karmic)|(lucid)|(maverick)|(natty)|(oneiric)", Qt::CaseInsensitive), "Ubuntu" },
     { QRegExp("((sarge)|(etch)|(lenny)|(squeeze)|(wheezy)|(sid)).*64", Qt::CaseInsensitive), "Debian_64" },
     { QRegExp("(sarge)|(etch)|(lenny)|(squeeze)|(wheezy)|(sid)", Qt::CaseInsensitive), "Debian" },
-    { QRegExp("((moonshine)|(werewolf)|(sulphur)|(cambridge)|(leonidas)|(constantine)|(goddard)|(laughlin)).*64", Qt::CaseInsensitive), "Fedora_64" },
-    { QRegExp("(moonshine)|(werewolf)|(sulphur)|(cambridge)|(leonidas)|(constantine)|(goddard)|(laughlin)", Qt::CaseInsensitive), "Fedora" },
+    { QRegExp("((moonshine)|(werewolf)|(sulphur)|(cambridge)|(leonidas)|(constantine)|(goddard)|(laughlin)|(lovelock)).*64", Qt::CaseInsensitive), "Fedora_64" },
+    { QRegExp("(moonshine)|(werewolf)|(sulphur)|(cambridge)|(leonidas)|(constantine)|(goddard)|(laughlin)|(lovelock)", Qt::CaseInsensitive), "Fedora" },
 
     /* Regular names of Linux distributions */
     { QRegExp("Arc.*64", Qt::CaseInsensitive), "ArchLinux_64" },
@@ -170,6 +170,8 @@ void UINewVMWzd::retranslateUi()
 {
     /* Wizard title */
     setWindowTitle(tr("Create New Virtual Machine"));
+
+    setButtonText(QWizard::FinishButton, tr("Create"));
 }
 
 UINewVMWzdPage1::UINewVMWzdPage1()
@@ -272,7 +274,7 @@ bool UINewVMWzdPage2::createMachineFolder()
     bool fMachineFolderDeleted = cleanupMachineFolder();
     if (!fMachineFolderDeleted)
     {
-        vboxProblem().warnAboutCannotCreateMachineFolder(this, m_strMachineFolder);
+        msgCenter().warnAboutCannotCreateMachineFolder(this, m_strMachineFolder);
         return false;
     }
 
@@ -290,7 +292,7 @@ bool UINewVMWzdPage2::createMachineFolder()
     bool fMachineFolderCreated = QDir().mkpath(strMachineFolder);
     if (!fMachineFolderCreated)
     {
-        vboxProblem().warnAboutCannotCreateMachineFolder(this, strMachineFolder);
+        msgCenter().warnAboutCannotCreateMachineFolder(this, strMachineFolder);
         return false;
     }
 
@@ -449,7 +451,7 @@ void UINewVMWzdPage4::retranslateUi()
     /* Translate recommended 'hdd' field value */
     QString strRecommendedHDD = field("type").value<CGuestOSType>().isNull() ? QString() :
                                 VBoxGlobal::formatSize(field("type").value<CGuestOSType>().GetRecommendedHDD());
-    m_pPage4Text2->setText (tr ("The recommended size of the boot hard disk is <b>%1</b>.").arg (strRecommendedHDD));
+    m_pPage4Text2->setText (tr ("The recommended size of the start-up disk is <b>%1</b>.").arg (strRecommendedHDD));
 }
 
 void UINewVMWzdPage4::initializePage()
@@ -489,7 +491,7 @@ bool UINewVMWzdPage4::validatePage()
         ensureNewHardDiskDeleted();
 
     /* Ask user about disk-less machine */
-    if (!m_pBootHDCnt->isChecked() && !vboxProblem().confirmHardDisklessMachine(this))
+    if (!m_pBootHDCnt->isChecked() && !msgCenter().confirmHardDisklessMachine(this))
         return false;
 
     /* Show the New Hard Disk wizard */
@@ -511,7 +513,7 @@ void UINewVMWzdPage4::ensureNewHardDiskDeleted()
     CProgress progress = m_HardDisk.DeleteStorage();
     if (m_HardDisk.isOk())
     {
-        vboxProblem().showModalProgressDialog(progress, windowTitle(), ":/progress_media_delete_90px.png", this, true);
+        msgCenter().showModalProgressDialog(progress, windowTitle(), ":/progress_media_delete_90px.png", this, true);
         if (progress.isOk() && progress.GetResultCode() == S_OK)
             success = true;
     }
@@ -519,7 +521,7 @@ void UINewVMWzdPage4::ensureNewHardDiskDeleted()
     if (success)
         vboxGlobal().removeMedium(VBoxDefs::MediumType_HardDisk, id);
     else
-        vboxProblem().cannotDeleteHardDiskStorage(this, m_HardDisk, progress);
+        msgCenter().cannotDeleteHardDiskStorage(this, m_HardDisk, progress);
 
     m_HardDisk.detach();
 }
@@ -564,10 +566,7 @@ void UINewVMWzdPage4::getWithFileOpenDialog()
 
 bool UINewVMWzdPage4::getWithNewHardDiskWizard()
 {
-    UINewHDWzd dlg(this);
-    dlg.setRecommendedName(field("name").toString());
-    dlg.setRecommendedSize(field("type").value<CGuestOSType>().GetRecommendedHDD());
-    dlg.setDefaultPath(field("machineFolder").toString());
+    UINewHDWizard dlg(this, field("name").toString(), field("machineFolder").toString(), field("type").value<CGuestOSType>().GetRecommendedHDD());
 
     if (dlg.exec() == QDialog::Accepted)
     {
@@ -676,7 +675,7 @@ void UINewVMWzdPage5::retranslateUi()
     {
         summary += QString(
             "<tr><td><nobr>%8: </nobr></td><td><nobr>%9</nobr></td></tr>")
-            .arg(tr("Boot Hard Disk", "summary"), field("hardDiskName").toString());
+            .arg(tr("Start-up Disk", "summary"), field("hardDiskName").toString());
         /* Extend summary to 4 lines */
         setSummaryFieldLinesNumber(m_pSummaryText, 4);
     }
@@ -728,7 +727,7 @@ bool UINewVMWzdPage5::constructMachine()
                                        false);              // forceOverwrite
         if (!vbox.isOk())
         {
-            vboxProblem().cannotCreateMachine(vbox, this);
+            msgCenter().cannotCreateMachine(vbox, this);
             return false;
         }
 
@@ -743,7 +742,7 @@ bool UINewVMWzdPage5::constructMachine()
 
     /* VRAM size - select maximum between recommended and minimum for fullscreen */
     m_Machine.SetVRAMSize (qMax (type.GetRecommendedVRAM(),
-                                (ULONG) (VBoxGlobal::requiredVideoMemory(&m_Machine) / _1M)));
+                                (ULONG) (VBoxGlobal::requiredVideoMemory(typeId) / _1M)));
 
     /* Selecting recommended chipset type */
     m_Machine.SetChipsetType(type.GetRecommendedChipset());
@@ -840,7 +839,7 @@ bool UINewVMWzdPage5::constructMachine()
     vbox.RegisterMachine(m_Machine);
     if (!vbox.isOk())
     {
-        vboxProblem().cannotCreateMachine(vbox, m_Machine, this);
+        msgCenter().cannotCreateMachine(vbox, m_Machine, this);
         return false;
     }
 
@@ -861,14 +860,14 @@ bool UINewVMWzdPage5::constructMachine()
                 CMedium medium = vmedium.medium();              // @todo r=dj can this be cached somewhere?
                 m.AttachDevice(ctrHdName, 0, 0, KDeviceType_HardDisk, medium);
                 if (!m.isOk())
-                    vboxProblem().cannotAttachDevice(m, VBoxDefs::MediumType_HardDisk, field("hardDiskLocation").toString(),
+                    msgCenter().cannotAttachDevice(m, VBoxDefs::MediumType_HardDisk, field("hardDiskLocation").toString(),
                                                      StorageSlot(ctrHdBus, 0, 0), this);
             }
 
             /* Attach empty CD/DVD ROM Device */
             m.AttachDevice(ctrDvdName, 1, 0, KDeviceType_DVD, CMedium());
             if (!m.isOk())
-                vboxProblem().cannotAttachDevice(m, VBoxDefs::MediumType_DVD, QString(), StorageSlot(ctrDvdBus, 1, 0), this);
+                msgCenter().cannotAttachDevice(m, VBoxDefs::MediumType_DVD, QString(), StorageSlot(ctrDvdBus, 1, 0), this);
 
             if (m.isOk())
             {
@@ -876,7 +875,7 @@ bool UINewVMWzdPage5::constructMachine()
                 if (m.isOk())
                     success = true;
                 else
-                    vboxProblem().cannotSaveMachineSettings(m, this);
+                    msgCenter().cannotSaveMachineSettings(m, this);
             }
 
             session.UnlockMachine();

@@ -110,9 +110,9 @@ ip_input(PNATState pData, struct mbuf *m)
 
     STAM_PROFILE_START(&pData->StatIP_input, a);
 
-    LogFlow(("ip_input: m = %lx\n", (long)m));
+    LogFlowFunc(("ENTER: m = %lx\n", (long)m));
     ip = mtod(m, struct ip *);
-    Log2(("ip_dst=%R[IP4](len:%d) m_len = %d\n", &ip->ip_dst, RT_N2H_U16(ip->ip_len), m->m_len));
+    Log2(("ip_dst=%RTnaipv4(len:%d) m_len = %d\n", ip->ip_dst, RT_N2H_U16(ip->ip_len), m->m_len));
 
     ipstat.ips_total++;
     {
@@ -237,11 +237,12 @@ ip_input(PNATState pData, struct mbuf *m)
     goto no_free_m;
 
 bad_free_m:
-    Log2(("NAT: IP datagram to %R[IP4] with size(%d) claimed as bad\n",
-        &ip->ip_dst, ip->ip_len));
+    Log2(("NAT: IP datagram to %RTnaipv4 with size(%d) claimed as bad\n",
+        ip->ip_dst, ip->ip_len));
     m_freem(pData, m);
 no_free_m:
     STAM_PROFILE_STOP(&pData->StatIP_input, a);
+    LogFlowFuncLeave();
     return;
 }
 
@@ -256,12 +257,14 @@ ip_reass(PNATState pData, struct mbuf* m)
     u_short hash;
 
     /* If maxnipq or maxfragsperpacket are 0, never accept fragments. */
+    LogFlowFunc(("ENTER: m:%p\n", m));
     if (   maxnipq == 0
         || maxfragsperpacket == 0)
     {
         ipstat.ips_fragments++;
         ipstat.ips_fragdropped++;
         m_freem(pData, m);
+        LogFlowFunc(("LEAVE: NULL\n"));
         return (NULL);
     }
 
@@ -529,6 +532,7 @@ found:
         m_fixhdr(m);
 #endif
     ipstat.ips_reassembled++;
+    LogFlowFunc(("LEAVE: %p\n", m));
     return (m);
 
 dropfrag:
@@ -538,6 +542,7 @@ dropfrag:
     m_freem(pData, m);
 
 done:
+    LogFlowFunc(("LEAVE: NULL\n"));
     return NULL;
 
 #undef GETIP

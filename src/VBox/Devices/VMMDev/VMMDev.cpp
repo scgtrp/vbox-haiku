@@ -4,7 +4,7 @@
  */
 
 /*
- * Copyright (C) 2006-2010 Oracle Corporation
+ * Copyright (C) 2006-2011 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -19,7 +19,7 @@
 /*******************************************************************************
 *   Header Files                                                               *
 *******************************************************************************/
-/* #define LOG_ENABLED */
+
 /* Enable dev_vmm Log3 statements to get IRQ-related logging. */
 
 #define LOG_GROUP LOG_GROUP_DEV_VMM
@@ -1471,7 +1471,8 @@ static DECLCALLBACK(int) vmmdevRequestHandler(PPDMDEVINS pDevIns, void *pvUser, 
 
         case VMMDevReq_VideoSetVisibleRegion:
         {
-            if (pRequestHeader->size < sizeof(VMMDevVideoSetVisibleRegion))
+            if (  pRequestHeader->size + sizeof(RTRECT)
+                < sizeof(VMMDevVideoSetVisibleRegion))
             {
                 Log(("VMMDevReq_VideoSetVisibleRegion request size too small!!!\n"));
                 pRequestHeader->rc = VERR_INVALID_PARAMETER;
@@ -1485,15 +1486,11 @@ static DECLCALLBACK(int) vmmdevRequestHandler(PPDMDEVINS pDevIns, void *pvUser, 
             {
                 VMMDevVideoSetVisibleRegion *ptr = (VMMDevVideoSetVisibleRegion *)pRequestHeader;
 
-                if (!ptr->cRect)
+                if (   ptr->cRect > _1M /* restrict to sane range */
+                    || pRequestHeader->size != sizeof(VMMDevVideoSetVisibleRegion) + ptr->cRect * sizeof(RTRECT) - sizeof(RTRECT))
                 {
-                    Log(("VMMDevReq_VideoSetVisibleRegion no rectangles!!!\n"));
-                    pRequestHeader->rc = VERR_INVALID_PARAMETER;
-                }
-                else
-                if (pRequestHeader->size != sizeof(VMMDevVideoSetVisibleRegion) + (ptr->cRect-1)*sizeof(RTRECT))
-                {
-                    Log(("VMMDevReq_VideoSetVisibleRegion request size too small!!!\n"));
+                    Log(("VMMDevReq_VideoSetVisibleRegion: cRects=%#x doesn't match size=%#x or is out of bounds\n",
+                         ptr->cRect, pRequestHeader->size));
                     pRequestHeader->rc = VERR_INVALID_PARAMETER;
                 }
                 else
@@ -2193,12 +2190,10 @@ static DECLCALLBACK(int) vmmdevQueryStatusLed(PPDMILEDPORTS pInterface, unsigned
 static DECLCALLBACK(int) vmmdevQueryAbsoluteMouse(PPDMIVMMDEVPORT pInterface, int32_t *pAbsX, int32_t *pAbsY)
 {
     VMMDevState *pThis = IVMMDEVPORT_2_VMMDEVSTATE(pInterface);
-    AssertCompile(sizeof(pThis->mouseXAbs) == sizeof(*pAbsX));
-    AssertCompile(sizeof(pThis->mouseYAbs) == sizeof(*pAbsY));
     if (pAbsX)
-        ASMAtomicReadSize(&pThis->mouseXAbs, pAbsX);
+        *pAbsX = ASMAtomicReadS32(&pThis->mouseXAbs); /* why the atomic read? */
     if (pAbsY)
-        ASMAtomicReadSize(&pThis->mouseYAbs, pAbsY);
+        *pAbsY = ASMAtomicReadS32(&pThis->mouseYAbs);
     return VINF_SUCCESS;
 }
 
@@ -2214,7 +2209,7 @@ static DECLCALLBACK(int) vmmdevSetAbsoluteMouse(PPDMIVMMDEVPORT pInterface, int3
     VMMDevState *pThis = IVMMDEVPORT_2_VMMDEVSTATE(pInterface);
     PDMCritSectEnter(&pThis->CritSect, VERR_SEM_BUSY);
 
-    if ((pThis->mouseXAbs == absX) && (pThis->mouseYAbs == absY))
+    if (pThis->mouseXAbs == absX && pThis->mouseYAbs == absY)
     {
         PDMCritSectLeave(&pThis->CritSect);
         return VINF_SUCCESS;
@@ -2760,8 +2755,6 @@ static DECLCALLBACK(void) vmmdevReset(PPDMDEVINS pDevIns)
 
     pThis->hypervisorSize = 0;
 
-    pThis->u32HostEventFlags = 0;
-
     /* re-initialize the VMMDev memory */
     if (pThis->pVMMDevRAMR3)
         vmmdevInitRam(pThis);
@@ -2811,10 +2804,12 @@ static DECLCALLBACK(void) vmmdevReset(PPDMDEVINS pDevIns)
     /*
      * Clear the event variables.
      *
-     *   Note: The pThis->u32HostEventFlags is not cleared.
-     *         It is designed that way so host events do not
-     *         depend on guest resets.
+     * XXX By design we should NOT clear pThis->u32HostEventFlags because it is designed
+     *     that way so host events do not depend on guest resets. However, the pending
+     *     event flags actually _were_ cleared since ages so we mask out events from
+     *     clearing which we really need to survive the reset. See xtracker 5767.
      */
+    pThis->u32HostEventFlags    &= VMMDEV_EVENT_DISPLAY_CHANGE_REQUEST;
     pThis->u32GuestFilterMask    = 0;
     pThis->u32NewGuestFilterMask = 0;
     pThis->fNewGuestFilterMask   = 0;
@@ -2991,7 +2986,7 @@ static DECLCALLBACK(int) vmmdevConstruct(PPDMDEVINS pDevIns, int iInstance, PCFG
                                 N_("Configuration error: Failed querying \"GuestCoreDumpEnabled\" as a boolean"));
 
     char *pszGuestCoreDumpDir = NULL;
-    rc = CFGMR3QueryStringAlloc(pCfg, "GuestCoreDumpDir", &pszGuestCoreDumpDir);
+    rc = CFGMR3QueryStringAllocDef(pCfg, "GuestCoreDumpDir", &pszGuestCoreDumpDir, "");
     if (RT_FAILURE(rc))
         return PDMDEV_SET_ERROR(pDevIns, rc,
                                 N_("Configuration error: Failed querying \"GuestCoreDumpDir\" as a string"));
@@ -3015,7 +3010,7 @@ static DECLCALLBACK(int) vmmdevConstruct(PPDMDEVINS pDevIns, int iInstance, PCFG
     /*
      * Create the critical section for the device.
      */
-    rc = PDMDevHlpCritSectInit(pDevIns, &pThis->CritSect, RT_SRC_POS, "VMMDev");
+    rc = PDMDevHlpCritSectInit(pDevIns, &pThis->CritSect, RT_SRC_POS, "VMMDev#u", iInstance);
     AssertRCReturn(rc, rc);
     /* Later: pDevIns->pCritSectR3 = &pThis->CritSect; */
 

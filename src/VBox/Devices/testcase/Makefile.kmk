@@ -28,7 +28,7 @@ BLDDIRS += $(VBOX_DEVICES_TEST_OUT_DIR)
 VBOX_DEVICES_TESTS_FEATURES = \
 	$(if $(VBOX_WITH_RAW_MODE),VBOX_WITH_RAW_MODE,) \
 	$(if $(VBOX_WITH_USB),VBOX_WITH_USB,) \
-	$(if $(VBOX_WITH_EHCI),VBOX_WITH_EHCI,) \
+	$(if $(VBOX_WITH_EHCI_IMPL),VBOX_WITH_EHCI_IMPL,) \
 	$(if $(VBOX_WITH_AHCI),VBOX_WITH_AHCI,) \
 	$(if $(VBOX_WITH_E1000),VBOX_WITH_E1000,) \
 	$(if $(VBOX_WITH_VIRTIO),VBOX_WITH_VIRTIO,) \
@@ -40,7 +40,7 @@ VBOX_DEVICES_TESTS_FEATURES = \
 	$(if $(VBOX_WITH_VDMA),VBOX_WITH_VDMA,) \
 	$(if $(VBOX_WITH_WDDM),VBOX_WITH_WDDM,) \
 	$(if $(VBOX_WITH_VIDEOHWACCEL),VBOX_WITH_VIDEOHWACCEL,) \
-	$(if $(VBOX_WITH_PCI_PASSTHROUGH),VBOX_WITH_PCI_PASSTHROUGH,)
+	$(if $(VBOX_WITH_PCI_PASSTHROUGH_IMPL),VBOX_WITH_PCI_PASSTHROUGH_IMPL,)
 
 
 #
@@ -100,13 +100,13 @@ endif
 
 ifdef VBOX_WITH_RAW_MODE
 # 1&2. Manually dump selected structures and members.
-$(VBOX_DEVICES_TEST_OUT_DIR)/tstDeviceStructSizeRC.h: $$(INSTARGET_tstDeviceStructSizeRC) | $$(dir $$@)
+$(VBOX_DEVICES_TEST_OUT_DIR)/tstDeviceStructSizeRC.h: $$(tstDeviceStructSizeRC_1_STAGE_TARGET) | $$(dir $$@)
 	$(call MSG_GENERATE,,$@)
 	$(QUIET)$(REDIRECT) -wo $@ -- $^
 endif
 
 # 3. run it.
-$(VBOX_DEVICES_TEST_OUT_DIR)/tstDeviceStructSize.run: $$(INSTARGET_tstDeviceStructSize) | $$(dir $$@)
+$(VBOX_DEVICES_TEST_OUT_DIR)/tstDeviceStructSize.run: $$(tstDeviceStructSize_1_STAGE_TARGET) | $$(dir $$@)
 	$(QUIET)$(RM) -f $@
 	$^
 	$(QUIET)$(APPEND) "$@" "done"

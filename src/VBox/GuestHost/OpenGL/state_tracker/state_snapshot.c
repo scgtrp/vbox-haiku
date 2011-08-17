@@ -878,6 +878,11 @@ static int32_t crStateLoadClientPointer(CRVertexArrays *pArrays, int32_t index, 
     AssertRCReturn(rc, rc);
     cp->buffer = ui==0 ? pContext->bufferobject.nullBuffer : crHashtableSearch(pContext->shared->buffersTable, ui);
 
+    if (!cp->buffer)
+    {
+        crWarning("crStateLoadClientPointer: ui=%d loaded as NULL buffer!", ui);
+    }
+
 #ifdef CR_EXT_compiled_vertex_array
     if (cp->locked)
     {
@@ -1009,6 +1014,9 @@ int32_t crStateSaveContext(CRContext *pContext, PSSMHANDLE pSSM)
     GLboolean bSaveShared = GL_TRUE;
 
     CRASSERT(pContext && pSSM);
+
+    pContext->buffer.storedWidth = pContext->buffer.width;
+    pContext->buffer.storedHeight = pContext->buffer.height;
 
     rc = SSMR3PutMem(pSSM, pContext, sizeof(*pContext));
     AssertRCReturn(rc, rc);
@@ -1282,11 +1290,15 @@ int32_t crStateSaveContext(CRContext *pContext, PSSMHANDLE pSSM)
     AssertRCReturn(rc, rc);
 #endif
 
+    if (pContext->buffer.storedWidth && pContext->buffer.storedHeight)
     {
-        CRViewportState *pVP = &pContext->viewport;
+        CRBufferState *pBuf = &pContext->buffer;
         CRPixelPackState packing = pContext->client.pack;
-        GLint cbData = crPixelSize(GL_RGBA, GL_UNSIGNED_BYTE) * pVP->viewportH * pVP->viewportW;
-        void *pData = crAlloc(cbData);
+        GLint cbData;
+        void *pData;
+
+        cbData = crPixelSize(GL_RGBA, GL_UNSIGNED_BYTE) * pBuf->storedWidth * pBuf->storedHeight;
+        pData = crAlloc(cbData);
 
         if (!pData)
         {
@@ -1302,11 +1314,36 @@ int32_t crStateSaveContext(CRContext *pContext, PSSMHANDLE pSSM)
         diff_api.PixelStorei(GL_PACK_SWAP_BYTES, 0);
         diff_api.PixelStorei(GL_PACK_LSB_FIRST, 0);
 
-        diff_api.ReadBuffer(GL_FRONT);
-        diff_api.ReadPixels(0, 0, pVP->viewportW, pVP->viewportH, GL_RGBA, GL_UNSIGNED_BYTE, pData);
+        if (pContext->framebufferobject.readFB)
+        {
+            diff_api.BindFramebufferEXT(GL_READ_FRAMEBUFFER, 0);
+        }
+        if (pContext->bufferobject.packBuffer->hwid>0)
+        {
+            diff_api.BindBufferARB(GL_PIXEL_PACK_BUFFER_ARB, 0);
+        }
 
+        diff_api.ReadBuffer(GL_FRONT);
+        diff_api.ReadPixels(0, 0, pBuf->storedWidth, pBuf->storedHeight, GL_RGBA, GL_UNSIGNED_BYTE, pData);
+        rc = SSMR3PutMem(pSSM, pData, cbData);
+        AssertRCReturn(rc, rc);
+
+        diff_api.ReadBuffer(GL_BACK);
+        diff_api.ReadPixels(0, 0, pBuf->storedWidth, pBuf->storedHeight, GL_RGBA, GL_UNSIGNED_BYTE, pData);
+        rc = SSMR3PutMem(pSSM, pData, cbData);
+        AssertRCReturn(rc, rc);
+
+        if (pContext->bufferobject.packBuffer->hwid>0)
+        {
+            diff_api.BindBufferARB(GL_PIXEL_PACK_BUFFER_ARB, pContext->bufferobject.packBuffer->hwid);
+        }
+        if (pContext->framebufferobject.readFB)
+        {
+            diff_api.BindFramebufferEXT(GL_READ_FRAMEBUFFER, pContext->framebufferobject.readFB->hwid);
+        }
         diff_api.ReadBuffer(pContext->framebufferobject.readFB ? 
                             pContext->framebufferobject.readFB->readbuffer : pContext->buffer.readBuffer);
+
         diff_api.PixelStorei(GL_PACK_SKIP_ROWS, packing.skipRows);
         diff_api.PixelStorei(GL_PACK_SKIP_PIXELS, packing.skipPixels);
         diff_api.PixelStorei(GL_PACK_ALIGNMENT, packing.alignment);
@@ -1315,9 +1352,6 @@ int32_t crStateSaveContext(CRContext *pContext, PSSMHANDLE pSSM)
         diff_api.PixelStorei(GL_PACK_SKIP_IMAGES, packing.skipImages);
         diff_api.PixelStorei(GL_PACK_SWAP_BYTES, packing.swapBytes);
         diff_api.PixelStorei(GL_PACK_LSB_FIRST, packing.psLSBFirst);
-
-        rc = SSMR3PutMem(pSSM, pData, cbData);
-        AssertRCReturn(rc, rc);
 
         crFree(pData);
     }
@@ -1962,6 +1996,7 @@ int32_t crStateLoadContext(CRContext *pContext, CRHashTable * pCtxTable, PSSMHAN
                 size_t itemsize, datasize;
 
                 rc = SSMR3GetMem(pSSM, &pProgram->pUniforms[k].type, sizeof(GLenum));
+                AssertRCReturn(rc, rc);
                 pProgram->pUniforms[k].name = crStateLoadString(pSSM);
 
                 if (crStateIsIntUniform(pProgram->pUniforms[k].type))
@@ -1974,6 +2009,7 @@ int32_t crStateLoadContext(CRContext *pContext, CRHashTable * pCtxTable, PSSMHAN
                 if (!pProgram->pUniforms[k].data) return VERR_NO_MEMORY;
 
                 rc = SSMR3GetMem(pSSM, pProgram->pUniforms[k].data, datasize);
+                AssertRCReturn(rc, rc);
             }
         }
     }
@@ -1988,22 +2024,39 @@ int32_t crStateLoadContext(CRContext *pContext, CRHashTable * pCtxTable, PSSMHAN
 #endif
 
 
-    /*Restore front buffer image*/
+    /*Restore front/back buffer images*/
+    if (pContext->buffer.storedWidth && pContext->buffer.storedHeight)
     {
-        CRViewportState *pVP = &pContext->viewport;
-        GLint cbData = crPixelSize(GL_RGBA, GL_UNSIGNED_BYTE) * pVP->viewportH * pVP->viewportW;
-        void *pData = crAlloc(cbData);
+        CRBufferState *pBuf = &pContext->buffer;
+        GLint cbData;
+        void *pData;
 
+        cbData = crPixelSize(GL_RGBA, GL_UNSIGNED_BYTE) * pBuf->storedWidth * pBuf->storedHeight;
+
+        pData = crAlloc(cbData);
         if (!pData)
         {
-            pContext->pImage = NULL;
+            pBuf->pFrontImg = NULL;
+            pBuf->pBackImg = NULL;
             return VERR_NO_MEMORY;
         }
 
         rc = SSMR3GetMem(pSSM, pData, cbData);
         AssertRCReturn(rc, rc);
 
-        pContext->pImage = pData;
+        pBuf->pFrontImg = pData;
+
+        pData = crAlloc(cbData);
+        if (!pData)
+        {
+            pBuf->pBackImg = NULL;
+            return VERR_NO_MEMORY;
+        }
+
+        rc = SSMR3GetMem(pSSM, pData, cbData);
+        AssertRCReturn(rc, rc);
+
+        pBuf->pBackImg = pData;
     }
 
 

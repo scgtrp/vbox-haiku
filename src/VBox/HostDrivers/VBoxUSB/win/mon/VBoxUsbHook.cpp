@@ -23,7 +23,7 @@ NTSTATUS VBoxUsbHookInstall(PVBOXUSBHOOK_ENTRY pHook)
     KeAcquireSpinLock(&pHook->Lock, &Irql);
     if (pHook->fIsInstalled)
     {
-        AssertFailed();
+        WARN(("hook is marked installed, returning failure"));
         KeReleaseSpinLock(&pHook->Lock, Irql);
         return STATUS_UNSUCCESSFUL;
     }
@@ -179,7 +179,7 @@ VOID VBoxUsbHookVerifyCompletion(PVBOXUSBHOOK_ENTRY pHook, PVBOXUSBHOOK_REQUEST 
             continue;
         if (pCur->pIrp != pIrp)
             continue;
-        AssertFailed();
+        WARN(("found pending IRP(0x%p) when it should not be", pIrp));
     }
     KeReleaseSpinLock(&pHook->Lock, oldIrql);
 

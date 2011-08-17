@@ -96,7 +96,7 @@ DECLINLINE(void) pdmBlkCacheEntryRef(PPDMBLKCACHEENTRY pEntry)
     ASMAtomicIncU32(&pEntry->cRefs);
 }
 
-#ifdef DEBUG
+#ifdef VBOX_STRICT
 static void pdmBlkCacheValidate(PPDMBLKCACHEGLOBAL pCache)
 {
     /* Amount of cached data should never exceed the maximum amount. */
@@ -115,14 +115,14 @@ static void pdmBlkCacheValidate(PPDMBLKCACHEGLOBAL pCache)
 DECLINLINE(void) pdmBlkCacheLockEnter(PPDMBLKCACHEGLOBAL pCache)
 {
     RTCritSectEnter(&pCache->CritSect);
-#ifdef DEBUG
+#ifdef VBOX_STRICT
     pdmBlkCacheValidate(pCache);
 #endif
 }
 
 DECLINLINE(void) pdmBlkCacheLockLeave(PPDMBLKCACHEGLOBAL pCache)
 {
-#ifdef DEBUG
+#ifdef VBOX_STRICT
     pdmBlkCacheValidate(pCache);
 #endif
     RTCritSectLeave(&pCache->CritSect);
@@ -879,7 +879,14 @@ static DECLCALLBACK(int) pdmR3BlkCacheLoadExec(PVM pVM, PSSMHANDLE pSSM, uint32_
 
     SSMR3GetU32(pSSM, &cRefs);
 
-    if (cRefs == pBlkCacheGlobal->cRefs)
+    /*
+     * Fewer users in the saved state than in the current VM are allowed
+     * because that means that there are only new ones which don't have any saved state
+     * which can get lost.
+     * More saved entries that current ones are not allowed because this could result in
+     * lost data.
+     */
+    if (cRefs <= pBlkCacheGlobal->cRefs)
     {
         char *pszId = NULL;
 

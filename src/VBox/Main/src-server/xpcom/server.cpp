@@ -42,6 +42,7 @@
 #include <iprt/critsect.h>
 #include <iprt/getopt.h>
 #include <iprt/message.h>
+#include <iprt/string.h>
 #include <iprt/stream.h>
 #include <iprt/path.h>
 #include <iprt/timer.h>
@@ -712,15 +713,25 @@ static void signal_handler(int sig)
     }
 }
 
-static nsresult vboxsvcSpawnDaemonByReExec(const char *pszPath)
+static nsresult vboxsvcSpawnDaemonByReExec(const char *pszPath, bool fAutoShutdown, const char *pszPidFile)
 {
     PRFileDesc *readable = nsnull, *writable = nsnull;
     PRProcessAttr *attr = nsnull;
     nsresult rv = NS_ERROR_FAILURE;
     PRFileDesc *devNull;
+    unsigned args_index = 0;
     // The ugly casts are necessary because the PR_CreateProcessDetached has
     // a const array of writable strings as a parameter. It won't write. */
-    char * const args[] = { (char *)pszPath, (char *)"--auto-shutdown", 0 };
+    char * args[1 + 1 + 2 + 1];
+    args[args_index++] = (char *)pszPath;
+    if (fAutoShutdown)
+        args[args_index++] = (char *)"--auto-shutdown";
+    if (pszPidFile)
+    {
+        args[args_index++] = (char *)"--pidfile";
+        args[args_index++] = (char *)pszPidFile;
+    }
+    args[args_index++] = 0;
 
     // Use a pipe to determine when the daemon process is in the position
     // to actually process requests. The daemon will write "READY" to the pipe.
@@ -743,7 +754,7 @@ static nsresult vboxsvcSpawnDaemonByReExec(const char *pszPath)
     PR_ProcessAttrSetStdioRedirect(attr, PR_StandardOutput, devNull);
     PR_ProcessAttrSetStdioRedirect(attr, PR_StandardError, devNull);
 
-    if (PR_CreateProcessDetached(pszPath, args, nsnull, attr) != PR_SUCCESS)
+    if (PR_CreateProcessDetached(pszPath, (char * const *)args, nsnull, attr) != PR_SUCCESS)
         goto end;
 
     // Close /dev/null
@@ -781,12 +792,20 @@ int main(int argc, char **argv)
 
     static const RTGETOPTDEF s_aOptions[] =
     {
-        { "--automate",       'a', RTGETOPT_REQ_NOTHING },
-        { "--auto-shutdown",  'A', RTGETOPT_REQ_NOTHING },
-        { "--daemonize",      'd', RTGETOPT_REQ_NOTHING },
-        { "--pidfile",        'p', RTGETOPT_REQ_STRING  },
+        { "--automate",         'a', RTGETOPT_REQ_NOTHING },
+        { "--auto-shutdown",    'A', RTGETOPT_REQ_NOTHING },
+        { "--daemonize",        'd', RTGETOPT_REQ_NOTHING },
+        { "--pidfile",          'p', RTGETOPT_REQ_STRING  },
+        { "--logfile",          'F', RTGETOPT_REQ_STRING },
+        { "--logrotate",        'R', RTGETOPT_REQ_UINT32 },
+        { "--logsize",          'S', RTGETOPT_REQ_UINT64 },
+        { "--loginterval",      'I', RTGETOPT_REQ_UINT32 }
     };
 
+    const char      *pszLogFile = NULL;
+    uint32_t        cHistory = 10;                  // enable log rotation, 10 files
+    uint32_t        uHistoryFileTime = RT_SEC_1DAY; // max 1 day per file
+    uint64_t        uHistoryFileSize = 100 * _1M;   // max 100MB per file
     bool            fDaemonize = false;
     PRFileDesc      *daemon_pipe_wr = nsnull;
 
@@ -809,7 +828,7 @@ int main(int argc, char **argv)
                 break;
             }
 
-            /* Used together with '-P', see below. Internal use only. */
+            /* --auto-shutdown mode means we're already daemonized. */
             case 'A':
             {
                 gAutoShutdown = true;
@@ -827,6 +846,22 @@ int main(int argc, char **argv)
                 g_pszPidFile = ValueUnion.psz;
                 break;
             }
+
+            case 'F':
+                pszLogFile = ValueUnion.psz;
+                break;
+
+            case 'R':
+                cHistory = ValueUnion.u32;
+                break;
+
+            case 'S':
+                uHistoryFileSize = ValueUnion.u64;
+                break;
+
+            case 'I':
+                uHistoryFileTime = ValueUnion.u32;
+                break;
 
             case 'h':
             {
@@ -847,11 +882,22 @@ int main(int argc, char **argv)
 
     if (fDaemonize)
     {
-        vboxsvcSpawnDaemonByReExec(argv[0]);
+        vboxsvcSpawnDaemonByReExec(argv[0], gAutoShutdown, g_pszPidFile);
         exit(126);
     }
 
-    nsresult    rc;
+    nsresult rc;
+
+    if (!pszLogFile)
+    {
+        char szLogFile[RTPATH_MAX];
+        vrc = com::GetVBoxUserHomeDirectory(szLogFile, sizeof(szLogFile));
+        if (RT_SUCCESS(vrc))
+            vrc = RTPathAppend(szLogFile, sizeof(szLogFile), "VBoxSVC.log");
+        if (RT_SUCCESS(vrc))
+            pszLogFile = RTStrDup(szLogFile);
+    }
+    VBoxSVCLogRelCreate(pszLogFile, cHistory, uHistoryFileTime, uHistoryFileSize);
 
     daemon_pipe_wr = PR_GetInheritedFD(VBOXSVC_STARTUP_PIPE_NAME);
     RTEnvUnset("NSPR_INHERIT_FDS");

@@ -327,7 +327,7 @@ ConfigFileBase::ConfigFileBase(const com::Utf8Str *pstrFilename)
             else if (ulMajor > 1)
                 m->sv = SettingsVersion_Future;
 
-            LogRel(("Parsed settings version %d.%d to enum value %d\n", ulMajor, ulMinor, m->sv));
+            Log(("Parsed settings version %d.%d to enum value %d\n", ulMajor, ulMinor, m->sv));
         }
 
         if (m->sv == SettingsVersion_Null)
@@ -343,6 +343,14 @@ ConfigFileBase::ConfigFileBase(const com::Utf8Str *pstrFilename)
         m->strSettingsVersionFull = VBOX_XML_VERSION_FULL;
         m->sv = SettingsVersion_v1_12;
     }
+}
+
+ConfigFileBase::ConfigFileBase(const ConfigFileBase &other)
+    : m(new Data)
+{
+    copyBaseFrom(other);
+    m->strFilename = "";
+    m->fFileExists = false;
 }
 
 /**
@@ -829,13 +837,13 @@ void ConfigFileBase::setVersionAttribute(xml::ElementNode &elm)
             // in that case, downgrade to current version when writing since we can't write future versions...
             pcszVersion = "1.12";
             m->sv = SettingsVersion_v1_12;
-        break;
+            break;
 
         default:
             // silently upgrade if this is less than 1.7 because that's the oldest we can write
             pcszVersion = "1.7";
             m->sv = SettingsVersion_v1_7;
-        break;
+            break;
     }
 
     elm.setAttribute("version", Utf8StrFmt("%s-%s",
@@ -1479,9 +1487,12 @@ bool NetworkAdapter::operator==(const NetworkAdapter &n) const
                   && (strTraceFile          == n.strTraceFile)
                   && (mode                  == n.mode)
                   && (nat                   == n.nat)
-                  && (strName               == n.strName)
+                  && (strBridgedName        == n.strBridgedName)
+                  && (strHostOnlyName       == n.strHostOnlyName)
+                  && (strInternalNetworkName == n.strInternalNetworkName)
+                  && (strGenericDriver      == n.strGenericDriver)
+                  && (genericProperties     == n.genericProperties)
                   && (ulBootPriority        == n.ulBootPriority)
-                  && (fHasDisabledNAT       == n.fHasDisabledNAT)
                 )
            );
 }
@@ -1679,6 +1690,8 @@ bool AttachedDevice::operator==(const AttachedDevice &a) const
     return (    (this == &a)
              || (    (deviceType                == a.deviceType)
                   && (fPassThrough              == a.fPassThrough)
+                  && (fTempEject                == a.fTempEject)
+                  && (fNonRotational            == a.fNonRotational)
                   && (lPort                     == a.lPort)
                   && (lDevice                   == a.lDevice)
                   && (uuid                      == a.uuid)
@@ -1996,13 +2009,13 @@ void MachineConfigFile::readNetworkAdapters(const xml::ElementNode &elmNetwork,
 
 void MachineConfigFile::readAttachedNetworkMode(const xml::ElementNode &elmMode, bool fEnabled, NetworkAdapter &nic)
 {
+    NetworkAttachmentType_T enmAttachmentType = NetworkAttachmentType_Null;
+
     if (elmMode.nameEquals("NAT"))
     {
-        if (fEnabled)
-            nic.mode = NetworkAttachmentType_NAT;
+        enmAttachmentType = NetworkAttachmentType_NAT;
 
-        nic.fHasDisabledNAT = (nic.mode != NetworkAttachmentType_NAT && !fEnabled);
-        elmMode.getAttributeValue("network", nic.nat.strNetwork);    // optional network name
+        elmMode.getAttributeValue("network", nic.nat.strNetwork);
         elmMode.getAttributeValue("hostip", nic.nat.strBindIP);
         elmMode.getAttributeValue("mtu", nic.nat.u32Mtu);
         elmMode.getAttributeValue("sockrcv", nic.nat.u32SockRcv);
@@ -2047,36 +2060,62 @@ void MachineConfigFile::readAttachedNetworkMode(const xml::ElementNode &elmMode,
             nic.nat.llRules.push_back(rule);
         }
     }
-    else if (   fEnabled
-             && (   (elmMode.nameEquals("HostInterface"))
-                 || (elmMode.nameEquals("BridgedInterface")))
-            )
+    else if (   (elmMode.nameEquals("HostInterface"))
+             || (elmMode.nameEquals("BridgedInterface")))
     {
-        nic.mode = NetworkAttachmentType_Bridged;
-        elmMode.getAttributeValue("name", nic.strName);    // optional host interface name
+        enmAttachmentType = NetworkAttachmentType_Bridged;
+
+        elmMode.getAttributeValue("name", nic.strBridgedName);  // optional bridged interface name
     }
-    else if (   fEnabled
-             && elmMode.nameEquals("InternalNetwork"))
+    else if (elmMode.nameEquals("InternalNetwork"))
     {
-        nic.mode = NetworkAttachmentType_Internal;
-        if (!elmMode.getAttributeValue("name", nic.strName))    // required network name
+        enmAttachmentType = NetworkAttachmentType_Internal;
+
+        if (!elmMode.getAttributeValue("name", nic.strInternalNetworkName))    // required network name
             throw ConfigFileError(this, &elmMode, N_("Required InternalNetwork/@name element is missing"));
     }
-    else if (   fEnabled
-             && elmMode.nameEquals("HostOnlyInterface"))
+    else if (elmMode.nameEquals("HostOnlyInterface"))
     {
-        nic.mode = NetworkAttachmentType_HostOnly;
-        if (!elmMode.getAttributeValue("name", nic.strName))    // required network name
+        enmAttachmentType = NetworkAttachmentType_HostOnly;
+
+        if (!elmMode.getAttributeValue("name", nic.strHostOnlyName))    // required network name
             throw ConfigFileError(this, &elmMode, N_("Required HostOnlyInterface/@name element is missing"));
     }
-#if defined(VBOX_WITH_VDE)
-    else if (   fEnabled
-             && elmMode.nameEquals("VDE"))
+    else if (elmMode.nameEquals("GenericInterface"))
     {
-        nic.mode = NetworkAttachmentType_VDE;
-        elmMode.getAttributeValue("network", nic.strName);    // optional network name
+        enmAttachmentType = NetworkAttachmentType_Generic;
+
+        elmMode.getAttributeValue("driver", nic.strGenericDriver);  // optional network attachment driver
+
+        // get all properties
+        xml::NodesLoop nl(elmMode);
+        const xml::ElementNode *pelmModeChild;
+        while ((pelmModeChild = nl.forAllNodes()))
+        {
+            if (pelmModeChild->nameEquals("Property"))
+            {
+                Utf8Str strPropName, strPropValue;
+                if (    (pelmModeChild->getAttributeValue("name", strPropName))
+                     && (pelmModeChild->getAttributeValue("value", strPropValue))
+                   )
+                    nic.genericProperties[strPropName] = strPropValue;
+                else
+                    throw ConfigFileError(this, pelmModeChild, N_("Required GenericInterface/Property/@name or @value attribute is missing"));
+            }
+        }
     }
-#endif
+    else if (elmMode.nameEquals("VDE"))
+    {
+        enmAttachmentType = NetworkAttachmentType_Generic;
+
+        com::Utf8Str strVDEName;
+        elmMode.getAttributeValue("network", strVDEName);   // optional network name
+        nic.strGenericDriver = "VDE";
+        nic.genericProperties["network"] = strVDEName;
+    }
+
+    if (fEnabled && enmAttachmentType != NetworkAttachmentType_Null)
+        nic.mode = enmAttachmentType;
 }
 
 /**
@@ -2946,7 +2985,10 @@ void MachineConfigFile::readStorageControllers(const xml::ElementNode &elmStorag
             pelmAttached->getAttributeValue("type", strTemp);
 
             if (strTemp == "HardDisk")
+            {
                 att.deviceType = DeviceType_HardDisk;
+                pelmAttached->getAttributeValue("nonrotational", att.fNonRotational);
+            }
             else if (m->sv >= SettingsVersion_v1_9)
             {
                 // starting with 1.9 we list DVD and floppy drive info + attachments under <StorageControllers>
@@ -2954,6 +2996,7 @@ void MachineConfigFile::readStorageControllers(const xml::ElementNode &elmStorag
                 {
                     att.deviceType = DeviceType_DVD;
                     pelmAttached->getAttributeValue("passthrough", att.fPassThrough);
+                    pelmAttached->getAttributeValue("tempeject", att.fTempEject);
                 }
                 else if (strTemp == "Floppy")
                     att.deviceType = DeviceType_Floppy;
@@ -3025,6 +3068,7 @@ void MachineConfigFile::readDVDAndFloppies_pre1_9(const xml::ElementNode &elmHar
             att.lPort = 1;
             att.lDevice = 0;
             pelmHwChild->getAttributeValue("passthrough", att.fPassThrough);
+            pelmHwChild->getAttributeValue("tempeject", att.fTempEject);
 
             const xml::ElementNode *pDriveChild;
             Utf8Str strTmp;
@@ -3257,6 +3301,8 @@ void MachineConfigFile::readMachine(const xml::ElementNode &elmMachine)
         if (elmMachine.getAttributeValue("lastStateChange", str))
             parseTimestamp(timeLastStateChange, str);
             // constructor has called RTTimeNow(&timeLastStateChange) before
+        if (elmMachine.getAttributeValue("aborted", fAborted))
+            fAborted = true;
 
         // parse Hardware before the other elements because other things depend on it
         const xml::ElementNode *pelmHardware;
@@ -3421,11 +3467,11 @@ void MachineConfigFile::buildHardwareXML(xml::ElementNode &elmParent,
 
          switch (hw.firmwareType)
          {
-            case FirmwareType_EFI:      pcszFirmware = "EFI";   break;
-            case FirmwareType_EFI32:    pcszFirmware = "EFI32"; break;
-            case FirmwareType_EFI64:    pcszFirmware = "EFI64"; break;
+            case FirmwareType_EFI:      pcszFirmware = "EFI";     break;
+            case FirmwareType_EFI32:    pcszFirmware = "EFI32";   break;
+            case FirmwareType_EFI64:    pcszFirmware = "EFI64";   break;
             case FirmwareType_EFIDUAL:  pcszFirmware = "EFIDUAL"; break;
-            default:                    pcszFirmware = "None"; break;
+            default:                    pcszFirmware = "None";    break;
          }
          pelmFirmware->setAttribute("type", pcszFirmware);
     }
@@ -3646,6 +3692,8 @@ void MachineConfigFile::buildHardwareXML(xml::ElementNode &elmParent,
                         ++cDVDs;
 
                         pelmDVD->setAttribute("passthrough", att.fPassThrough);
+                        if (att.fTempEject)
+                            pelmDVD->setAttribute("tempeject", att.fTempEject);
                         if (!att.uuid.isEmpty())
                             pelmDVD->createChild("Image")->setAttribute("uuid", att.uuid.toStringCurly());
                         else if (att.strHostDriveSrc.length())
@@ -3743,39 +3791,40 @@ void MachineConfigFile::buildHardwareXML(xml::ElementNode &elmParent,
                     pelmNAT = pelmAdapter->createChild("NAT");
                     if (nic.nat.strNetwork.length())
                         pelmNAT->setAttribute("network", nic.nat.strNetwork);
-                break;
+                    break;
 
                 case NetworkAttachmentType_Bridged:
-                    pelmAdapter->createChild("BridgedInterface")->setAttribute("name", nic.strName);
-                break;
+                    pelmAdapter->createChild("BridgedInterface")->setAttribute("name", nic.strBridgedName);
+                    break;
 
                 case NetworkAttachmentType_Internal:
-                    pelmAdapter->createChild("InternalNetwork")->setAttribute("name", nic.strName);
-                break;
+                    pelmAdapter->createChild("InternalNetwork")->setAttribute("name", nic.strInternalNetworkName);
+                    break;
 
                 case NetworkAttachmentType_HostOnly:
-                    pelmAdapter->createChild("HostOnlyInterface")->setAttribute("name", nic.strName);
-                break;
-
-#if defined(VBOX_WITH_VDE)
-                case NetworkAttachmentType_VDE:
-                    pelmAdapter->createChild("VDE")->setAttribute("network", nic.strName);
-                break;
-#endif
+                    pelmAdapter->createChild("HostOnlyInterface")->setAttribute("name", nic.strHostOnlyName);
+                    break;
 
                 default: /*case NetworkAttachmentType_Null:*/
-                break;
+                    break;
             }
         }
         else
         {
             /* m->sv >= SettingsVersion_v1_10 */
-            xml::ElementNode *pelmDisabledNode= NULL;
-            if (nic.fHasDisabledNAT)
-                pelmDisabledNode = pelmAdapter->createChild("DisabledModes");
-            if (nic.fHasDisabledNAT)
-                buildNetworkXML(NetworkAttachmentType_NAT, *pelmDisabledNode, nic);
-            buildNetworkXML(nic.mode, *pelmAdapter, nic);
+            xml::ElementNode *pelmDisabledNode = NULL;
+            pelmDisabledNode = pelmAdapter->createChild("DisabledModes");
+            if (nic.mode != NetworkAttachmentType_NAT)
+                buildNetworkXML(NetworkAttachmentType_NAT, *pelmDisabledNode, false, nic);
+            if (nic.mode != NetworkAttachmentType_Bridged)
+                buildNetworkXML(NetworkAttachmentType_Bridged, *pelmDisabledNode, false, nic);
+            if (nic.mode != NetworkAttachmentType_Internal)
+                buildNetworkXML(NetworkAttachmentType_HostOnly, *pelmDisabledNode, false, nic);
+            if (nic.mode != NetworkAttachmentType_HostOnly)
+                buildNetworkXML(NetworkAttachmentType_HostOnly, *pelmDisabledNode, false, nic);
+            if (nic.mode != NetworkAttachmentType_Generic)
+                buildNetworkXML(NetworkAttachmentType_Generic, *pelmDisabledNode, false, nic);
+            buildNetworkXML(nic.mode, *pelmAdapter, true, nic);
         }
     }
 
@@ -3846,7 +3895,8 @@ void MachineConfigFile::buildHardwareXML(xml::ElementNode &elmParent,
             /* fall through */
         case AudioControllerType_AC97:
         default:
-            pcszController = "AC97"; break;
+            pcszController = "AC97";
+            break;
     }
     pelmAudio->setAttribute("controller", pcszController);
 
@@ -3971,10 +4021,12 @@ void MachineConfigFile::buildHardwareXML(xml::ElementNode &elmParent,
  * Fill a <Network> node. Only relevant for XML version >= v1_10.
  * @param mode
  * @param elmParent
- * @param nice
+ * @param fEnabled
+ * @param nic
  */
 void MachineConfigFile::buildNetworkXML(NetworkAttachmentType_T mode,
                                         xml::ElementNode &elmParent,
+                                        bool fEnabled,
                                         const NetworkAdapter &nic)
 {
     switch (mode)
@@ -4039,28 +4091,41 @@ void MachineConfigFile::buildNetworkXML(NetworkAttachmentType_T mode,
                 if ((*rule).u16GuestPort)
                     pelmPF->setAttribute("guestport", (*rule).u16GuestPort);
             }
-        break;
+            break;
 
         case NetworkAttachmentType_Bridged:
-            elmParent.createChild("BridgedInterface")->setAttribute("name", nic.strName);
-        break;
+            if (fEnabled || !nic.strBridgedName.isEmpty())
+                elmParent.createChild("BridgedInterface")->setAttribute("name", nic.strBridgedName);
+            break;
 
         case NetworkAttachmentType_Internal:
-            elmParent.createChild("InternalNetwork")->setAttribute("name", nic.strName);
-        break;
+            if (fEnabled || !nic.strInternalNetworkName.isEmpty())
+                elmParent.createChild("InternalNetwork")->setAttribute("name", nic.strInternalNetworkName);
+            break;
 
         case NetworkAttachmentType_HostOnly:
-            elmParent.createChild("HostOnlyInterface")->setAttribute("name", nic.strName);
-        break;
+            if (fEnabled || !nic.strHostOnlyName.isEmpty())
+                elmParent.createChild("HostOnlyInterface")->setAttribute("name", nic.strHostOnlyName);
+            break;
 
-#ifdef VBOX_WITH_VDE
-        case NetworkAttachmentType_VDE:
-            elmParent.createChild("VDE")->setAttribute("network", nic.strName);
-        break;
-#endif
+        case NetworkAttachmentType_Generic:
+            if (fEnabled || !nic.strGenericDriver.isEmpty() || nic.genericProperties.size())
+            {
+                xml::ElementNode *pelmMode = elmParent.createChild("GenericInterface");
+                pelmMode->setAttribute("driver", nic.strGenericDriver);
+                for (StringsMap::const_iterator it = nic.genericProperties.begin();
+                     it != nic.genericProperties.end();
+                     ++it)
+                {
+                    xml::ElementNode *pelmProp = pelmMode->createChild("Property");
+                    pelmProp->setAttribute("name", it->first);
+                    pelmProp->setAttribute("value", it->second);
+                }
+            }
+            break;
 
         default: /*case NetworkAttachmentType_Null:*/
-        break;
+            break;
     }
 }
 
@@ -4169,16 +4234,20 @@ void MachineConfigFile::buildStorageControllersXML(xml::ElementNode &elmParent,
             {
                 case DeviceType_HardDisk:
                     pcszType = "HardDisk";
-                break;
+                    if (att.fNonRotational)
+                        pelmDevice->setAttribute("nonrotational", att.fNonRotational);
+                    break;
 
                 case DeviceType_DVD:
                     pcszType = "DVD";
                     pelmDevice->setAttribute("passthrough", att.fPassThrough);
-                break;
+                    if (att.fTempEject)
+                        pelmDevice->setAttribute("tempeject", att.fTempEject);
+                    break;
 
                 case DeviceType_Floppy:
                     pcszType = "Floppy";
-                break;
+                    break;
             }
 
             pelmDevice->setAttribute("type", pcszType);
@@ -4511,13 +4580,18 @@ void MachineConfigFile::bumpSettingsVersionIfNeeded()
 
     if (m->sv < SettingsVersion_v1_12)
     {
-        // VirtualBox 4.1 adds a promiscuous mode policy to the network adapters.
+        // VirtualBox 4.1 adds a promiscuous mode policy to the network
+        // adapters and a generic network driver transport.
         NetworkAdaptersList::const_iterator netit;
         for (netit = hardwareMachine.llNetworkAdapters.begin();
              netit != hardwareMachine.llNetworkAdapters.end();
              ++netit)
         {
-            if (netit->enmPromiscModePolicy != NetworkAdapterPromiscModePolicy_Deny)
+            if (   netit->enmPromiscModePolicy != NetworkAdapterPromiscModePolicy_Deny
+                || netit->mode == NetworkAttachmentType_Generic
+                || !netit->strGenericDriver.isEmpty()
+                || netit->genericProperties.size()
+               )
             {
                 m->sv = SettingsVersion_v1_12;
                 break;

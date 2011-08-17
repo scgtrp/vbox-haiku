@@ -199,7 +199,7 @@ DECLINLINE(int) rtFileAioReqPrepareTransfer(RTFILEAIOREQ hReq, RTFILE hFile,
     pReqInt->AioCB.aio_sigevent.sigev_notify = SIGEV_KEVENT;
     pReqInt->AioCB.aio_sigevent.sigev_value.sival_ptr = pReqInt;
     pReqInt->AioCB.aio_lio_opcode = uTransferDirection;
-    pReqInt->AioCB.aio_fildes     = (int)hFile;
+    pReqInt->AioCB.aio_fildes     = RTFileToNative(hFile);
     pReqInt->AioCB.aio_offset     = off;
     pReqInt->AioCB.aio_nbytes     = cbTransfer;
     pReqInt->AioCB.aio_buf        = pvBuf;
@@ -235,7 +235,7 @@ RTDECL(int) RTFileAioReqPrepareFlush(RTFILEAIOREQ hReq, RTFILE hFile, void *pvUs
     RTFILEAIOREQ_NOT_STATE_RETURN_RC(pReqInt, SUBMITTED, VERR_FILE_AIO_IN_PROGRESS);
 
     pReqInt->fFlush           = true;
-    pReqInt->AioCB.aio_fildes = (int)hFile;
+    pReqInt->AioCB.aio_fildes = RTFileToNative(hFile);
     pReqInt->AioCB.aio_offset = 0;
     pReqInt->AioCB.aio_nbytes = 0;
     pReqInt->AioCB.aio_buf    = NULL;
@@ -416,7 +416,8 @@ RTDECL(int) RTFileAioCtxSubmit(RTFILEAIOCTX hAioCtx, PRTFILEAIOREQ pahReqs, size
                 {
                     pReqInt = pahReqs[i];
                     rcBSD = aio_error(&pReqInt->AioCB);
-                    if (rcBSD == EINVAL || rcBSD == EAGAIN)
+                    if (   rcBSD == -1
+                        && errno == EINVAL)
                     {
                         /* Was not submitted. */
                         RTFILEAIOREQ_SET_STATE(pReqInt, PREPARED);

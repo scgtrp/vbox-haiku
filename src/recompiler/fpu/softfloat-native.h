@@ -1,7 +1,9 @@
 /* Native implementation of soft float functions */
+#define __C99FEATURES__
 #include <math.h>
 
-#if (defined(_BSD) && !defined(__APPLE__) && !defined(__FreeBSD__)) || defined(HOST_SOLARIS) /* VBox: Added __FreeBSD__ */
+#if (defined(CONFIG_BSD) && !defined(__APPLE__) && !defined(__GLIBC__) && !defined(__FreeBSD__)) \
+    || defined(CONFIG_SOLARIS) /* VBox: Added __FreeBSD__ */
 #include <ieeefp.h>
 #define fabsf(f) ((float)fabs(f))
 #else
@@ -19,8 +21,9 @@
  *   Solaris 10 with GCC4 does not need these macros as they
  *   are defined in <iso/math_c99.h> with a compiler directive
  */
-#if defined(HOST_SOLARIS) && (( HOST_SOLARIS <= 9 ) || ((HOST_SOLARIS >= 10) \
-                                                        && (__GNUC__ < 4))) \
+#if defined(CONFIG_SOLARIS) && \
+           ((CONFIG_SOLARIS_VERSION <= 9 ) || \
+           ((CONFIG_SOLARIS_VERSION == 10) && (__GNUC__ < 4))) \
     || (defined(__OpenBSD__) && (OpenBSD < 200811)) \
     || defined(__HAIKU__)
 /*
@@ -62,7 +65,7 @@
 #define isunordered(x,y)        unordered(x, y)
 #endif
 
-#if defined(__sun__) && !defined(NEED_LIBSUNMATH)
+#if defined(__sun__) && !defined(CONFIG_NEEDS_LIBSUNMATH)
 
 #ifndef isnan
 # define isnan(x) \
@@ -112,7 +115,8 @@ typedef union {
 /*----------------------------------------------------------------------------
 | Software IEC/IEEE floating-point rounding mode.
 *----------------------------------------------------------------------------*/
-#if (defined(HOST_BSD) && !defined(__APPLE__)) || defined(HOST_SOLARIS)
+#if (defined(CONFIG_BSD) && !defined(__APPLE__) && !defined(__GLIBC__)) \
+    || defined(CONFIG_SOLARIS)
 #if defined(__OpenBSD__)
 #define FE_RM FP_RM
 #define FE_RP FP_RP
@@ -123,13 +127,6 @@ enum {
     float_round_down         = FP_RM,
     float_round_up           = FP_RP,
     float_round_to_zero      = FP_RZ
-};
-#elif defined(__arm__)
-enum {
-    float_round_nearest_even = 0,
-    float_round_down         = 1,
-    float_round_up           = 2,
-    float_round_to_zero      = 3
 };
 #else
 enum {

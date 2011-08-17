@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2006-2010 Oracle Corporation
+ * Copyright (C) 2006-2011 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -414,7 +414,7 @@ typedef struct VMCPU
 /** VM Flags that cause the HWACCM loops to go back to ring-3. */
 #define VM_FF_HWACCM_TO_R3_MASK                 (VM_FF_TM_VIRTUAL_SYNC | VM_FF_PGM_NEED_HANDY_PAGES | VM_FF_PGM_NO_MEMORY | VM_FF_PDM_QUEUES | VM_FF_EMT_RENDEZVOUS)
 /** VMCPU Flags that cause the HWACCM loops to go back to ring-3. */
-#define VMCPU_FF_HWACCM_TO_R3_MASK              (VMCPU_FF_TO_R3 | VMCPU_FF_TIMER)
+#define VMCPU_FF_HWACCM_TO_R3_MASK              (VMCPU_FF_TO_R3 | VMCPU_FF_TIMER | VMCPU_FF_PDM_CRITSECT)
 
 /** All the forced VM flags. */
 #define VM_FF_ALL_MASK                          (~0U)
@@ -627,6 +627,43 @@ typedef struct VMCPU
               (rc))
 #endif
 
+/** @def VMCPU_ASSERT_EMT_OR_GURU
+ * Asserts that the current thread IS the emulation thread (EMT) of the
+ * specified virtual CPU.
+ */
+#if defined(IN_RC) || defined(IN_RING0)
+# define VMCPU_ASSERT_EMT_OR_GURU(pVCpu)    Assert(   VMCPU_IS_EMT(pVCpu) \
+                                                   || pVCpu->CTX_SUFF(pVM)->enmVMState == VMSTATE_GURU_MEDITATION \
+                                                   || pVCpu->CTX_SUFF(pVM)->enmVMState == VMSTATE_GURU_MEDITATION_LS )
+#else
+# define VMCPU_ASSERT_EMT_OR_GURU(pVCpu) \
+    AssertMsg(   VMCPU_IS_EMT(pVCpu) \
+              || pVCpu->CTX_SUFF(pVM)->enmVMState == VMSTATE_GURU_MEDITATION \
+              || pVCpu->CTX_SUFF(pVM)->enmVMState == VMSTATE_GURU_MEDITATION_LS, \
+              ("Not emulation thread! Thread=%RTnthrd ThreadEMT=%RTnthrd idCpu=%#x\n", \
+               RTThreadNativeSelf(), (pVCpu)->hNativeThread, (pVCpu)->idCpu))
+#endif
+
+/** @def VMCPU_ASSERT_EMT_OR_NOT_RUNNING
+ * Asserts that the current thread IS the emulation thread (EMT) of the
+ * specified virtual CPU when the VM is running.
+ */
+#if defined(IN_RC) || defined(IN_RING0)
+# define VMCPU_ASSERT_EMT_OR_NOT_RUNNING(pVCpu) \
+    Assert(   VMCPU_IS_EMT(pVCpu) \
+           || pVCpu->CTX_SUFF(pVM)->enmVMState == VMSTATE_RUNNING \
+           || pVCpu->CTX_SUFF(pVM)->enmVMState == VMSTATE_RUNNING_LS \
+           || pVCpu->CTX_SUFF(pVM)->enmVMState == VMSTATE_RUNNING_FT )
+#else
+# define VMCPU_ASSERT_EMT_OR_NOT_RUNNING(pVCpu) \
+    AssertMsg(   VMCPU_IS_EMT(pVCpu) \
+              || pVCpu->CTX_SUFF(pVM)->enmVMState == VMSTATE_RUNNING \
+              || pVCpu->CTX_SUFF(pVM)->enmVMState == VMSTATE_RUNNING_LS \
+              || pVCpu->CTX_SUFF(pVM)->enmVMState == VMSTATE_RUNNING_FT, \
+              ("Not emulation thread! Thread=%RTnthrd ThreadEMT=%RTnthrd idCpu=%#x\n", \
+               RTThreadNativeSelf(), (pVCpu)->hNativeThread, (pVCpu)->idCpu))
+#endif
+
 /** @def VM_ASSERT_EMT0
  * Asserts that the current thread IS emulation thread \#0 (EMT0).
  */
@@ -790,10 +827,10 @@ typedef struct VM
 
     /** @name Various items that are frequently accessed.
      * @{ */
-    /** Raw ring-3 indicator.  */
-    bool                        fRawR3Enabled;
-    /** Raw ring-0 indicator. */
-    bool                        fRawR0Enabled;
+    /** Whether to recompile user mode code or run it raw/hm. */
+    bool                        fRecompileUser;
+    /** Whether to recompile supervisor mode code or run it raw/hm. */
+    bool                        fRecompileSupervisor;
     /** PATM enabled flag.
      * This is placed here for performance reasons. */
     bool                        fPATMEnabled;
@@ -812,12 +849,25 @@ typedef struct VM
     bool                        fUseLargePages;
     /** @} */
 
+    /** @name Debugging
+     * @{ */
+    /** Raw-mode Context VM Pointer. */
+    RCPTRTYPE(RTTRACEBUF)       hTraceBufRC;
+    /** Alignment padding */
+    uint32_t                    uPadding3;
+    /** Ring-3 Host Context VM Pointer. */
+    R3PTRTYPE(RTTRACEBUF)       hTraceBufR3;
+    /** Ring-0 Host Context VM Pointer. */
+    R0PTRTYPE(RTTRACEBUF)       hTraceBufR0;
+    /** @} */
 
-    /* padding to make gnuc put the StatQemuToGC where msc does. */
 #if HC_ARCH_BITS == 32
-    uint32_t                    padding0;
+    /** Alignment padding.. */
+    uint32_t                    uPadding4;
 #endif
 
+    /** @name Switcher statistics (remove)
+     * @{ */
     /** Profiling the total time from Qemu to GC. */
     STAMPROFILEADV              StatTotalQemuToGC;
     /** Profiling the total time from GC to Qemu. */
@@ -841,10 +891,13 @@ typedef struct VM
     STAMPROFILEADV              StatSwitcherLidt;
     STAMPROFILEADV              StatSwitcherLldt;
     STAMPROFILEADV              StatSwitcherTSS;
+    /** @} */
 
+#if HC_ARCH_BITS != 64
     /** Padding - the unions must be aligned on a 64 bytes boundary and the unions
      *  must start at the same offset on both 64-bit and 32-bit hosts. */
-    uint8_t                     abAlignment1[HC_ARCH_BITS == 32 ? 48 : 24];
+    uint8_t                     abAlignment1[HC_ARCH_BITS == 32 ? 32 : 0];
+#endif
 
     /** CPUM part. */
     union
@@ -861,7 +914,7 @@ typedef struct VM
 #ifdef ___VMMInternal_h
         struct VMM  s;
 #endif
-        uint8_t     padding[1536];      /* multiple of 64 */
+        uint8_t     padding[1600];      /* multiple of 64 */
     } vmm;
 
     /** PGM part. */
@@ -915,7 +968,7 @@ typedef struct VM
 #ifdef ___PDMInternal_h
         struct PDM s;
 #endif
-        uint8_t     padding[1600];      /* multiple of 64 */
+        uint8_t     padding[1920];      /* multiple of 64 */
     } pdm;
 
     /** IOM part. */
@@ -960,7 +1013,7 @@ typedef struct VM
 #ifdef ___TMInternal_h
         struct TM   s;
 #endif
-        uint8_t     padding[2176];      /* multiple of 64 */
+        uint8_t     padding[2432];      /* multiple of 64 */
     } tm;
 
     /** DBGF part. */
@@ -1021,7 +1074,7 @@ typedef struct VM
 
 
     /** Padding for aligning the cpu array on a page boundary. */
-    uint8_t         abAlignment2[1502];
+    uint8_t         abAlignment2[862];
 
     /* ---- end small stuff ---- */
 
@@ -1047,3 +1100,4 @@ RT_C_DECLS_END
 /** @} */
 
 #endif
+

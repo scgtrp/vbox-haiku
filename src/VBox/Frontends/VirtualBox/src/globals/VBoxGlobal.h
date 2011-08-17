@@ -158,7 +158,7 @@ public:
     bool processArgs();
 
     bool switchToMachine(CMachine &machine);
-    bool launchMachine(CMachine &machine);
+    bool launchMachine(CMachine &machine, bool fHeadless = false);
 
     bool isVMConsoleProcess() const { return !vmUuid.isNull(); }
     bool showStartVMErrors() const { return mShowStartVMErrors; }
@@ -176,6 +176,11 @@ public:
     bool isKWinManaged() const { return mIsKWinManaged; }
 
     const QRect availableGeometry(int iScreen = 0) const;
+
+    bool isPatmDisabled() const { return mDisablePatm; }
+    bool isCsamDisabled() const { return mDisableCsam; }
+    bool isSupervisorCodeExecedRecompiled() const { return mRecompileSupervisor; }
+    bool isUserCodeExecedRecompiled()       const { return mRecompileUser; }
 
 #ifdef VBOX_WITH_DEBUGGER_GUI
     bool isDebuggerEnabled(CMachine &aMachine);
@@ -314,6 +319,9 @@ public:
         AssertMsg (!mDiskTypes.value (t).isNull(), ("No text for %d", t));
         return mDiskTypes.value (t);
     }
+    QString differencingMediumTypeName() const { return mDiskTypes_Differencing; }
+
+    QString toString(KMediumVariant mediumVariant) const;
 
     /**
      * Similar to toString (KMediumType), but returns 'Differencing' for
@@ -580,6 +588,8 @@ public:
 
     void startEnumeratingMedia();
 
+    void reloadProxySettings();
+
     /**
      * Returns a list of all currently registered media. This list is used to
      * globally track the accessibility state of all media on a dedicated thread.
@@ -635,7 +645,6 @@ public:
 
     /* public static stuff */
 
-    static bool shouldWarnAboutToLowVRAM(const CMachine *pMachine = 0);
     static bool isDOSType (const QString &aOSTypeId);
 
     static QString languageId();
@@ -662,7 +671,7 @@ public:
     static QString formatSize (quint64 aSize, uint aDecimal = 2,
                                VBoxDefs::FormatSize aMode = VBoxDefs::FormatSize_Round);
 
-    static quint64 requiredVideoMemory (CMachine *aMachine = 0, int cMonitors = 1);
+    static quint64 requiredVideoMemory(const QString &strGuestOSTypeId, int cMonitors = 1);
 
     static QString locationForHTML (const QString &aFileName);
 
@@ -714,8 +723,9 @@ public:
 #endif
 
 #ifdef VBOX_WITH_CRHGSMI
-    static quint64 required3DWddmOffscreenVideoMemory(CMachine *aMachine = 0, int cMonitors = 1);
-#endif
+    static bool isWddmCompatibleOsType(const QString &strGuestOSTypeId);
+    static quint64 required3DWddmOffscreenVideoMemory(const QString &strGuestOSTypeId, int cMonitors = 1);
+#endif /* VBOX_WITH_CRHGSMI */
 
 #ifdef Q_WS_MAC
     bool isSheetWindowsAllowed(QWidget *pParent) const;
@@ -760,9 +770,8 @@ public slots:
     bool openURL (const QString &aURL);
 
     void showRegistrationDialog (bool aForce = true);
-    void showUpdateDialog (bool aForce = true);
-    void perDayNewVersionNotifier();
     void sltGUILanguageChange(QString strLang);
+    void sltProcessGlobalSettingChange();
 
 protected:
 
@@ -794,7 +803,6 @@ private:
 #ifdef VBOX_WITH_REGISTRATION
     UIRegistrationWzd *mRegDlg;
 #endif
-    VBoxUpdateDlg *mUpdDlg;
 
     QString vmUuid;
     QList<QUrl> m_ArgUrlList;
@@ -813,6 +821,15 @@ private:
     VBoxDefs::RenderMode vm_render_mode;
     const char * vm_render_mode_str;
     bool mIsKWinManaged;
+
+    /** The --disable-patm option. */
+    bool mDisablePatm;
+    /** The --disable-csam option. */
+    bool mDisableCsam;
+    /** The --recompile-supervisor option. */
+    bool mRecompileSupervisor;
+    /** The --recompile-user option. */
+    bool mRecompileUser;
 
 #ifdef VBOX_WITH_DEBUGGER_GUI
     /** Whether the debugger should be accessible or not.

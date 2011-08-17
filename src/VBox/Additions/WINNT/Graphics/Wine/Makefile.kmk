@@ -173,9 +173,9 @@ wined3d_SOURCES      := \
     wined3d/wined3d.def
 wined3d_SOURCES.amd64 = vbox/libWineStub/debug.c
 wined3d_LIBS.x86      = \
-    $(PATH_LIB)/libWine$(VBOX_SUFF_LIB)
+    $(PATH_STAGE_LIB)/libWine$(VBOX_SUFF_LIB)
 wined3d_SDKS.amd64    = WINDDKWLH
-    
+
 ifdef VBOX_WITH_WDDM
 DLLS += wined3dwddm
 wined3dwddm_EXTENDS        = wined3d
@@ -187,18 +187,28 @@ wined3dwddm_INCS.x86       = $(NO_SUCH_VARIABLE)
 wined3dwddm_LIBS.x86       = $(NO_SUCH_VARIABLE)
 wined3dwddm_DEFS           = $(subst __i386__,,$(wined3d_DEFS)) VBOX_WITH_WDDM VBOX_WINE_WITHOUT_LIBWINE
 wined3dwddm_DEFS.x86       = $(NO_SUCH_VARIABLE)
-wined3dwddm_SOURCES        = $(subst wined3d.def,wined3dwddm.def,$(wined3d_SOURCES)) vbox/libWineStub/debug.c
+wined3dwddm_SOURCES        = $(subst wined3d.def,wined3dwddm.def,$(wined3d_SOURCES)) vbox/libWineStub/debug.c wined3d/vboxext.c
 wined3dwddm_SOURCES.x86    = $(NO_SUCH_VARIABLE)
 wined3dwddm_SOURCES.amd64  = $(NO_SUCH_VARIABLE)
 wined3dwddm_SDKS           = WINDDKWLH
 wined3dwddm_SDKS.amd64     = $(NO_SUCH_VARIABLE)
+#VBOX_WINE_WITH_IPRT is used for debugging currently to enable Assert & stuff
+ifdef VBOX_WINE_WITH_IPRT
+wined3dwddm_LIBS          += \
+							$(VBOX_LIB_IPRT_GUEST_R3) \
+							$(VBOX_LIB_VBGL_R3)
+wined3dwddm_DEFS          += VBOX_WINE_WITH_IPRT
+endif
+wined3dwddm_DEFS          += VBOX_WINE_WITH_SINGLE_CONTEXT
 
 DLLS.amd64 += wined3dwddm-x86
 wined3dwddm-x86_EXTENDS    = wined3dwddm
 wined3dwddm-x86_BLD_TRG_ARCH = x86
-#wined3dwddm-x86_LIBS = \
-	$(VBOX_LIB_IPRT_GUEST_R3_X86) \
-	$(VBOX_LIB_VBGL_R3_X86)
+ifdef VBOX_WINE_WITH_IPRT
+wined3dwddm-x86_LIBS = \
+						$(VBOX_LIB_IPRT_GUEST_R3_X86) \
+						$(VBOX_LIB_VBGL_R3_X86)
+endif
 wined3dwddm-x86_DEFS       = $(wined3dwddm_DEFS) VBOX_WDDM_WOW64
 endif
 
@@ -236,9 +246,9 @@ VBoxD3D8_SOURCES      := \
     d3d8/volumetexture.c \
     d3d8/d3d8.def
 VBoxD3D8_LIBS.x86 = \
-    $(PATH_LIB)/libWine$(VBOX_SUFF_LIB)
+    $(PATH_STAGE_LIB)/libWine$(VBOX_SUFF_LIB)
 VBoxD3D8_LIBS     = \
-    $(PATH_LIB)/wined3d$(VBOX_SUFF_LIB)
+    $(PATH_STAGE_LIB)/wined3d$(VBOX_SUFF_LIB)
 VBoxD3D8_SOURCES.amd64 = vbox/libWineStub/debug.c
 VBoxD3D8_SDKS.amd64    = WINDDKWLH
 
@@ -277,16 +287,16 @@ VBoxD3D9_SOURCES      := \
     d3d9/vertexshader.c \
     d3d9/volume.c \
     d3d9/volumetexture.c
- 
+
 VBoxD3D9_SOURCES.x86      = \
 	d3d9/d3d9.def
 VBoxD3D9_SOURCES.amd64    = \
 	vbox/libWineStub/debug.c \
 	d3d9/d3d9xpdm.def
 VBoxD3D9_LIBS.x86         = \
-    $(PATH_LIB)/libWine$(VBOX_SUFF_LIB)
+    $(PATH_STAGE_LIB)/libWine$(VBOX_SUFF_LIB)
 VBoxD3D9_LIBS             = \
-    $(PATH_LIB)/wined3d$(VBOX_SUFF_LIB)
+    $(PATH_STAGE_LIB)/wined3d$(VBOX_SUFF_LIB)
 VBoxD3D9_SDKS.amd64    = WINDDKWLH
 
 ifdef VBOX_WITH_WDDM
@@ -302,16 +312,27 @@ VBoxD3D9wddm_DEFS          += $(subst __i386__,,$(VBoxD3D9_DEFS)) VBOX_WITH_WDDM
 VBoxD3D9wddm_SOURCES        = $(VBoxD3D9_SOURCES) d3d9/d3d9wddm.def vbox/libWineStub/debug.c
 VBoxD3D9wddm_SOURCES.x86    = $(NO_SUCH_VARIABLE)
 VBoxD3D9wddm_SOURCES.amd64  = $(NO_SUCH_VARIABLE)
-VBoxD3D9wddm_LIBS           = $(PATH_LIB)/wined3dwddm$(VBOX_SUFF_LIB)
+VBoxD3D9wddm_LIBS           = $(PATH_STAGE_LIB)/wined3dwddm$(VBOX_SUFF_LIB)
 VBoxD3D9wddm_LIBS.x86       = $(NO_SUCH_VARIABLE)
 VBoxD3D9wddm_SDKS           = WINDDKWLH
 VBoxD3D9wddm_SDKS.amd64     = $(NO_SUCH_VARIABLE)
+ifdef VBOX_WINE_WITH_IPRT
+VBoxD3D9wddm_LIBS          += \
+							$(VBOX_LIB_IPRT_GUEST_R3) \
+							$(VBOX_LIB_VBGL_R3)
+VBoxD3D9wddm_DEFS          += VBOX_WINE_WITH_IPRT
+endif
 
 DLLS.amd64 += VBoxD3D9wddm-x86
 VBoxD3D9wddm-x86_EXTENDS      = VBoxD3D9wddm
 VBoxD3D9wddm-x86_BLD_TRG_ARCH = x86
-VBoxD3D9wddm-x86_LIBS         = $(PATH_LIB)/wined3dwddm-x86$(VBOX_SUFF_LIB)
+VBoxD3D9wddm-x86_LIBS         = $(PATH_STAGE_LIB)/wined3dwddm-x86$(VBOX_SUFF_LIB)
 VBoxD3D9wddm-x86_DEFS         = $(VBoxD3D9wddm_DEFS) VBOX_WDDM_WOW64
+ifdef VBOX_WINE_WITH_IPRT
+VBoxD3D9wddm-x86_LIBS        += \
+						$(VBOX_LIB_IPRT_GUEST_R3_X86) \
+						$(VBOX_LIB_VBGL_R3_X86)
+endif
 endif
 
 DLLS += d3d8
@@ -338,6 +359,6 @@ d3d9_SOURCES.x86   =  \
 d3d9_SOURCES.amd64 =  \
     switcher/sw_d3d9xpdm.def
 d3d9_SDKS.amd64    = WINDDKWLH
-    
+
 
 include $(KBUILD_PATH)/subfooter.kmk

@@ -778,17 +778,6 @@ typedef struct BUSLOGICTASKSTATE
 
 #ifndef VBOX_DEVICE_STRUCT_TESTCASE
 
-RT_C_DECLS_BEGIN
-PDMBOTHCBDECL(int) buslogicIOPortWrite (PPDMDEVINS pDevIns, void *pvUser,
-                                        RTIOPORT Port, uint32_t u32, unsigned cb);
-PDMBOTHCBDECL(int) buslogicIOPortRead (PPDMDEVINS pDevIns, void *pvUser,
-                                       RTIOPORT Port, uint32_t *pu32, unsigned cb);
-PDMBOTHCBDECL(int) buslogicMMIOWrite(PPDMDEVINS pDevIns, void *pvUser,
-                                     RTGCPHYS GCPhysAddr, void *pv, unsigned cb);
-PDMBOTHCBDECL(int) buslogicMMIORead(PPDMDEVINS pDevIns, void *pvUser,
-                                    RTGCPHYS GCPhysAddr, void *pv, unsigned cb);
-RT_C_DECLS_END
-
 #define PDMIBASE_2_PBUSLOGICDEVICE(pInterface)     ( (PBUSLOGICDEVICE)((uintptr_t)(pInterface) - RT_OFFSETOF(BUSLOGICDEVICE, IBase)) )
 #define PDMISCSIPORT_2_PBUSLOGICDEVICE(pInterface) ( (PBUSLOGICDEVICE)((uintptr_t)(pInterface) - RT_OFFSETOF(BUSLOGICDEVICE, ISCSIPort)) )
 #define PDMILEDPORTS_2_PBUSLOGICDEVICE(pInterface) ( (PBUSLOGICDEVICE)((uintptr_t)(pInterface) - RT_OFFSETOF(BUSLOGICDEVICE, ILed)) )
@@ -949,7 +938,7 @@ static void buslogicIntiateHardReset(PBUSLOGIC pBusLogic)
  * Send a mailbox with set status codes to the guest.
  *
  * @returns nothing.
- * @param   pBusLogicR                Pointer to the BubsLogic device instance.
+ * @param   pBusLogic                 Pointer to the BusLogic device instance.
  * @param   pTaskState                Pointer to the task state with the mailbox to send.
  * @param   uHostAdapterStatus        The host adapter status code to set.
  * @param   uDeviceStatus             The target device status to set.
@@ -1798,7 +1787,7 @@ PDMBOTHCBDECL(int) buslogicMMIORead(PPDMDEVINS pDevIns, void *pvUser,
  * @param   cb          Number of bytes to write.
  */
 PDMBOTHCBDECL(int) buslogicMMIOWrite(PPDMDEVINS pDevIns, void *pvUser,
-                                     RTGCPHYS GCPhysAddr, void *pv, unsigned cb)
+                                     RTGCPHYS GCPhysAddr, void const *pv, unsigned cb)
 {
     /* the linux driver does not make use of the MMIO area. */
     AssertMsgFailed(("MMIO Write\n"));
@@ -2417,7 +2406,7 @@ static DECLCALLBACK(bool) buslogicNotifyQueueConsumer(PPDMDEVINS pDevIns, PPDMQU
  * or loaded from a saved state.
  *
  * @returns nothing.
- * @param   pThis    The LsiLogic device instance.
+ * @param   pThis    The BusLogic device instance.
  */
 static void buslogicKick(PBUSLOGIC pThis)
 {
@@ -2743,7 +2732,7 @@ static DECLCALLBACK(void *) buslogicStatusQueryInterface(PPDMIBASE pInterface, c
  /**
  * Checks if all asynchronous I/O is finished.
  *
- * Used by lsilogicReset, lsilogicSuspend and lsilogicPowerOff.
+ * Used by buslogicReset, buslogicSuspend and buslogicPowerOff.
  *
  * @returns true if quiesced, false if busy.
  * @param   pDevIns         The device instance.
@@ -2766,7 +2755,7 @@ static bool buslogicR3AllAsyncIOIsFinished(PPDMDEVINS pDevIns)
 }
 
 /**
- * Callback employed by lsilogicR3Suspend and lsilogicR3PowerOff..
+ * Callback employed by buslogicR3Suspend and buslogicR3PowerOff..
  *
  * @returns true if we've quiesced, false if we're still working.
  * @param   pDevIns     The device instance.
@@ -3129,13 +3118,13 @@ static DECLCALLBACK(int) buslogicConstruct(PPDMDEVINS pDevIns, int iInstance, PC
 
     /* Initialize task queue. */
     rc = PDMDevHlpQueueCreate(pDevIns, sizeof(PDMQUEUEITEMCORE), 5, 0,
-                              buslogicNotifyQueueConsumer, true, "BugLogicTask", &pThis->pNotifierQueueR3);
+                              buslogicNotifyQueueConsumer, true, "BusLogicTask", &pThis->pNotifierQueueR3);
     if (RT_FAILURE(rc))
         return rc;
     pThis->pNotifierQueueR0 = PDMQueueR0Ptr(pThis->pNotifierQueueR3);
     pThis->pNotifierQueueRC = PDMQueueRCPtr(pThis->pNotifierQueueR3);
 
-    rc = PDMDevHlpCritSectInit(pDevIns, &pThis->CritSectIntr, RT_SRC_POS, "BusLogic-Intr");
+    rc = PDMDevHlpCritSectInit(pDevIns, &pThis->CritSectIntr, RT_SRC_POS, "BusLogic-Intr#%u", pDevIns->iInstance);
     if (RT_FAILURE(rc))
         return PDMDEV_SET_ERROR(pDevIns, rc,
                                 N_("BusLogic: cannot create critical section"));

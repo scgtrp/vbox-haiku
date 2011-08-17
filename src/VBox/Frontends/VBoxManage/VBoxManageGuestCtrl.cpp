@@ -68,8 +68,17 @@ using namespace com;
 /** Set by the signal handler. */
 static volatile bool    g_fGuestCtrlCanceled = false;
 
+typedef struct COPYCONTEXT
+{
+    IGuest *pGuest;
+    bool fVerbose;
+    bool fHostToGuest;
+    char *pszUsername;
+    char *pszPassword;
+} COPYCONTEXT, *PCOPYCONTEXT;
+
 /**
- * An entry for a source element, including an optional filter.
+ * An entry for a source element, including an optional DOS-like wildcard (*,?).
  */
 typedef struct SOURCEFILEENTRY
 {
@@ -83,7 +92,9 @@ typedef struct SOURCEFILEENTRY
             && !RTDirExists(pszSource))
         {
             /* No file and no directory -- maybe a filter? */
-            if (NULL != strpbrk(RTPathFilename(pszSource), "*?"))
+            char *pszFilename = RTPathFilename(pszSource);
+            if (   pszFilename
+                && strpbrk(pszFilename, "*?"))
             {
                 /* Yep, get the actual filter part. */
                 mFilter = RTPathFilename(pszSource);
@@ -99,7 +110,7 @@ typedef struct SOURCEFILEENTRY
 typedef std::vector<SOURCEFILEENTRY> SOURCEVEC, *PSOURCEVEC;
 
 /**
- * An entry for an element which needs to be copied to the guest.
+ * An entry for an element which needs to be copied/created to/on the guest.
  */
 typedef struct DESTFILEENTRY
 {
@@ -139,12 +150,22 @@ enum EXITCODEEXEC
 enum GETOPTDEF_EXEC
 {
     GETOPTDEF_EXEC_IGNOREORPHANEDPROCESSES = 1000,
+    GETOPTDEF_EXEC_NO_PROFILE,
     GETOPTDEF_EXEC_OUTPUTFORMAT,
     GETOPTDEF_EXEC_DOS2UNIX,
     GETOPTDEF_EXEC_UNIX2DOS,
     GETOPTDEF_EXEC_WAITFOREXIT,
     GETOPTDEF_EXEC_WAITFORSTDOUT,
     GETOPTDEF_EXEC_WAITFORSTDERR
+};
+
+enum GETOPTDEF_COPYFROM
+{
+    GETOPTDEF_COPYFROM_DRYRUN = 1000,
+    GETOPTDEF_COPYFROM_FOLLOW,
+    GETOPTDEF_COPYFROM_PASSWORD,
+    GETOPTDEF_COPYFROM_TARGETDIR,
+    GETOPTDEF_COPYFROM_USERNAME
 };
 
 enum GETOPTDEF_COPYTO
@@ -154,6 +175,18 @@ enum GETOPTDEF_COPYTO
     GETOPTDEF_COPYTO_PASSWORD,
     GETOPTDEF_COPYTO_TARGETDIR,
     GETOPTDEF_COPYTO_USERNAME
+};
+
+enum GETOPTDEF_MKDIR
+{
+    GETOPTDEF_MKDIR_PASSWORD = 1000,
+    GETOPTDEF_MKDIR_USERNAME
+};
+
+enum GETOPTDEF_STAT
+{
+    GETOPTDEF_STAT_PASSWORD = 1000,
+    GETOPTDEF_STAT_USERNAME
 };
 
 enum OUTPUTTYPE
@@ -175,12 +208,15 @@ void usageGuestControl(PRTSTREAM pStrm)
                  "                            [--dos2unix]\n"
                  "                            [--environment \"<NAME>=<VALUE> [<NAME>=<VALUE>]\"]\n"
                  "                            [--timeout <msec>] [--unix2dos] [--verbose]\n"
-                 "                            [--wait-exit] [--wait-stdout] [--wait-stdout]\n"
-                 //"                          [--output-format=<dos>|<unix>]\n"
-                 "                            [--output-type=<binary>|<text>]\n"
-                 "                            [-- [<argument1>] ... [<argumentN>]\n"
+                 "                            [--wait-exit] [--wait-stdout] [--wait-stderr]\n"
+                 "                            [-- [<argument1>] ... [<argumentN>]]\n"
                  /** @todo Add a "--" parameter (has to be last parameter) to directly execute
                   *        stuff, e.g. "VBoxManage guestcontrol execute <VMName> --username <> ... -- /bin/rm -Rf /foo". */
+                 "\n"
+                 "                            copyfrom\n"
+                 "                            <source on guest> <destination on host>\n"
+                 "                            --username <name> --password <password>\n"
+                 "                            [--dryrun] [--follow] [--recursive] [--verbose]\n"
                  "\n"
                  "                            copyto|cp\n"
                  "                            <source on host> <destination on guest>\n"
@@ -188,9 +224,14 @@ void usageGuestControl(PRTSTREAM pStrm)
                  "                            [--dryrun] [--follow] [--recursive] [--verbose]\n"
                  "\n"
                  "                            createdir[ectory]|mkdir|md\n"
-                 "                            <directory to create on guest>\n"
+                 "                            <director[y|ies] to create on guest>\n"
                  "                            --username <name> --password <password>\n"
                  "                            [--parents] [--mode <mode>] [--verbose]\n"
+                 "\n"
+                 "                            stat\n"
+                 "                            <file element(s) to check on guest>\n"
+                 "                            --username <name> --password <password>\n"
+                 "                            [--verbose]\n"
                  "\n"
                  "                            updateadditions\n"
                  "                            [--source <guest additions .ISO>] [--verbose]\n"
@@ -319,7 +360,7 @@ static int ctrlPrintError(com::ErrorInfo &errorInfo)
         }
         return VERR_GENERAL_FAILURE; /** @todo */
     }
-    AssertMsgFailedReturn(("Object has indicated no error!?\n"),
+    AssertMsgFailedReturn(("Object has indicated no error (%Rrc)!?\n", errorInfo.getResultCode()),
                           VERR_INVALID_PARAMETER);
 }
 
@@ -328,7 +369,6 @@ static int ctrlPrintError(IUnknown *pObj, const GUID &aIID)
     com::ErrorInfo ErrInfo(pObj, aIID);
     return ctrlPrintError(ErrInfo);
 }
-
 
 static int ctrlPrintProgressError(ComPtr<IProgress> progress)
 {
@@ -429,6 +469,7 @@ static int handleCtrlExecProgram(ComPtr<IGuest> guest, HandlerArg *pArg)
         { "--flags",                        'f',                                      RTGETOPT_REQ_STRING  },
         { "--ignore-operhaned-processes",   GETOPTDEF_EXEC_IGNOREORPHANEDPROCESSES,   RTGETOPT_REQ_NOTHING },
         { "--image",                        'i',                                      RTGETOPT_REQ_STRING  },
+        { "--no-profile",                   GETOPTDEF_EXEC_NO_PROFILE,                RTGETOPT_REQ_NOTHING },
         { "--password",                     'p',                                      RTGETOPT_REQ_STRING  },
         { "--timeout",                      't',                                      RTGETOPT_REQ_UINT32  },
         { "--unix2dos",                     GETOPTDEF_EXEC_UNIX2DOS,                  RTGETOPT_REQ_NOTHING },
@@ -488,6 +529,10 @@ static int handleCtrlExecProgram(ComPtr<IGuest> guest, HandlerArg *pArg)
 
             case GETOPTDEF_EXEC_IGNOREORPHANEDPROCESSES:
                 fExecFlags |= ExecuteProcessFlag_IgnoreOrphanedProcesses;
+                break;
+
+            case GETOPTDEF_EXEC_NO_PROFILE:
+                fExecFlags |= ExecuteProcessFlag_NoProfile;
                 break;
 
             case 'i':
@@ -550,6 +595,10 @@ static int handleCtrlExecProgram(ComPtr<IGuest> guest, HandlerArg *pArg)
 
     if (Utf8UserName.isEmpty())
         return errorSyntax(USAGE_GUESTCONTROL, "No user name specified!");
+
+    /* Any output conversion not supported yet! */
+    if (eOutputType != OUTPUTTYPE_UNDEFINED)
+        return errorSyntax(USAGE_GUESTCONTROL, "Output conversion not implemented yet!");
 
     /*
      * <missing comment indicating that we're done parsing args and started doing something else>
@@ -663,32 +712,28 @@ static int handleCtrlExecProgram(ComPtr<IGuest> guest, HandlerArg *pArg)
                         /** @todo r=bird: Use a VFS I/O stream filter for doing this, it's a
                         *        generic problem and the new VFS APIs will handle it more
                         *        transparently. (requires writing dos2unix/unix2dos filters ofc) */
-                        if (eOutputType != OUTPUTTYPE_UNDEFINED)
+
+                        /*
+                         * If aOutputData is text data from the guest process' stdout or stderr,
+                         * it has a platform dependent line ending. So standardize on
+                         * Unix style, as RTStrmWrite does the LF -> CR/LF replacement on
+                         * Windows. Otherwise we end up with CR/CR/LF on Windows.
+                         */
+                        ULONG cbOutputDataPrint = cbOutputData;
+                        for (BYTE *s = aOutputData.raw(), *d = s;
+                             s - aOutputData.raw() < (ssize_t)cbOutputData;
+                             s++, d++)
                         {
-                            /*
-                             * If aOutputData is text data from the guest process' stdout or stderr,
-                             * it has a platform dependent line ending. So standardize on
-                             * Unix style, as RTStrmWrite does the LF -> CR/LF replacement on
-                             * Windows. Otherwise we end up with CR/CR/LF on Windows.
-                             */
-                            ULONG cbOutputDataPrint = cbOutputData;
-                            for (BYTE *s = aOutputData.raw(), *d = s;
-                                 s - aOutputData.raw() < (ssize_t)cbOutputData;
-                                 s++, d++)
+                            if (*s == '\r')
                             {
-                                if (*s == '\r')
-                                {
-                                    /* skip over CR, adjust destination */
-                                    d--;
-                                    cbOutputDataPrint--;
-                                }
-                                else if (s != d)
-                                    *d = *s;
+                                /* skip over CR, adjust destination */
+                                d--;
+                                cbOutputDataPrint--;
                             }
-                            RTStrmWrite(g_pStdOut, aOutputData.raw(), cbOutputDataPrint);
+                            else if (s != d)
+                                *d = *s;
                         }
-                        else /* Just dump all data as we got it ... */
-                            RTStrmWrite(g_pStdOut, aOutputData.raw(), cbOutputData);
+                        RTStrmWrite(g_pStdOut, aOutputData.raw(), cbOutputDataPrint);
                     }
                 }
             }
@@ -768,40 +813,313 @@ static int handleCtrlExecProgram(ComPtr<IGuest> guest, HandlerArg *pArg)
     return rcProc;
 }
 
+static int ctrlCopyContextCreate(IGuest *pGuest, bool fVerbose, bool fHostToGuest,
+                                 const char *pszUsername, const char *pszPassword,
+                                 PCOPYCONTEXT *ppContext)
+{
+    AssertPtrReturn(pGuest, VERR_INVALID_POINTER);
+    AssertPtrReturn(pszUsername, VERR_INVALID_POINTER);
+    AssertPtrReturn(pszPassword, VERR_INVALID_POINTER);
+
+    PCOPYCONTEXT pContext = (PCOPYCONTEXT)RTMemAlloc(sizeof(COPYCONTEXT));
+    AssertPtrReturn(pContext, VERR_NO_MEMORY);
+    pContext->pGuest = pGuest;
+    pContext->fVerbose = fVerbose;
+    pContext->fHostToGuest = fHostToGuest;
+
+    pContext->pszUsername = RTStrDup(pszUsername);
+    if (!pContext->pszUsername)
+    {
+        RTMemFree(pContext);
+        return VERR_NO_MEMORY;
+    }
+
+    pContext->pszPassword = RTStrDup(pszPassword);
+    if (!pContext->pszPassword)
+    {
+        RTStrFree(pContext->pszUsername);
+        RTMemFree(pContext);
+        return VERR_NO_MEMORY;
+    }
+
+    *ppContext = pContext;
+
+    return VINF_SUCCESS;
+}
+
+static void ctrlCopyContextFree(PCOPYCONTEXT pContext)
+{
+    if (pContext)
+    {
+        RTStrFree(pContext->pszUsername);
+        RTStrFree(pContext->pszPassword);
+        RTMemFree(pContext);
+    }
+}
+
 /**
- * Reads a specified directory (recursively) based on the copy flags
- * and appends all matching entries to the supplied list.
+ * Translates a source path to a destintation path (can be both sides,
+ * either host or guest). The source root is needed to determine the start
+ * of the relative source path which also needs to present in the destination
+ * path.
  *
  * @return  IPRT status code.
- * @param   pszRootDir          Directory to start with. Must end with
- *                              a trailing slash and must be absolute.
- * @param   pszSubDir           Sub directory part relative to the root
- *                              directory; needed for recursion.
- * @param   pszFilter           Search filter (e.g. *.pdf).
- * @param   pszDest             Destination directory.
- * @param   fFlags              Copy flags.
- * @param   pcObjects           Where to store the overall objects to
- *                              copy found.
- * @param   dirMap              Reference to destination directory map to store found
- *                              directories (primary key) + files (secondary key, vector).
+ * @param   pszSourceRoot           Source root path.
+ * @param   pszSource               Actual source to transform. Must begin with
+ *                                  the source root path!
+ * @param   pszDest                 Destination path.
+ * @param   ppszTranslated          Pointer to the allocated, translated destination
+ *                                  path. Must be free'd with RTStrFree().
  */
-static int ctrlCopyDirectoryRead(const char *pszRootDir, const char *pszSubDir,
-                                 const char *pszFilter, const char *pszDest,
-                                 uint32_t fFlags, uint32_t *pcObjects, DESTDIRMAP &dirMap)
+static int ctrlCopyTranslatePath(const char *pszSourceRoot, const char *pszSource,
+                                 const char *pszDest, char **ppszTranslated)
 {
-    AssertPtrReturn(pszRootDir, VERR_INVALID_POINTER);
-    /* Sub directory is optional. */
-    /* Filter directory is optional. */
+    AssertPtrReturn(pszSourceRoot, VERR_INVALID_POINTER);
+    AssertPtrReturn(pszSource, VERR_INVALID_POINTER);
     AssertPtrReturn(pszDest, VERR_INVALID_POINTER);
-    AssertPtrReturn(pcObjects, VERR_INVALID_POINTER);
+    AssertPtrReturn(ppszTranslated, VERR_INVALID_POINTER);
+
+    /* Source path must contain the source root! */
+    if (!RTPathStartsWith(pszSource, pszSourceRoot))
+        return VERR_INVALID_PARAMETER;
+
+    /* Construct the relative dest destination path by "subtracting" the
+     * source from the source root, e.g.
+     *
+     * source root path = "e:\foo\", source = "e:\foo\bar"
+     * dest = "d:\baz\"
+     * translated = "d:\baz\bar\"
+     */
+
+    size_t lenRoot = strlen(pszSourceRoot);
+    AssertReturn(lenRoot, VERR_INVALID_PARAMETER);
+    char *pszTranslated = RTStrDup(pszDest);
+    AssertReturn(pszTranslated, VERR_NO_MEMORY);
+    int vrc = RTStrAAppend(&pszTranslated, &pszSource[lenRoot]);
+    if (RT_FAILURE(vrc))
+        return vrc;
+
+    *ppszTranslated = pszTranslated;
+
+    return vrc;
+}
+
+#ifdef DEBUG_andy
+static void tstTranslatePath()
+{
+    static struct
+    {
+        const char *pszSourceRoot;
+        const char *pszSource;
+        const char *pszDest;
+        const char *pszTranslated;
+        int         iResult;
+    } aTests[] =
+    {
+        /* Invalid stuff. */
+        { NULL, NULL, NULL, NULL, VERR_INVALID_POINTER },
+        /* Windows paths. */
+        { "c:\\foo", "c:\\foo\\bar.txt", "c:\\test", "c:\\test\\bar.txt", VINF_SUCCESS },
+        { "c:\\foo", "c:\\foo\\baz\\bar.txt", "c:\\test", "c:\\test\\baz\\bar.txt", VINF_SUCCESS }
+        /* UNIX-like paths. */
+        /* Mixed paths*/
+        /** @todo */
+    };
+
+    int iTest = 0;
+    for (iTest; iTest < RT_ELEMENTS(aTests); iTest++)
+    {
+        RTPrintf("=> Test %d\n", iTest);
+        RTPrintf("\tSourceRoot=%s, Source=%s, Dest=%s\n",
+                 aTests[iTest].pszSourceRoot, aTests[iTest].pszSource, aTests[iTest].pszDest);
+
+        char *pszTranslated = NULL;
+        int iResult =  ctrlCopyTranslatePath(aTests[iTest].pszSourceRoot, aTests[iTest].pszSource,
+                                             aTests[iTest].pszDest, &pszTranslated);
+        if (iResult != aTests[iTest].iResult)
+        {
+            RTPrintf("\tReturned %Rrc, expected %Rrc\n",
+                     iResult, aTests[iTest].iResult);
+        }
+        else if (   pszTranslated
+                 && strcmp(pszTranslated, aTests[iTest].pszTranslated))
+        {
+            RTPrintf("\tReturned translated path %s, expected %s\n",
+                     pszTranslated, aTests[iTest].pszTranslated);
+        }
+
+        if (pszTranslated)
+        {
+            RTPrintf("\tTranslated=%s\n", pszTranslated);
+            RTStrFree(pszTranslated);
+        }
+    }
+}
+#endif
+
+static int ctrlCopyDirCreate(PCOPYCONTEXT pContext, const char *pszDir)
+{
+    AssertPtrReturn(pContext, VERR_INVALID_POINTER);
+    AssertPtrReturn(pszDir, VERR_INVALID_POINTER);
+
+    int rc = VINF_SUCCESS;
+    if (pContext->fHostToGuest) /* We want to create directories on the guest. */
+    {
+        HRESULT hrc = pContext->pGuest->DirectoryCreate(Bstr(pszDir).raw(),
+                                                        Bstr(pContext->pszUsername).raw(), Bstr(pContext->pszPassword).raw(),
+                                                        700, DirectoryCreateFlag_Parents);
+        if (FAILED(hrc))
+            rc = ctrlPrintError(pContext->pGuest, COM_IIDOF(IGuest));
+    }
+    else /* ... or on the host. */
+    {
+        rc = RTDirCreate(pszDir, 700);
+        if (rc == VERR_ALREADY_EXISTS)
+            rc = VINF_SUCCESS;
+    }
+    return rc;
+}
+
+static int ctrlCopyDirExists(PCOPYCONTEXT pContext, bool bGuest,
+                             const char *pszDir, bool *fExists)
+{
+    AssertPtrReturn(pContext, false);
+    AssertPtrReturn(pszDir, false);
+    AssertPtrReturn(fExists, false);
+
+    int rc = VINF_SUCCESS;
+    if (bGuest)
+    {
+        BOOL fDirExists = FALSE;
+        /** @todo Replace with DirectoryExists as soon as API is in place. */
+        HRESULT hr = pContext->pGuest->FileExists(Bstr(pszDir).raw(),
+                                                  Bstr(pContext->pszUsername).raw(),
+                                                  Bstr(pContext->pszPassword).raw(), &fDirExists);
+        if (FAILED(hr))
+            rc = ctrlPrintError(pContext->pGuest, COM_IIDOF(IGuest));
+        else
+            *fExists = fDirExists ? true : false;
+    }
+    else
+        *fExists = RTDirExists(pszDir);
+    return rc;
+}
+
+static int ctrlCopyDirExistsOnDest(PCOPYCONTEXT pContext, const char *pszDir,
+                                   bool *fExists)
+{
+    return ctrlCopyDirExists(pContext, pContext->fHostToGuest,
+                             pszDir, fExists);
+}
+
+static int ctrlCopyDirExistsOnSource(PCOPYCONTEXT pContext, const char *pszDir,
+                                     bool *fExists)
+{
+    return ctrlCopyDirExists(pContext, !pContext->fHostToGuest,
+                             pszDir, fExists);
+}
+
+static int ctrlCopyFileExists(PCOPYCONTEXT pContext, bool bOnGuest,
+                              const char *pszFile, bool *fExists)
+{
+    AssertPtrReturn(pContext, false);
+    AssertPtrReturn(pszFile, false);
+    AssertPtrReturn(fExists, false);
+
+    int rc = VINF_SUCCESS;
+    if (bOnGuest)
+    {
+        BOOL fFileExists = FALSE;
+        HRESULT hr = pContext->pGuest->FileExists(Bstr(pszFile).raw(),
+                                                  Bstr(pContext->pszUsername).raw(),
+                                                  Bstr(pContext->pszPassword).raw(), &fFileExists);
+        if (FAILED(hr))
+            rc = ctrlPrintError(pContext->pGuest, COM_IIDOF(IGuest));
+        else
+            *fExists = fFileExists ? true : false;
+    }
+    else
+        *fExists = RTFileExists(pszFile);
+    return rc;
+}
+
+static int ctrlCopyFileExistsOnDest(PCOPYCONTEXT pContext, const char *pszFile,
+                                    bool *fExists)
+{
+    return ctrlCopyFileExists(pContext, pContext->fHostToGuest,
+                              pszFile, fExists);
+}
+
+static int ctrlCopyFileExistsOnSource(PCOPYCONTEXT pContext, const char *pszFile,
+                                      bool *fExists)
+{
+    return ctrlCopyFileExists(pContext, !pContext->fHostToGuest,
+                              pszFile, fExists);
+}
+
+static int ctrlCopyFileToTarget(PCOPYCONTEXT pContext, const char *pszFileSource,
+                                const char *pszFileDest, uint32_t fFlags)
+{
+    AssertPtrReturn(pContext, VERR_INVALID_POINTER);
+    AssertPtrReturn(pszFileSource, VERR_INVALID_POINTER);
+    AssertPtrReturn(pszFileDest, VERR_INVALID_POINTER);
+
+    if (pContext->fVerbose)
+    {
+        RTPrintf("Copying \"%s\" to \"%s\" ...\n",
+                 pszFileSource, pszFileDest);
+    }
+
+    int vrc = VINF_SUCCESS;
+    ComPtr<IProgress> progress;
+    HRESULT hr;
+    if (pContext->fHostToGuest)
+    {
+        hr = pContext->pGuest->CopyToGuest(Bstr(pszFileSource).raw(), Bstr(pszFileDest).raw(),
+                                           Bstr(pContext->pszUsername).raw(), Bstr(pContext->pszPassword).raw(),
+                                           fFlags, progress.asOutParam());
+    }
+    else
+    {
+        hr = pContext->pGuest->CopyFromGuest(Bstr(pszFileSource).raw(), Bstr(pszFileDest).raw(),
+                                             Bstr(pContext->pszUsername).raw(), Bstr(pContext->pszPassword).raw(),
+                                             fFlags, progress.asOutParam());
+    }
+
+    if (FAILED(hr))
+        vrc = ctrlPrintError(pContext->pGuest, COM_IIDOF(IGuest));
+    else
+    {
+        hr = showProgress(progress);
+        if (FAILED(hr))
+            vrc = ctrlPrintProgressError(progress);
+    }
+
+    return vrc;
+}
+
+static int ctrlCopyDirToGuest(PCOPYCONTEXT pContext,
+                              const char *pszSource, const char *pszFilter,
+                              const char *pszDest, uint32_t fFlags,
+                              const char *pszSubDir /* For recursion */)
+{
+    AssertPtrReturn(pContext, VERR_INVALID_POINTER);
+    AssertPtrReturn(pszSource, VERR_INVALID_POINTER);
+    /* Filter is optional. */
+    AssertPtrReturn(pszDest, VERR_INVALID_POINTER);
+    /* Sub directory is optional. */
 
     /*
      * Construct current path.
      */
     char szCurDir[RTPATH_MAX];
-    int rc = RTStrCopy(szCurDir, sizeof(szCurDir), pszRootDir);
-    if (RT_SUCCESS(rc) && pszSubDir != NULL)
+    int rc = RTStrCopy(szCurDir, sizeof(szCurDir), pszSource);
+    if (RT_SUCCESS(rc) && pszSubDir)
         rc = RTPathAppend(szCurDir, sizeof(szCurDir), pszSubDir);
+
+    /* Flag indicating whether the current directory was created on the
+     * target or not. */
+    bool fDirCreated = false;
 
     /*
      * Open directory without a filter - RTDirOpenFiltered unfortunately
@@ -832,6 +1150,7 @@ static int ctrlCopyDirectoryRead(const char *pszRootDir, const char *pszSubDir,
             switch (DirEntry.enmType)
             {
                 case RTDIRENTRYTYPE_DIRECTORY:
+                {
                     /* Skip "." and ".." entries. */
                     if (   !strcmp(DirEntry.szName, ".")
                         || !strcmp(DirEntry.szName, ".."))
@@ -847,17 +1166,16 @@ static int ctrlCopyDirectoryRead(const char *pszRootDir, const char *pszSubDir,
 
                         if (pszNewSub)
                         {
-                            dirMap[pszNewSub];
-
-                            rc = ctrlCopyDirectoryRead(pszRootDir, pszNewSub,
-                                                       pszFilter, pszDest,
-                                                       fFlags, pcObjects, dirMap);
+                            rc = ctrlCopyDirToGuest(pContext,
+                                                    pszSource, pszFilter,
+                                                    pszDest, fFlags, pszNewSub);
                             RTStrFree(pszNewSub);
                         }
                         else
                             rc = VERR_NO_MEMORY;
                     }
                     break;
+                }
 
                 case RTDIRENTRYTYPE_SYMLINK:
                     if (   (fFlags & CopyFileFlag_Recursive)
@@ -873,11 +1191,41 @@ static int ctrlCopyDirectoryRead(const char *pszRootDir, const char *pszSubDir,
                     if (   !pszFilter
                         || RTStrSimplePatternMatch(pszFilter, DirEntry.szName))
                     {
-                        dirMap[pszSubDir].push_back(DESTFILEENTRY(Utf8Str(DirEntry.szName)));
-                        *pcObjects += 1;
+                        if (!fDirCreated)
+                        {
+                            char *pszDestDir;
+                            rc = ctrlCopyTranslatePath(pszSource, szCurDir,
+                                                       pszDest, &pszDestDir);
+                            if (RT_SUCCESS(rc))
+                            {
+                                rc = ctrlCopyDirCreate(pContext, pszDestDir);
+                                RTStrFree(pszDestDir);
+
+                                fDirCreated = true;
+                            }
+                        }
+
+                        if (RT_SUCCESS(rc))
+                        {
+                            char *pszFileSource;
+                            if (RTStrAPrintf(&pszFileSource, "%s/%s",
+                                             szCurDir, DirEntry.szName))
+                            {
+                                char *pszFileDest;
+                                rc = ctrlCopyTranslatePath(pszSource, pszFileSource,
+                                                           pszDest, &pszFileDest);
+                                if (RT_SUCCESS(rc))
+                                {
+                                    rc = ctrlCopyFileToTarget(pContext, pszFileSource,
+                                                              pszFileDest, 0 /* Flags? */);
+                                    RTStrFree(pszFileDest);
+                                }
+                                RTStrFree(pszFileSource);
+                            }
+                        }
                     }
+                    break;
                 }
-                break;
 
                 default:
                     break;
@@ -891,222 +1239,213 @@ static int ctrlCopyDirectoryRead(const char *pszRootDir, const char *pszSubDir,
     return rc;
 }
 
-/**
- * Constructs a destinations map from a source entry and a destination root.
- *
- * @return  IPRT status code.
- * @param   sourceEntry             Reference to a specified source entry to use.
- * @param   fFlags                  Copy file flags. Needed for recursive directory parsing.
- * @param   pszDestRoot             Pointer to destination root. This can be used to add one or
- *                                  more directories to the actual destination path.
- * @param   mapDest                 Reference to the destination map for storing the actual result.
- * @param   pcObjects               Pointer to a total object (file) count to copy.
- */
-static int ctrlCopyConstructDestinations(SOURCEFILEENTRY &sourceEntry, uint32_t fFlags, const char *pszDestRoot,
-                                         DESTDIRMAP &mapDest, uint32_t *pcObjects)
+static int ctrlCopyDirToHost(PCOPYCONTEXT pContext,
+                             const char *pszSource, const char *pszFilter,
+                             const char *pszDest, uint32_t fFlags,
+                             const char *pszSubDir /* For recursion */)
 {
-    int rc = VINF_SUCCESS;
-    const char *pszSource = sourceEntry.mSource.c_str();
-    if (   RTPathFilename(pszSource)
-        && RTFileExists(pszSource))
-    {
-        /* Source is a single file. */
-        char *pszFileName = RTPathFilename(pszSource);
-        mapDest[Utf8Str(pszDestRoot)].push_back(DESTFILEENTRY(pszFileName));
-
-        *pcObjects++;
-    }
-    else
-    {
-        /* Source is either a directory or a filter (e.g. *.dll). */
-        rc = ctrlCopyDirectoryRead(pszSource,
-                                   NULL /* pszSubDir */,
-                                   sourceEntry.mFilter.isEmpty() ? NULL : sourceEntry.mFilter.c_str(),
-                                   pszDestRoot, fFlags, pcObjects, mapDest);
-    }
-    return rc;
-}
-
-/**
- * Determines the destination root for a specified source entry.
- *
- * @return  IPRT status code.
- * @param   ppszDestRoot            Receives pointer of allocated destination root.
- * @param   sourceEntry             Source entry to determine the destination root for.
- * @param   pszDest                 Original destination string to use.
- */
-static int ctrlCopyGetDestinationRoot(char **ppszDestRoot, SOURCEFILEENTRY &sourceEntry, const char *pszDest)
-{
-    AssertPtrReturn(ppszDestRoot, VERR_INVALID_POINTER);
+    AssertPtrReturn(pContext, VERR_INVALID_POINTER);
+    AssertPtrReturn(pszSource, VERR_INVALID_POINTER);
+    /* Filter is optional. */
     AssertPtrReturn(pszDest, VERR_INVALID_POINTER);
-
-    int rc = VINF_SUCCESS;
+    /* Sub directory is optional. */
 
     /*
-     * If a source filter is set (e.g. *.dll) use the original
-     * destination as our final root, because we want to copy all filtered
-     * files directly into the original root (and its sub directories if apply).
+     * Construct current path.
      */
-    char *pszDestRoot;
-    if (!sourceEntry.mFilter.isEmpty())
-        pszDestRoot = RTStrDup(pszDest);
+    char szCurDir[RTPATH_MAX];
+    int rc = RTStrCopy(szCurDir, sizeof(szCurDir), pszSource);
+    if (RT_SUCCESS(rc) && pszSubDir)
+        rc = RTPathAppend(szCurDir, sizeof(szCurDir), pszSubDir);
+
+    if (RT_FAILURE(rc))
+        return rc;
+
+    /* Flag indicating whether the current directory was created on the
+     * target or not. */
+    bool fDirCreated = false;
+
+    ULONG uDirHandle;
+    HRESULT hr = pContext->pGuest->DirectoryOpen(Bstr(szCurDir).raw(), Bstr(pszFilter).raw(),
+                                                 DirectoryOpenFlag_None /* No flags supported yet. */,
+                                                 Bstr(pContext->pszUsername).raw(), Bstr(pContext->pszPassword).raw(),
+                                                 &uDirHandle);
+    if (FAILED(hr))
+        rc = ctrlPrintError(pContext->pGuest, COM_IIDOF(IGuest));
     else
     {
-        /*
-         * However, if no source filter is set we want to also copy the original
-         * source directory to our destination so that source "c:\foo", dest "c:\temp"
-         * becomes "c:\temp\foo".
-         */
-        int iLen = RTStrAPrintf(&pszDestRoot, "%s/%s",
-                                pszDest, RTPathFilename(sourceEntry.mSource.c_str()));
-        if (!iLen)
-            rc = VERR_NO_MEMORY;
+        ComPtr <IGuestDirEntry> dirEntry;
+        while (SUCCEEDED(hr = pContext->pGuest->DirectoryRead(uDirHandle, dirEntry.asOutParam())))
+        {
+            GuestDirEntryType_T enmType;
+            dirEntry->COMGETTER(Type)(&enmType);
+
+            Bstr strName;
+            dirEntry->COMGETTER(Name)(strName.asOutParam());
+
+            switch (enmType)
+            {
+                case GuestDirEntryType_Directory:
+                {
+                    /* Skip "." and ".." entries. */
+                    if (   !strName.compare(Bstr("."))
+                        || !strName.compare(Bstr("..")))
+                        break;
+
+                    if (fFlags & CopyFileFlag_Recursive)
+                    {
+                        Utf8Str strDir(strName);
+                        char *pszNewSub = NULL;
+                        if (pszSubDir)
+                            RTStrAPrintf(&pszNewSub, "%s/%s", pszSubDir, strDir.c_str());
+                        else
+                            RTStrAPrintf(&pszNewSub, "%s", strDir.c_str());
+
+                        if (pszNewSub)
+                        {
+                            rc = ctrlCopyDirToHost(pContext,
+                                                   pszSource, pszFilter,
+                                                   pszDest, fFlags, pszNewSub);
+                            RTStrFree(pszNewSub);
+                        }
+                        else
+                            rc = VERR_NO_MEMORY;
+                    }
+                    break;
+                }
+
+                case GuestDirEntryType_Symlink:
+                    if (   (fFlags & CopyFileFlag_Recursive)
+                        && (fFlags & CopyFileFlag_FollowLinks))
+                    {
+                        /* Fall through to next case is intentional. */
+                    }
+                    else
+                        break;
+
+                case GuestDirEntryType_File:
+                {
+                    Utf8Str strFile(strName);
+                    if (   !pszFilter
+                        || RTStrSimplePatternMatch(pszFilter, strFile.c_str()))
+                    {
+                        if (!fDirCreated)
+                        {
+                            char *pszDestDir;
+                            rc = ctrlCopyTranslatePath(pszSource, szCurDir,
+                                                       pszDest, &pszDestDir);
+                            if (RT_SUCCESS(rc))
+                            {
+                                rc = ctrlCopyDirCreate(pContext, pszDestDir);
+                                RTStrFree(pszDestDir);
+
+                                fDirCreated = true;
+                            }
+                        }
+
+                        if (RT_SUCCESS(rc))
+                        {
+                            char *pszFileSource;
+                            if (RTStrAPrintf(&pszFileSource, "%s/%s",
+                                             szCurDir, strFile.c_str()))
+                            {
+                                char *pszFileDest;
+                                rc = ctrlCopyTranslatePath(pszSource, pszFileSource,
+                                                           pszDest, &pszFileDest);
+                                if (RT_SUCCESS(rc))
+                                {
+                                    rc = ctrlCopyFileToTarget(pContext, pszFileSource,
+                                                              pszFileDest, 0 /* Flags? */);
+                                    RTStrFree(pszFileDest);
+                                }
+                                RTStrFree(pszFileSource);
+                            }
+                            else
+                                rc = VERR_NO_MEMORY;
+                        }
+                    }
+                    break;
+                }
+
+                default:
+                    break;
+            }
+
+            if (RT_FAILURE(rc))
+                break;
+        }
+
+        if (FAILED(hr))
+        {
+            if (hr != E_ABORT)
+                rc = ctrlPrintError(pContext->pGuest, COM_IIDOF(IGuest));
+        }
+
+        HRESULT hr2 = pContext->pGuest->DirectoryClose(uDirHandle);
+        if (FAILED(hr2))
+        {
+            int rc2 = ctrlPrintError(pContext->pGuest, COM_IIDOF(IGuest));
+            if (RT_SUCCESS(rc))
+                rc = rc2;
+        }
+        else if (SUCCEEDED(hr))
+            hr = hr2;
     }
 
-    if (RT_SUCCESS(rc))
-        *ppszDestRoot = pszDestRoot;
     return rc;
 }
 
-/**
- * Prepares the destination directory hirarchy on the guest side by creating the directories
- * and sets the appropriate access rights.
- *
- * @return  IPRT status code.
- * @param   pGuest                  IGuest interface pointer.
- * @param   itDest                  Destination map iterator to process.
- * @param   pszDestRoot             Destination root to use.
- * @param   pszUsername             Username to use.
- * @param   pszPassword             Password to use.
- */
-static int ctrlCopyPrepareDestDirectory(IGuest *pGuest, DESTDIRMAPITER itDest, const char *pszDestRoot,
-                                        const char *pszUsername, const char *pszPassword)
+static int ctrlCopyDirToTarget(PCOPYCONTEXT pContext,
+                               const char *pszSource, const char *pszFilter,
+                               const char *pszDest, uint32_t fFlags,
+                               const char *pszSubDir /* For recursion */)
 {
-    AssertPtrReturn(pGuest, VERR_INVALID_POINTER);
-    AssertPtrReturn(pszDestRoot, VERR_INVALID_POINTER);
-    AssertPtrReturn(pszUsername, VERR_INVALID_POINTER);
-    AssertPtrReturn(pszPassword, VERR_INVALID_POINTER);
-
-    ComPtr<IProgress> progress;
-    char *pszDestFinal = NULL;
-    int rc = VINF_SUCCESS;
-
-    /* Create root directory (= empty name) and skip the rest for
-     * this round. */
-    if (itDest->first.isEmpty())
-    {
-        pszDestFinal = RTStrDup(pszDestRoot);
-        if (!pszDestFinal)
-            rc = VERR_NO_MEMORY;
-    }
-    else /* Create sub-directories, also empty ones. */
-    {
-        if (!RTStrAPrintf(&pszDestFinal, "%s/%s", pszDestRoot, itDest->first.c_str()))
-            rc = VERR_NO_MEMORY;
-    }
-
-    if (RT_SUCCESS(rc) && pszDestFinal)
-    {
-        HRESULT hrc = pGuest->CreateDirectory(Bstr(pszDestFinal).raw(),
-                                              Bstr(pszUsername).raw(), Bstr(pszPassword).raw(),
-                                              700, CreateDirectoryFlag_Parents, progress.asOutParam());
-        if (FAILED(hrc))
-            rc = ctrlPrintError(pGuest, COM_IIDOF(IGuest));
-        RTStrFree(pszDestFinal);
-    }
-    return rc;
+    if (pContext->fHostToGuest)
+        return ctrlCopyDirToGuest(pContext, pszSource, pszFilter,
+                                  pszDest, fFlags, pszSubDir);
+    return ctrlCopyDirToHost(pContext, pszSource, pszFilter,
+                             pszDest, fFlags, pszSubDir);
 }
 
-/**
- * Copys a file from host to the guest.
- *
- * @return  IPRT status code.
- * @param   pGuest                  IGuest interface pointer.
- * @param   pszSource               Source path of existing host file to copy.
- * @param   pszDest                 Destination path on guest to copy the file to.
- * @param   pszUserName             User name on guest to use for the copy operation.
- * @param   pszPassword             Password of user account.
- * @param   fFlags                  Copy flags.
- */
-static int ctrlCopyFileToGuest(IGuest *pGuest, const char *pszSource, const char *pszDest,
-                               const char *pszUserName, const char *pszPassword,
-                               uint32_t fFlags)
+static int ctrlCopyCreateSourceRoot(const char *pszSource, char **ppszSourceRoot)
 {
-    AssertPtrReturn(pGuest, VERR_INVALID_POINTER);
     AssertPtrReturn(pszSource, VERR_INVALID_POINTER);
-    AssertPtrReturn(pszDest, VERR_INVALID_POINTER);
-    AssertPtrReturn(pszUserName, VERR_INVALID_POINTER);
-    AssertPtrReturn(pszPassword, VERR_INVALID_POINTER);
+    AssertPtrReturn(ppszSourceRoot, VERR_INVALID_POINTER);
 
-    int vrc = VINF_SUCCESS;
-    ComPtr<IProgress> progress;
-    HRESULT rc = pGuest->CopyToGuest(Bstr(pszSource).raw(), Bstr(pszDest).raw(),
-                                     Bstr(pszUserName).raw(), Bstr(pszPassword).raw(),
-                                     fFlags, progress.asOutParam());
-    if (FAILED(rc))
-        vrc = ctrlPrintError(pGuest, COM_IIDOF(IGuest));
+    char *pszNewRoot = RTStrDup(pszSource);
+    AssertPtrReturn(pszNewRoot, VERR_NO_MEMORY);
+
+    size_t lenRoot = strlen(pszNewRoot);
+    if (   lenRoot
+        && pszNewRoot[lenRoot - 1] == '/'
+        && pszNewRoot[lenRoot - 1] == '\\'
+        && lenRoot > 1
+        && pszNewRoot[lenRoot - 2] == '/'
+        && pszNewRoot[lenRoot - 2] == '\\')
+    {
+        *ppszSourceRoot = pszNewRoot;
+        if (lenRoot > 1)
+            *ppszSourceRoot[lenRoot - 2] = '\0';
+        *ppszSourceRoot[lenRoot - 1] = '\0';
+    }
     else
     {
-        rc = showProgress(progress);
-        if (FAILED(rc))
-            vrc = ctrlPrintProgressError(progress);
+        /* If there's anything (like a file name or a filter),
+         * strip it! */
+        RTPathStripFilename(pszNewRoot);
+        *ppszSourceRoot = pszNewRoot;
     }
-    return vrc;
+
+    return VINF_SUCCESS;
 }
 
-
-static int ctrlCopyToDestDirectory(IGuest *pGuest, bool fVerbose, DESTDIRMAPITER itDest, const char *pszDestRoot,
-                                   SOURCEFILEENTRY &sourceEntry, uint32_t uFlags, const char *pszUsername, const char *pszPassword)
+static void ctrlCopyFreeSourceRoot(char *pszSourceRoot)
 {
-    AssertPtrReturn(pGuest, VERR_INVALID_POINTER);
-    AssertPtrReturn(pszDestRoot, VERR_INVALID_POINTER);
-    AssertPtrReturn(pszUsername, VERR_INVALID_POINTER);
-    AssertPtrReturn(pszPassword, VERR_INVALID_POINTER);
-
-    int rc = VINF_SUCCESS;
-    for (unsigned long l = 0; l < itDest->second.size(); l++)
-    {
-        int iLen;
-        char *pszSource;
-        if (itDest->first.isEmpty())
-            iLen = RTStrAPrintf(&pszSource, "%s/%s", sourceEntry.mSource.c_str(),
-                                itDest->second[l].mFileName.c_str());
-        else
-            iLen = RTStrAPrintf(&pszSource, "%s/%s/%s", sourceEntry.mSource.c_str(),
-                                itDest->first.c_str(), itDest->second[l].mFileName.c_str());
-        if (!iLen)
-        {
-            rc = VERR_NO_MEMORY;
-            break;
-        }
-
-        char *pszDest;
-        if (itDest->first.isEmpty())
-            iLen = RTStrAPrintf(&pszDest, "%s/%s", pszDestRoot,
-                                itDest->second[l].mFileName.c_str());
-        else
-            iLen = RTStrAPrintf(&pszDest, "%s/%s/%s", pszDestRoot, itDest->first.c_str(),
-                                itDest->second[l].mFileName.c_str());
-        if (!iLen)
-        {
-            rc = VERR_NO_MEMORY;
-            RTStrFree(pszSource);
-            break;
-        }
-
-        if (fVerbose)
-            RTPrintf("\"%s\" -> \"%s\"\n", pszSource, pszDest);
-
-        /* Finally copy the desired file (if no dry run selected). */
-        rc = ctrlCopyFileToGuest(pGuest, pszSource, pszDest,
-                                 pszUsername, pszPassword, uFlags);
-        RTStrFree(pszSource);
-        RTStrFree(pszDest);
-    }
-    return rc;
+    RTStrFree(pszSourceRoot);
 }
 
-static int handleCtrlCopyTo(ComPtr<IGuest> guest, HandlerArg *pArg)
+static int handleCtrlCopyTo(ComPtr<IGuest> guest, HandlerArg *pArg,
+                            bool fHostToGuest)
 {
     AssertPtrReturn(pArg, VERR_INVALID_PARAMETER);
 
@@ -1124,6 +1463,11 @@ static int handleCtrlCopyTo(ComPtr<IGuest> guest, HandlerArg *pArg)
      * what and how to implement the file enumeration/recursive lookup, like VBoxManage
      * does in here.
      */
+
+#ifdef DEBUG_andy
+    tstTranslatePath();
+    return VINF_SUCCESS;
+#endif
 
     static const RTGETOPTDEF s_aOptions[] =
     {
@@ -1227,87 +1571,141 @@ static int handleCtrlCopyTo(ComPtr<IGuest> guest, HandlerArg *pArg)
      */
     if (fVerbose)
     {
+        if (fHostToGuest)
+            RTPrintf("Copying from host to guest ...\n");
+        else
+            RTPrintf("Copying from guest to host ...\n");
         if (fDryRun)
             RTPrintf("Dry run - no files copied!\n");
     }
 
-    /* Strip traling slash from destination path. */
-    RTPathStripTrailingSlash(Utf8Dest.mutableRaw());
-    Utf8Dest.jolt();
-
-    /*
-     * Here starts the actual fun!
-     */
-    for (unsigned long s = 0; s < vecSources.size(); s++)
+    /* Create the copy context -- it contains all information
+     * the routines need to know when handling the actual copying. */
+    PCOPYCONTEXT pContext;
+    vrc = ctrlCopyContextCreate(guest, fVerbose, fHostToGuest,
+                                Utf8UserName.c_str(), Utf8Password.c_str(),
+                                &pContext);
+    if (RT_FAILURE(vrc))
     {
-        uint32_t cObjects = 0;
-        DESTDIRMAP mapDest;
+        RTMsgError("Unable to create copy context, rc=%Rrc\n", vrc);
+        return RTEXITCODE_FAILURE;
+    }
 
-        char *pszDestRoot;
-        vrc = ctrlCopyGetDestinationRoot(&pszDestRoot, vecSources[s], Utf8Dest.c_str());
-        if (RT_SUCCESS(vrc))
+    /* If the destination is a path, (try to) create it. */
+    const char *pszDest = Utf8Dest.c_str();
+    AssertPtr(pszDest);
+    size_t lenDest = strlen(pszDest);
+    if (   lenDest
+         ||pszDest[lenDest - 1] == '/'
+        || pszDest[lenDest - 1] == '\\')
+    {
+        vrc = ctrlCopyDirCreate(pContext, pszDest);
+    }
+
+    if (RT_SUCCESS(vrc))
+    {
+        /*
+         * Here starts the actual fun!
+         * Handle all given sources one by one.
+         */
+        for (unsigned long s = 0; s < vecSources.size(); s++)
         {
-            vrc = ctrlCopyConstructDestinations(vecSources[s], fFlags, pszDestRoot,
-                                                mapDest, &cObjects);
+            const char *pszSource = vecSources[s].mSource.c_str();
+            const char *pszFilter = vecSources[s].mFilter.c_str();
+            if (!strlen(pszFilter))
+                pszFilter = NULL; /* If empty filter then there's no filter :-) */
+
+            char *pszSourceRoot;
+            vrc = ctrlCopyCreateSourceRoot(pszSource, &pszSourceRoot);
             if (RT_FAILURE(vrc))
             {
-                if (   fVerbose
-                    && vrc == VERR_FILE_NOT_FOUND)
+                RTMsgError("Unable to create source root, rc=%Rrc\n", vrc);
+                break;
+            }
+
+            if (fVerbose)
+                RTPrintf("Source: %s\n", pszSource);
+
+            /** @todo Files with filter?? */
+            bool fIsFile = false;
+            bool fExists;
+            Utf8Str Utf8CurSource(pszSource);
+            if (   Utf8CurSource.endsWith("/")
+                || Utf8CurSource.endsWith("\\"))
+            {
+#ifndef DEBUG_andy
+                if (pContext->fHostToGuest)
                 {
-                    RTPrintf("Warning: Source \"%s\" does not exist, skipping!\n",
-                             vecSources[s].mSource.c_str());
+#endif
+                    if (pszFilter) /* Directory with filter. */
+                        vrc = ctrlCopyDirExistsOnSource(pContext, pszSourceRoot, &fExists);
+                    else /* Regular directory without filter. */
+                        vrc = ctrlCopyDirExistsOnSource(pContext, pszSource, &fExists);
+#ifndef DEBUG_andy
                 }
+                else
+                {
+                    RTMsgError("Copying of guest directories to the host is not supported yet!\n");
+                    vrc = VERR_NOT_IMPLEMENTED;
+                }
+#endif
             }
             else
             {
-                /*
-                 * Prepare directory structure of each destination directory.
-                 */
-                DESTDIRMAPITER itDest;
-                ComPtr<IProgress> progress;
-                for (itDest = mapDest.begin(); itDest != mapDest.end(); itDest++)
-                {
-                    if (!fDryRun)
-                        vrc = ctrlCopyPrepareDestDirectory(guest, itDest, pszDestRoot,
-                                                           Utf8UserName.c_str(), Utf8Password.c_str());
-                    if (RT_FAILURE(vrc))
-                        break;
-                }
+                vrc = ctrlCopyFileExistsOnSource(pContext, pszSource, &fExists);
+                if (   RT_SUCCESS(vrc)
+                    && fExists)
+                    fIsFile = true;
+            }
 
-                if (fVerbose)
+            if (RT_SUCCESS(vrc))
+            {
+                if (fIsFile)
                 {
-                    if (!cObjects)
-                        RTPrintf("Warning: Source \"%s\" has no (matching) files to copy, skipping!\n",
-                                 vecSources[s].mSource.c_str());
-                    else
-                        RTPrintf("Copying \"%s\" (%u files) ...\n",
-                                 vecSources[s].mSource.c_str(), cObjects);
-                }
-
-                /*
-                 * Copy files of each destination root directory to the guest.
-                 */
-                for (itDest = mapDest.begin(); itDest != mapDest.end(); itDest++)
-                {
-                    if (fVerbose && itDest->second.size())
+                    /* Single file. */
+                    char *pszDestFile;
+                    vrc = ctrlCopyTranslatePath(pszSourceRoot, pszSource,
+                                                Utf8Dest.c_str(), &pszDestFile);
+                    if (RT_SUCCESS(vrc))
                     {
-                        if (itDest->first.isEmpty())
-                            RTPrintf("Copying %u files ...\n", itDest->second.size());
-                        else
-                            RTPrintf("Copying directory \"%s\" (%u files) ...\n",
-                                     itDest->first.c_str(), itDest->second.size());
+                        vrc = ctrlCopyFileToTarget(pContext, pszSource,
+                                                   pszDestFile, fFlags);
+                        RTStrFree(pszDestFile);
                     }
-
-                    if (!fDryRun)
-                        vrc = ctrlCopyToDestDirectory(guest, fVerbose, itDest, pszDestRoot,
-                                                      vecSources[s], fFlags, Utf8UserName.c_str(), Utf8Password.c_str());
-                    if (RT_FAILURE(vrc))
-                        break;
+                    else
+                    {
+                        RTMsgError("Unable to translate path for \"%s\", rc=%Rrc\n",
+                                   pszSource, vrc);
+                    }
+                }
+                else
+                {
+                    /* Directory (with filter?). */
+                    vrc = ctrlCopyDirToTarget(pContext, pszSource, pszFilter,
+                                              Utf8Dest.c_str(), fFlags, NULL /* Subdir */);
                 }
             }
-            RTStrFree(pszDestRoot);
+
+            ctrlCopyFreeSourceRoot(pszSourceRoot);
+
+            if (   RT_SUCCESS(vrc)
+                && !fExists)
+            {
+                RTMsgError("Warning: Source \"%s\" does not exist, skipping!\n",
+                           pszSource);
+                continue;
+            }
+
+            if (RT_FAILURE(vrc))
+            {
+                RTMsgError("Error processing \"%s\", rc=%Rrc\n",
+                           pszSource, vrc);
+                break;
+            }
         }
     }
+
+    ctrlCopyContextFree(pContext);
 
     return RT_SUCCESS(vrc) ? RTEXITCODE_SUCCESS : RTEXITCODE_FAILURE;
 }
@@ -1324,11 +1722,11 @@ static int handleCtrlCreateDirectory(ComPtr<IGuest> guest, HandlerArg *pArg)
      */
     static const RTGETOPTDEF s_aOptions[] =
     {
-        { "--mode",                'm',         RTGETOPT_REQ_UINT32  },
-        { "--parents",             'P',         RTGETOPT_REQ_NOTHING },
-        { "--password",            'p',         RTGETOPT_REQ_STRING  },
-        { "--username",            'u',         RTGETOPT_REQ_STRING  },
-        { "--verbose",             'v',         RTGETOPT_REQ_NOTHING }
+        { "--mode",                'm',                             RTGETOPT_REQ_UINT32  },
+        { "--parents",             'P',                             RTGETOPT_REQ_NOTHING },
+        { "--password",            GETOPTDEF_MKDIR_PASSWORD,        RTGETOPT_REQ_STRING  },
+        { "--username",            GETOPTDEF_MKDIR_USERNAME,        RTGETOPT_REQ_STRING  },
+        { "--verbose",             'v',                             RTGETOPT_REQ_NOTHING }
     };
 
     int ch;
@@ -1339,7 +1737,7 @@ static int handleCtrlCreateDirectory(ComPtr<IGuest> guest, HandlerArg *pArg)
 
     Utf8Str Utf8UserName;
     Utf8Str Utf8Password;
-    uint32_t fFlags = CreateDirectoryFlag_None;
+    uint32_t fFlags = DirectoryCreateFlag_None;
     uint32_t fDirMode = 0; /* Default mode. */
     bool fVerbose = false;
 
@@ -1357,14 +1755,14 @@ static int handleCtrlCreateDirectory(ComPtr<IGuest> guest, HandlerArg *pArg)
                 break;
 
             case 'P': /* Create parents */
-                fFlags |= CreateDirectoryFlag_Parents;
+                fFlags |= DirectoryCreateFlag_Parents;
                 break;
 
-            case 'p': /* Password */
+            case GETOPTDEF_MKDIR_PASSWORD: /* Password */
                 Utf8Password = ValueUnion.psz;
                 break;
 
-            case 'u': /* User name */
+            case GETOPTDEF_MKDIR_USERNAME: /* User name */
                 Utf8UserName = ValueUnion.psz;
                 break;
 
@@ -1406,14 +1804,133 @@ static int handleCtrlCreateDirectory(ComPtr<IGuest> guest, HandlerArg *pArg)
             if (fVerbose)
                 RTPrintf("Creating directory \"%s\" ...\n", it->first.c_str());
 
-            ComPtr<IProgress> progress;
-            hrc = guest->CreateDirectory(Bstr(it->first).raw(),
+            hrc = guest->DirectoryCreate(Bstr(it->first).raw(),
                                          Bstr(Utf8UserName).raw(), Bstr(Utf8Password).raw(),
-                                         fDirMode, fFlags, progress.asOutParam());
+                                         fDirMode, fFlags);
             if (FAILED(hrc))
             {
                 ctrlPrintError(guest, COM_IIDOF(IGuest)); /* Return code ignored, save original rc. */
                 break;
+            }
+
+            it++;
+        }
+
+        if (FAILED(hrc))
+            rcExit = RTEXITCODE_FAILURE;
+    }
+
+    return rcExit;
+}
+
+static int handleCtrlStat(ComPtr<IGuest> guest, HandlerArg *pArg)
+{
+    AssertPtrReturn(pArg, VERR_INVALID_PARAMETER);
+
+    static const RTGETOPTDEF s_aOptions[] =
+    {
+        { "--dereference",         'L',                             RTGETOPT_REQ_NOTHING },
+        { "--file-system",         'f',                             RTGETOPT_REQ_NOTHING },
+        { "--format",              'c',                             RTGETOPT_REQ_STRING },
+        { "--password",            GETOPTDEF_STAT_PASSWORD,         RTGETOPT_REQ_STRING  },
+        { "--terse",               't',                             RTGETOPT_REQ_NOTHING },
+        { "--username",            GETOPTDEF_STAT_USERNAME,         RTGETOPT_REQ_STRING  },
+        { "--verbose",             'v',                             RTGETOPT_REQ_NOTHING }
+    };
+
+    int ch;
+    RTGETOPTUNION ValueUnion;
+    RTGETOPTSTATE GetState;
+    RTGetOptInit(&GetState, pArg->argc, pArg->argv,
+                 s_aOptions, RT_ELEMENTS(s_aOptions), 0, RTGETOPTINIT_FLAGS_OPTS_FIRST);
+
+    Utf8Str Utf8UserName;
+    Utf8Str Utf8Password;
+
+    bool fVerbose = false;
+    DESTDIRMAP mapObjs;
+
+    RTEXITCODE rcExit = RTEXITCODE_SUCCESS;
+    while (   (ch = RTGetOpt(&GetState, &ValueUnion))
+           && rcExit == RTEXITCODE_SUCCESS)
+    {
+        /* For options that require an argument, ValueUnion has received the value. */
+        switch (ch)
+        {
+            case GETOPTDEF_STAT_PASSWORD: /* Password */
+                Utf8Password = ValueUnion.psz;
+                break;
+
+            case GETOPTDEF_STAT_USERNAME: /* User name */
+                Utf8UserName = ValueUnion.psz;
+                break;
+
+            case 'L': /* Dereference */
+            case 'f': /* File-system */
+            case 'c': /* Format */
+            case 't': /* Terse */
+                return errorSyntax(USAGE_GUESTCONTROL, "Command \"%s\" not implemented yet!",
+                                   ValueUnion.psz);
+                break; /* Never reached. */
+
+            case 'v': /* Verbose */
+                fVerbose = true;
+                break;
+
+            case VINF_GETOPT_NOT_OPTION:
+            {
+                mapObjs[ValueUnion.psz]; /* Add element to check to map. */
+                break;
+            }
+
+            default:
+                return RTGetOptPrintError(ch, &ValueUnion);
+                break; /* Never reached. */
+        }
+    }
+
+    uint32_t cObjs = mapObjs.size();
+    if (rcExit == RTEXITCODE_SUCCESS && !cObjs)
+        rcExit = errorSyntax(USAGE_GUESTCONTROL, "No element(s) to check specified!");
+
+    if (rcExit == RTEXITCODE_SUCCESS && Utf8UserName.isEmpty())
+        rcExit = errorSyntax(USAGE_GUESTCONTROL, "No user name specified!");
+
+    if (rcExit == RTEXITCODE_SUCCESS)
+    {
+        /*
+         * Create the directories.
+         */
+        HRESULT hrc = S_OK;
+
+        DESTDIRMAPITER it = mapObjs.begin();
+        while (it != mapObjs.end())
+        {
+            if (fVerbose)
+                RTPrintf("Checking for element \"%s\" ...\n", it->first.c_str());
+
+            BOOL fExists;
+            hrc = guest->FileExists(Bstr(it->first).raw(),
+                                    Bstr(Utf8UserName).raw(), Bstr(Utf8Password).raw(),
+                                    &fExists);
+            if (FAILED(hrc))
+            {
+                ctrlPrintError(guest, COM_IIDOF(IGuest)); /* Return code ignored, save original rc. */
+                break;
+            }
+            else
+            {
+                /** @todo: Output vbox_stat's stdout output to get more information about
+                 *         what happened. */
+
+                /* If there's at least one element which does not exist on the guest,
+                 * drop out with exitcode 1. */
+                if (!fExists)
+                {
+                    RTPrintf("Cannot stat for element \"%s\": No such file or directory.\n",
+                             it->first.c_str());
+                    rcExit = RTEXITCODE_FAILURE;
+                }
             }
 
             it++;
@@ -1554,10 +2071,16 @@ int handleGuestControl(HandlerArg *pArg)
         {
             rcExit = handleCtrlExecProgram(guest, &arg);
         }
+        else if (!strcmp(pArg->argv[1], "copyfrom"))
+        {
+            rcExit = handleCtrlCopyTo(guest, &arg,
+                                      false /* Guest to host */);
+        }
         else if (   !strcmp(pArg->argv[1], "copyto")
                  || !strcmp(pArg->argv[1], "cp"))
         {
-            rcExit = handleCtrlCopyTo(guest, &arg);
+            rcExit = handleCtrlCopyTo(guest, &arg,
+                                      true /* Host to guest */);
         }
         else if (   !strcmp(pArg->argv[1], "createdirectory")
                  || !strcmp(pArg->argv[1], "createdir")
@@ -1565,6 +2088,10 @@ int handleGuestControl(HandlerArg *pArg)
                  || !strcmp(pArg->argv[1], "md"))
         {
             rcExit = handleCtrlCreateDirectory(guest, &arg);
+        }
+        else if (   !strcmp(pArg->argv[1], "stat"))
+        {
+            rcExit = handleCtrlStat(guest, &arg);
         }
         else if (   !strcmp(pArg->argv[1], "updateadditions")
                  || !strcmp(pArg->argv[1], "updateadds"))

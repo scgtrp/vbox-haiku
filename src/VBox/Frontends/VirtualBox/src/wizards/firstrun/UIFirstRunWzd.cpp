@@ -21,7 +21,7 @@
 #include "UIFirstRunWzd.h"
 #include "UIIconPool.h"
 #include "VBoxGlobal.h"
-#include "VBoxProblemReporter.h"
+#include "UIMessageCenter.h"
 
 UIFirstRunWzd::UIFirstRunWzd(QWidget *pParent, const CMachine &machine) : QIWizard(pParent)
 {
@@ -97,6 +97,8 @@ void UIFirstRunWzd::retranslateUi()
 {
     /* Wizard title */
     setWindowTitle(tr("First Run Wizard"));
+
+    setButtonText(QWizard::FinishButton, tr("Start"));
 }
 
 UIFirstRunWzdPage1::UIFirstRunWzdPage1()
@@ -350,7 +352,7 @@ bool UIFirstRunWzdPage3::insertDevice()
         return true;
     else
     {
-        vboxProblem().cannotRemountMedium(this, m_Machine, vmedium,
+        msgCenter().cannotRemountMedium(this, m_Machine, vmedium,
                                           true /* mount? */, false /* retry? */);
         return false;
     }

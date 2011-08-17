@@ -31,6 +31,8 @@
 #define VBOXWDDMDISP_MAX_VERTEX_STREAMS 16
 #define VBOXWDDMDISP_MAX_SWAPCHAIN_SIZE 16
 
+#define VBOXWDDMDISP_IS_TEXTURE(_f) ((_f).Texture || (_f).Value == 0)
+
 #ifdef VBOX_WITH_VIDEOHWACCEL
 typedef struct VBOXDISPVHWA_INFO
 {
@@ -53,7 +55,6 @@ typedef struct VBOXWDDMDISP_ADAPTER
     UINT uIfVersion;
     UINT uRtVersion;
     VBOXDISPD3D D3D;
-    VBOXDISPWORKER WndWorker;
     IDirect3D9Ex * pD3D9If;
     D3DDDI_ADAPTERCALLBACKS RtCallbacks;
     uint32_t cFormstOps;
@@ -145,6 +146,10 @@ typedef struct VBOXWDDMDISP_SWAPCHAIN
     BOOL bRTFbCopyUpToDate;
 #endif
     IDirect3DSwapChain9 *pSwapChainIf;
+    /* a read-only hWnd we receive from wine
+     * we use it for visible region notifications only,
+     * it MUST NOT be destroyed on swapchain destruction,
+     * wine will handle that for us */
     HWND hWnd;
     VBOXDISP_KMHANDLE hSwapchainKm;
     VBOXWDDMDISP_RENDERTGT aRTs[VBOXWDDMDISP_MAX_SWAPCHAIN_SIZE];
@@ -188,7 +193,7 @@ typedef struct VBOXWDDMDISP_DEVICE
     VBOXUHGSMI_PRIVATE_D3D Uhgsmi;
 #endif
 
-    CRITICAL_SECTION DirtyAllocListLock;
+    /* no lock is needed for this since we're guaranteed the per-device calls are not reentrant */
     RTLISTNODE DirtyAllocList;
     UINT cRTs;
     struct VBOXWDDMDISP_ALLOCATION * apRTs[1];
@@ -204,6 +209,9 @@ typedef struct VBOXWDDMDISP_LOCKINFO
     };
     D3DDDI_LOCKFLAGS fFlags;
     D3DLOCKED_RECT LockedRect;
+#ifdef VBOXWDDMDISP_DEBUG
+    PVOID pvData;
+#endif
 } VBOXWDDMDISP_LOCKINFO;
 
 typedef enum
@@ -228,7 +236,9 @@ typedef struct VBOXWDDMDISP_ALLOCATION
     IUnknown *pD3DIf;
     IUnknown *pSecondaryOpenedD3DIf;
     VBOXDISP_D3DIFTYPE enmD3DIfType;
+    /* list entry used to add allocation to the dirty alloc list */
     RTLISTNODE DirtyAllocListEntry;
+    BOOLEAN fDirtyWrite;
     HANDLE hSharedHandle;
     VBOXWDDMDISP_LOCKINFO LockInfo;
     VBOXWDDM_DIRTYREGION DirtyRegion; /* <- dirty region to notify host about */

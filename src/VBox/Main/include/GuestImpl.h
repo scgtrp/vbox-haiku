@@ -23,9 +23,11 @@
 #include <VBox/ostypes.h>
 
 #include "AdditionsFacilityImpl.h"
+#include "GuestCtrlImplPrivate.h"
+#include "HGCM.h"
 #ifdef VBOX_WITH_GUEST_CONTROL
+# include <iprt/fs.h>
 # include <VBox/HostServices/GuestControlSvc.h>
-# include "HGCM.h"
 using namespace guestControl;
 #endif
 
@@ -85,29 +87,38 @@ public:
     // IGuest methods
     STDMETHOD(GetFacilityStatus)(AdditionsFacilityType_T aType, LONG64 *aTimestamp, AdditionsFacilityStatus_T *aStatus);
     STDMETHOD(GetAdditionsStatus)(AdditionsRunLevelType_T aLevel, BOOL *aActive);
-    STDMETHOD(SetCredentials)(IN_BSTR aUserName, IN_BSTR aPassword,
+    STDMETHOD(SetCredentials)(IN_BSTR aUsername, IN_BSTR aPassword,
                               IN_BSTR aDomain, BOOL aAllowInteractiveLogon);
+    // Process execution
     STDMETHOD(ExecuteProcess)(IN_BSTR aCommand, ULONG aFlags,
                               ComSafeArrayIn(IN_BSTR, aArguments), ComSafeArrayIn(IN_BSTR, aEnvironment),
-                              IN_BSTR aUserName, IN_BSTR aPassword,
+                              IN_BSTR aUsername, IN_BSTR aPassword,
                               ULONG aTimeoutMS, ULONG *aPID, IProgress **aProgress);
     STDMETHOD(GetProcessOutput)(ULONG aPID, ULONG aFlags, ULONG aTimeoutMS, LONG64 aSize, ComSafeArrayOut(BYTE, aData));
     STDMETHOD(SetProcessInput)(ULONG aPID, ULONG aFlags, ULONG aTimeoutMS, ComSafeArrayIn(BYTE, aData), ULONG *aBytesWritten);
     STDMETHOD(GetProcessStatus)(ULONG aPID, ULONG *aExitCode, ULONG *aFlags, ExecuteProcessStatus_T *aStatus);
-    STDMETHOD(CopyToGuest)(IN_BSTR aSource, IN_BSTR aDest, IN_BSTR aUserName, IN_BSTR aPassword, ULONG aFlags, IProgress **aProgress);
-    STDMETHOD(CreateDirectory)(IN_BSTR aDirectory, IN_BSTR aUserName, IN_BSTR aPassword, ULONG aMode, ULONG aFlags, IProgress **aProgress);
+    // File copying
+    STDMETHOD(CopyFromGuest)(IN_BSTR aSource, IN_BSTR aDest, IN_BSTR aUsername, IN_BSTR aPassword, ULONG aFlags, IProgress **aProgress);
+    STDMETHOD(CopyToGuest)(IN_BSTR aSource, IN_BSTR aDest, IN_BSTR aUsername, IN_BSTR aPassword, ULONG aFlags, IProgress **aProgress);
+    // Directory handling
+    STDMETHOD(DirectoryClose)(ULONG aHandle);
+    STDMETHOD(DirectoryCreate)(IN_BSTR aDirectory, IN_BSTR aUsername, IN_BSTR aPassword, ULONG aMode, ULONG aFlags);
+#if 0
+    STDMETHOD(DirectoryExists)(IN_BSTR aDirectory, IN_BSTR aUsername, IN_BSTR aPassword, BOOL *aExists);
+#endif
+    STDMETHOD(DirectoryOpen)(IN_BSTR aDirectory, IN_BSTR aFilter,
+                             ULONG aFlags, IN_BSTR aUsername, IN_BSTR aPassword, ULONG *aHandle);
+    STDMETHOD(DirectoryRead)(ULONG aHandle, IGuestDirEntry **aDirEntry);
+    // File handling
+    STDMETHOD(FileExists)(IN_BSTR aFile, IN_BSTR aUsername, IN_BSTR aPassword, BOOL *aExists);
+    STDMETHOD(FileQuerySize)(IN_BSTR aFile, IN_BSTR aUsername, IN_BSTR aPassword, LONG64 *aSize);
+    // Misc stuff
     STDMETHOD(InternalGetStatistics)(ULONG *aCpuUser, ULONG *aCpuKernel, ULONG *aCpuIdle,
                                      ULONG *aMemTotal, ULONG *aMemFree, ULONG *aMemBalloon, ULONG *aMemShared, ULONG *aMemCache,
                                      ULONG *aPageTotal, ULONG *aMemAllocTotal, ULONG *aMemFreeTotal, ULONG *aMemBalloonTotal, ULONG *aMemSharedTotal);
     STDMETHOD(UpdateGuestAdditions)(IN_BSTR aSource, ULONG aFlags, IProgress **aProgress);
 
     // Public methods that are not in IDL (only called internally).
-    HRESULT executeProcessInternal(IN_BSTR aCommand, ULONG aFlags,
-                                   ComSafeArrayIn(IN_BSTR, aArguments), ComSafeArrayIn(IN_BSTR, aEnvironment),
-                                   IN_BSTR aUserName, IN_BSTR aPassword,
-                                   ULONG aTimeoutMS, ULONG *aPID, IProgress **aProgress, int *pRC);
-    HRESULT createDirectoryInternal(IN_BSTR aDirectory, IN_BSTR aUserName, IN_BSTR aPassword,
-                                    ULONG aMode, ULONG aFlags, IProgress **aProgress, int *pRC);
     void setAdditionsInfo(Bstr aInterfaceVersion, VBOXOSTYPE aOsType);
     void setAdditionsInfo2(Bstr aAdditionsVersion, Bstr aVersionName, Bstr aRevision);
     bool facilityIsActive(VBoxGuestFacilityType enmFacility);
@@ -116,25 +127,63 @@ public:
     void setSupportedFeatures(uint32_t aCaps);
     HRESULT setStatistic(ULONG aCpuId, GUESTSTATTYPE enmType, ULONG aVal);
     BOOL isPageFusionEnabled();
-# ifdef VBOX_WITH_GUEST_CONTROL
-    /** Static callback for handling guest notifications. */
-    static DECLCALLBACK(int) doGuestCtrlNotification(void *pvExtension, uint32_t u32Function, void *pvParms, uint32_t cbParms);
-# endif
     static HRESULT setErrorStatic(HRESULT aResultCode,
                                   const Utf8Str &aText)
     {
         return setErrorInternal(aResultCode, getStaticClassIID(), getStaticComponentName(), aText, false, true);
     }
 
-private:
-#ifdef VBOX_WITH_GUEST_CONTROL
-    // Internal tasks.
-    struct TaskGuest; /* Worker thread helper. */
-    HRESULT taskCopyFile(TaskGuest *aTask);
-    HRESULT taskUpdateGuestAdditions(TaskGuest *aTask);
+# ifdef VBOX_WITH_GUEST_CONTROL
+    // Internal guest directory functions
+    int directoryCreateHandle(ULONG *puHandle, ULONG uPID, IN_BSTR aDirectory, IN_BSTR aFilter, ULONG uFlags);
+    HRESULT directoryCreateInternal(IN_BSTR aDirectory, IN_BSTR aUsername, IN_BSTR aPassword,
+                                    ULONG aMode, ULONG aFlags, int *pRC);
+    void directoryDestroyHandle(uint32_t uHandle);
+    HRESULT directoryExistsInternal(IN_BSTR aDirectory, IN_BSTR aUsername, IN_BSTR aPassword, BOOL *aExists);
+    uint32_t directoryGetPID(uint32_t uHandle);
+    int directoryGetNextEntry(uint32_t uHandle, GuestProcessStreamBlock &streamBlock);
+    bool directoryHandleExists(uint32_t uHandle);
+    HRESULT directoryOpenInternal(IN_BSTR aDirectory, IN_BSTR aFilter,
+                                  ULONG aFlags,
+                                  IN_BSTR aUsername, IN_BSTR aPassword,
+                                  ULONG *aHandle, int *pRC);
+    HRESULT directoryQueryInfoInternal(IN_BSTR aDirectory, IN_BSTR aUsername, IN_BSTR aPassword, PRTFSOBJINFO aObjInfo, RTFSOBJATTRADD enmAddAttribs, int *pRC);
+    // Internal guest execution functions
+    HRESULT executeAndWaitForTool(IN_BSTR aTool, IN_BSTR aDescription,
+                                  ComSafeArrayIn(IN_BSTR, aArguments), ComSafeArrayIn(IN_BSTR, aEnvironment),
+                                  IN_BSTR aUsername, IN_BSTR aPassword,
+                                  IProgress **aProgress, ULONG *aPID);
+    HRESULT executeProcessInternal(IN_BSTR aCommand, ULONG aFlags,
+                                   ComSafeArrayIn(IN_BSTR, aArguments), ComSafeArrayIn(IN_BSTR, aEnvironment),
+                                   IN_BSTR aUsername, IN_BSTR aPassword,
+                                   ULONG aTimeoutMS, ULONG *aPID, IProgress **aProgress, int *pRC);
+    HRESULT executeProcessResult(const char *pszCommand, const char *pszUser, ULONG ulTimeout, PCALLBACKDATAEXECSTATUS pExecStatus, ULONG *puPID);
+    HRESULT executeStreamQueryFsObjInfo(IN_BSTR aObjName,GuestProcessStreamBlock &streamBlock, PRTFSOBJINFO pObjInfo, RTFSOBJATTRADD enmAddAttribs);
+    int     executeStreamDrain(ULONG aPID, GuestProcessStream &stream);
+    int     executeStreamGetNextBlock(ULONG aPID, GuestProcessStream &stream, GuestProcessStreamBlock &streamBlock);
+    HRESULT executeStreamParse(ULONG aPID, GuestCtrlStreamObjects &streamObjects);
+    HRESULT executeWaitForStatusChange(ULONG uPID, ULONG uTimeoutMS, ExecuteProcessStatus_T *pRetStatus, ULONG *puRetExitCode);
+    // Internal guest file functions
+    HRESULT fileExistsInternal(IN_BSTR aFile, IN_BSTR aUsername, IN_BSTR aPassword, BOOL *aExists);
+    HRESULT fileQueryInfoInternal(IN_BSTR aFile, IN_BSTR aUsername, IN_BSTR aPassword, PRTFSOBJINFO aObjInfo, RTFSOBJATTRADD enmAddAttribs, int *pRC);
+    HRESULT fileQuerySizeInternal(IN_BSTR aFile, IN_BSTR aUsername, IN_BSTR aPassword, LONG64 *aSize);
 
-    // Internal callback context handling.
-    struct CallbackContext
+    // Guest control dispatcher.
+    /** Static callback for handling guest notifications. */
+    static DECLCALLBACK(int) notifyCtrlDispatcher(void *pvExtension, uint32_t u32Function, void *pvParms, uint32_t cbParms);
+
+    // Internal tasks.
+    //extern struct GuestTask;
+    HRESULT taskCopyFileToGuest(GuestTask *aTask);
+    HRESULT taskCopyFileFromGuest(GuestTask *aTask);
+    HRESULT taskUpdateGuestAdditions(GuestTask *aTask);
+# endif
+
+private:
+
+#ifdef VBOX_WITH_GUEST_CONTROL
+    // Internal guest callback representation.
+    typedef struct VBOXGUESTCTRL_CALLBACK
     {
         eVBoxGuestCtrlCallbackType  mType;
         /** Pointer to user-supplied data. */
@@ -143,42 +192,75 @@ private:
         uint32_t                    cbData;
         /** Pointer to user-supplied IProgress. */
         ComObjPtr<Progress>         pProgress;
-    };
-    /*
-     * The map key is the context ID.
-     */
-    typedef std::map< uint32_t, CallbackContext > CallbackMap;
-    typedef std::map< uint32_t, CallbackContext >::iterator CallbackMapIter;
-    typedef std::map< uint32_t, CallbackContext >::const_iterator CallbackMapIterConst;
+    } VBOXGUESTCTRL_CALLBACK, *PVBOXGUESTCTRL_CALLBACK;
+    typedef std::map< uint32_t, VBOXGUESTCTRL_CALLBACK > CallbackMap;
+    typedef std::map< uint32_t, VBOXGUESTCTRL_CALLBACK >::iterator CallbackMapIter;
+    typedef std::map< uint32_t, VBOXGUESTCTRL_CALLBACK >::const_iterator CallbackMapIterConst;
 
-    struct GuestProcess
-    {
-        ExecuteProcessStatus_T      mStatus;
-        uint32_t                    mFlags;
-        uint32_t                    mExitCode;
-    };
-    /*
-     * The map key is the PID (process identifier).
-     */
-    typedef std::map< uint32_t, GuestProcess > GuestProcessMap;
-    typedef std::map< uint32_t, GuestProcess >::iterator GuestProcessMapIter;
-    typedef std::map< uint32_t, GuestProcess >::const_iterator GuestProcessMapIterConst;
+    int callbackAdd(const PVBOXGUESTCTRL_CALLBACK pCallbackData, uint32_t *puContextID);
+    void callbackDestroy(uint32_t uContextID);
+    bool callbackExists(uint32_t uContextID);
+    void callbackFreeUserData(void *pvData);
+    int callbackGetUserData(uint32_t uContextID, eVBoxGuestCtrlCallbackType *pEnmType, void **ppvData, size_t *pcbData);
+    void* callbackGetUserDataMutableRaw(uint32_t uContextID, size_t *pcbData);
+    int callbackInit(PVBOXGUESTCTRL_CALLBACK pCallback, eVBoxGuestCtrlCallbackType enmType, ComPtr<Progress> pProgress);
+    bool callbackIsCanceled(uint32_t uContextID);
+    bool callbackIsComplete(uint32_t uContextID);
+    int callbackMoveForward(uint32_t uContextID, const char *pszMessage);
+    int callbackNotifyEx(uint32_t uContextID, int iRC, const char *pszMessage);
+    int callbackNotifyComplete(uint32_t uContextID);
+    int callbackNotifyAllForPID(uint32_t uPID, int iRC, const char *pszMessage);
+    int callbackWaitForCompletion(uint32_t uContextID, LONG lStage, LONG lTimeout);
 
-    int directoryEntryAppend(const char *pszPath, PRTLISTNODE pList);
-    int directoryRead(const char *pszDirectory, const char *pszFilter, ULONG uFlags, ULONG *pcObjects, PRTLISTNODE pList);
-
-    int prepareExecuteEnv(const char *pszEnv, void **ppvList, uint32_t *pcbList, uint32_t *pcEnv);
-    /** Handler for guest execution control notifications. */
     int notifyCtrlClientDisconnected(uint32_t u32Function, PCALLBACKDATACLIENTDISCONNECTED pData);
     int notifyCtrlExecStatus(uint32_t u32Function, PCALLBACKDATAEXECSTATUS pData);
     int notifyCtrlExecOut(uint32_t u32Function, PCALLBACKDATAEXECOUT pData);
     int notifyCtrlExecInStatus(uint32_t u32Function, PCALLBACKDATAEXECINSTATUS pData);
-    CallbackMapIter getCtrlCallbackContextByID(uint32_t u32ContextID);
-    GuestProcessMapIter getProcessByPID(uint32_t u32PID);
-    void notifyCtrlCallbackContext(Guest::CallbackMapIter it, const char *pszText);
-    void destroyCtrlCallbackContext(CallbackMapIter it);
-    uint32_t addCtrlCallbackContext(eVBoxGuestCtrlCallbackType enmType, void *pvData, uint32_t cbData, Progress* pProgress);
-    HRESULT waitForProcessStatusChange(ULONG uPID, ExecuteProcessStatus_T *pRetStatus, ULONG *puRetExitCode, ULONG uTimeoutMS);
+
+    // Internal guest process representation.
+    typedef struct VBOXGUESTCTRL_PROCESS
+    {
+        ExecuteProcessStatus_T      mStatus;
+        uint32_t                    mFlags;
+        uint32_t                    mExitCode;
+    } VBOXGUESTCTRL_PROCESS, *PVBOXGUESTCTRL_PROCESS;
+    typedef std::map< uint32_t, VBOXGUESTCTRL_PROCESS > GuestProcessMap;
+    typedef std::map< uint32_t, VBOXGUESTCTRL_PROCESS >::iterator GuestProcessMapIter;
+    typedef std::map< uint32_t, VBOXGUESTCTRL_PROCESS >::const_iterator GuestProcessMapIterConst;
+
+    int processAdd(uint32_t u32PID, ExecuteProcessStatus_T enmStatus, uint32_t uExitCode, uint32_t uFlags);
+    int processGetByPID(uint32_t u32PID, PVBOXGUESTCTRL_PROCESS pProcess);
+    int processSetStatus(uint32_t u32PID, ExecuteProcessStatus_T enmStatus, uint32_t uExitCode, uint32_t uFlags);
+
+    // Internal guest directory representation.
+    typedef struct VBOXGUESTCTRL_DIRECTORY
+    {
+        Bstr                        mDirectory;
+        Bstr                        mFilter;
+        ULONG                       mFlags;
+        /** Associated PID of started vbox_ls tool. */
+        ULONG                       mPID;
+        GuestProcessStream          mStream;
+#if 0
+        /** Next enetry in our stream objects vector
+         *  to process. */
+        uint32_t                    mNextEntry;
+        /** The guest stream object containing all */
+        GuestCtrlStreamObjects      mStream;
+#endif
+    } VBOXGUESTCTRL_DIRECTORY, *PVBOXGUESTCTRL_DIRECTORY;
+    typedef std::map< uint32_t, VBOXGUESTCTRL_DIRECTORY > GuestDirectoryMap;
+    typedef std::map< uint32_t, VBOXGUESTCTRL_DIRECTORY >::iterator GuestDirectoryMapIter;
+    typedef std::map< uint32_t, VBOXGUESTCTRL_DIRECTORY >::const_iterator GuestDirectoryMapIterConst;
+
+    // Utility functions.
+    int prepareExecuteEnv(const char *pszEnv, void **ppvList, uint32_t *pcbList, uint32_t *pcEnv);
+
+    /*
+     * Handler for guest execution control notifications.
+     */
+    HRESULT handleErrorCompletion(int rc);
+    HRESULT handleErrorHGCM(int rc);
 # endif
 
     typedef std::map< AdditionsFacilityType_T, ComObjPtr<AdditionsFacility> > FacilityMap;
@@ -207,10 +289,13 @@ private:
 # ifdef VBOX_WITH_GUEST_CONTROL
     /** General extension callback for guest control. */
     HGCMSVCEXTHANDLE  mhExtCtrl;
-
+    /** Next upcoming context ID. */
     volatile uint32_t mNextContextID;
-    CallbackMap mCallbackMap;
-    GuestProcessMap mGuestProcessMap;
+    /** Next upcoming directory handle ID. */
+    volatile uint32_t mNextDirectoryID;
+    CallbackMap       mCallbackMap;
+    GuestDirectoryMap mGuestDirectoryMap;
+    GuestProcessMap   mGuestProcessMap;
 # endif
 };
 

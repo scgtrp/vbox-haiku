@@ -56,6 +56,9 @@
 #include "RemoteUSBDeviceImpl.h"
 #include "SharedFolderImpl.h"
 #include "AudioSnifferInterface.h"
+#ifdef VBOX_WITH_USB_VIDEO
+# include "UsbWebcamInterface.h"
+#endif
 #include "ProgressCombinedImpl.h"
 #include "ConsoleVRDPServer.h"
 #include "VMMDev.h"
@@ -367,8 +370,12 @@ Console::Console()
     , mpVmm2UserMethods(NULL)
     , m_pVMMDev(NULL)
     , mAudioSniffer(NULL)
+#ifdef VBOX_WITH_USB_VIDEO
+    , mUsbWebcamInterface(NULL)
+#endif
     , mBusMgr(NULL)
     , mVMStateChangeCallbackDisabled(false)
+    , mfUseHostClipboard(true)
     , mMachineState(MachineState_PoweredOff)
 {
     for (ULONG slot = 0; slot < SchemaDefs::NetworkAdapterCount; ++slot)
@@ -503,6 +510,10 @@ HRESULT Console::init(IMachine *aMachine, IInternalMachineControl *aControl)
 
     unconst(mAudioSniffer) = new AudioSniffer(this);
     AssertReturn(mAudioSniffer, E_FAIL);
+#ifdef VBOX_WITH_USB_VIDEO
+    unconst(mUsbWebcamInterface) = new UsbWebcamInterface(this);
+    AssertReturn(mUsbWebcamInterface, E_FAIL);
+#endif
 
     /* VirtualBox events registration. */
     {
@@ -593,6 +604,14 @@ void Console::uninit()
         RTMemFree((void *)mpVmm2UserMethods);
         mpVmm2UserMethods = NULL;
     }
+
+#ifdef VBOX_WITH_USB_VIDEO
+    if (mUsbWebcamInterface)
+    {
+        delete mUsbWebcamInterface;
+        unconst(mUsbWebcamInterface) = NULL;
+    }
+#endif
 
     if (mAudioSniffer)
     {
@@ -1784,6 +1803,32 @@ STDMETHODIMP Console::COMGETTER(AttachedPciDevices)(ComSafeArrayOut(IPciDeviceAt
         com::SafeIfaceArray<IPciDeviceAttachment> result((size_t)0);
         result.detachTo(ComSafeArrayOutArg(aAttachments));
     }
+
+    return S_OK;
+}
+
+STDMETHODIMP Console::COMGETTER(UseHostClipboard)(BOOL *aUseHostClipboard)
+{
+    CheckComArgOutPointerValid(aUseHostClipboard);
+
+    AutoCaller autoCaller(this);
+    if (FAILED(autoCaller.rc())) return autoCaller.rc();
+
+    AutoReadLock alock(this COMMA_LOCKVAL_SRC_POS);
+
+    *aUseHostClipboard = mfUseHostClipboard;
+
+    return S_OK;
+}
+
+STDMETHODIMP Console::COMSETTER(UseHostClipboard)(BOOL aUseHostClipboard)
+{
+    AutoCaller autoCaller(this);
+    if (FAILED(autoCaller.rc())) return autoCaller.rc();
+
+    AutoWriteLock alock(this COMMA_LOCKVAL_SRC_POS);
+
+    mfUseHostClipboard = aUseHostClipboard;
 
     return S_OK;
 }
@@ -3200,9 +3245,55 @@ STDMETHODIMP Console::DeleteSnapshot(IN_BSTR aId, IProgress **aProgress)
                         tr("Cannot delete a snapshot of the machine while it is changing the state (machine state: %s)"),
                         Global::stringifyMachineState(mMachineState));
 
+    MachineState_T machineState = MachineState_Null;
+    HRESULT rc = mControl->DeleteSnapshot(this, aId, aId, FALSE /* fDeleteAllChildren */, &machineState, aProgress);
+    if (FAILED(rc)) return rc;
+
+    setMachineStateLocally(machineState);
+    return S_OK;
+}
+
+STDMETHODIMP Console::DeleteSnapshotAndAllChildren(IN_BSTR aId, IProgress **aProgress)
+{
+    CheckComArgExpr(aId, Guid(aId).isEmpty() == false);
+    CheckComArgOutPointerValid(aProgress);
+
+    AutoCaller autoCaller(this);
+    if (FAILED(autoCaller.rc())) return autoCaller.rc();
+
+    AutoWriteLock alock(this COMMA_LOCKVAL_SRC_POS);
+
+    if (Global::IsTransient(mMachineState))
+        return setError(VBOX_E_INVALID_VM_STATE,
+                        tr("Cannot delete a snapshot of the machine while it is changing the state (machine state: %s)"),
+                        Global::stringifyMachineState(mMachineState));
 
     MachineState_T machineState = MachineState_Null;
-    HRESULT rc = mControl->DeleteSnapshot(this, aId, &machineState, aProgress);
+    HRESULT rc = mControl->DeleteSnapshot(this, aId, aId, TRUE /* fDeleteAllChildren */, &machineState, aProgress);
+    if (FAILED(rc)) return rc;
+
+    setMachineStateLocally(machineState);
+    return S_OK;
+}
+
+STDMETHODIMP Console::DeleteSnapshotRange(IN_BSTR aStartId, IN_BSTR aEndId, IProgress **aProgress)
+{
+    CheckComArgExpr(aStartId, Guid(aStartId).isEmpty() == false);
+    CheckComArgExpr(aEndId, Guid(aEndId).isEmpty() == false);
+    CheckComArgOutPointerValid(aProgress);
+
+    AutoCaller autoCaller(this);
+    if (FAILED(autoCaller.rc())) return autoCaller.rc();
+
+    AutoWriteLock alock(this COMMA_LOCKVAL_SRC_POS);
+
+    if (Global::IsTransient(mMachineState))
+        return setError(VBOX_E_INVALID_VM_STATE,
+                        tr("Cannot delete a snapshot of the machine while it is changing the state (machine state: %s)"),
+                        Global::stringifyMachineState(mMachineState));
+
+    MachineState_T machineState = MachineState_Null;
+    HRESULT rc = mControl->DeleteSnapshot(this, aStartId, aEndId, FALSE /* fDeleteAllChildren */, &machineState, aProgress);
     if (FAILED(rc)) return rc;
 
     setMachineStateLocally(machineState);
@@ -3444,7 +3535,7 @@ HRESULT Console::doMediumChange(IMediumAttachment *aMediumAttachment, bool fForc
         return S_OK;
     }
 
-    if (!pMedium)
+    if (pMedium)
         return setError(E_FAIL,
                         tr("Could not mount the media/drive '%ls' (%Rrc)"),
                         mediumLocation.raw(), vrc);
@@ -3595,7 +3686,7 @@ DECLCALLBACK(int) Console::changeRemovableMedium(Console *pConsole,
 /**
  * Attach a new storage device to the VM.
  *
- * @param aMediumAttachment The medium attachmentwhich is added.
+ * @param aMediumAttachment The medium attachment which is added.
  * @param pVM               Safe VM handle.
  *
  * @note Locks this object for writing.
@@ -3840,7 +3931,7 @@ DECLCALLBACK(int) Console::attachStorageDevice(Console *pConsole,
 /**
  * Attach a new storage device to the VM.
  *
- * @param aMediumAttachment The medium attachmentwhich is added.
+ * @param aMediumAttachment The medium attachment which is added.
  * @param pVM               Safe VM handle.
  *
  * @note Locks this object for writing.
@@ -4045,11 +4136,15 @@ DECLCALLBACK(int) Console::detachStorageDevice(Console *pConsole,
     pLunL0 = CFGMR3GetChildF(pCtlInst, "LUN#%u", uLUN);
     if (pLunL0)
     {
-            rc = PDMR3DeviceDetach(pVM, pcszDevice, uInstance, uLUN, 0);
-            if (rc == VERR_PDM_NO_DRIVER_ATTACHED_TO_LUN)
-                rc = VINF_SUCCESS;
-            AssertRCReturn(rc, rc);
-            CFGMR3RemoveNode(pLunL0);
+        rc = PDMR3DeviceDetach(pVM, pcszDevice, uInstance, uLUN, 0);
+        if (rc == VERR_PDM_NO_DRIVER_ATTACHED_TO_LUN)
+            rc = VINF_SUCCESS;
+        AssertRCReturn(rc, rc);
+        CFGMR3RemoveNode(pLunL0);
+
+        Utf8Str devicePath = Utf8StrFmt("%s/%u/LUN#%u", pcszDevice, uInstance, uLUN);
+        pConsole->mapMediumAttachments.erase(devicePath);
+
     }
     else
         AssertFailedReturn(VERR_INTERNAL_ERROR);
@@ -5925,24 +6020,26 @@ HRESULT Console::consoleInitReleaseLog(const ComPtr<IMachine> aMachine)
         }
     }
 
-    PRTLOGGER loggerRelease;
-    static const char * const s_apszGroups[] = VBOX_LOGGROUP_NAMES;
-    RTUINT fFlags = RTLOGFLAGS_PREFIX_TIME_PROG;
+    static const char * const   s_apszGroups[] = VBOX_LOGGROUP_NAMES;
+    char                        szError[RTPATH_MAX + 128] = "";
+    PRTLOGGER                   pReleaseLogger;
+    uint32_t                    fFlags = RTLOGFLAGS_PREFIX_TIME_PROG | RTLOGFLAGS_RESTRICT_GROUPS;
 #if defined(RT_OS_WINDOWS) || defined(RT_OS_OS2)
     fFlags |= RTLOGFLAGS_USECRLF;
 #endif
-    char szError[RTPATH_MAX + 128] = "";
-    int vrc = RTLogCreateEx(&loggerRelease, fFlags, "all",
+    int vrc = RTLogCreateEx(&pReleaseLogger, fFlags, "all all.restrict default.unrestricted",
                             "VBOX_RELEASE_LOG", RT_ELEMENTS(s_apszGroups), s_apszGroups, RTLOGDEST_FILE,
                             NULL /* pfnBeginEnd */, 0 /* cHistory */, 0 /* cbHistoryFileMax */, 0 /* uHistoryTimeMax */,
                             szError, sizeof(szError), logFile.c_str());
     if (RT_SUCCESS(vrc))
     {
+        RTLogSetGroupLimit(pReleaseLogger, 32768);
+
         /* some introductory information */
         RTTIMESPEC timeSpec;
         char szTmp[256];
         RTTimeSpecToString(RTTimeNow(&timeSpec), szTmp, sizeof(szTmp));
-        RTLogRelLogger(loggerRelease, 0, ~0U,
+        RTLogRelLogger(pReleaseLogger, 0, ~0U,
                        "VirtualBox %s r%u %s (%s %s) release log\n"
 #ifdef VBOX_BLEEDING_EDGE
                        "EXPERIMENTAL build " VBOX_BLEEDING_EDGE "\n"
@@ -5953,22 +6050,22 @@ HRESULT Console::consoleInitReleaseLog(const ComPtr<IMachine> aMachine)
 
         vrc = RTSystemQueryOSInfo(RTSYSOSINFO_PRODUCT, szTmp, sizeof(szTmp));
         if (RT_SUCCESS(vrc) || vrc == VERR_BUFFER_OVERFLOW)
-            RTLogRelLogger(loggerRelease, 0, ~0U, "OS Product: %s\n", szTmp);
+            RTLogRelLogger(pReleaseLogger, 0, ~0U, "OS Product: %s\n", szTmp);
         vrc = RTSystemQueryOSInfo(RTSYSOSINFO_RELEASE, szTmp, sizeof(szTmp));
         if (RT_SUCCESS(vrc) || vrc == VERR_BUFFER_OVERFLOW)
-            RTLogRelLogger(loggerRelease, 0, ~0U, "OS Release: %s\n", szTmp);
+            RTLogRelLogger(pReleaseLogger, 0, ~0U, "OS Release: %s\n", szTmp);
         vrc = RTSystemQueryOSInfo(RTSYSOSINFO_VERSION, szTmp, sizeof(szTmp));
         if (RT_SUCCESS(vrc) || vrc == VERR_BUFFER_OVERFLOW)
-            RTLogRelLogger(loggerRelease, 0, ~0U, "OS Version: %s\n", szTmp);
+            RTLogRelLogger(pReleaseLogger, 0, ~0U, "OS Version: %s\n", szTmp);
         vrc = RTSystemQueryOSInfo(RTSYSOSINFO_SERVICE_PACK, szTmp, sizeof(szTmp));
         if (RT_SUCCESS(vrc) || vrc == VERR_BUFFER_OVERFLOW)
-            RTLogRelLogger(loggerRelease, 0, ~0U, "OS Service Pack: %s\n", szTmp);
+            RTLogRelLogger(pReleaseLogger, 0, ~0U, "OS Service Pack: %s\n", szTmp);
         vrc = RTSystemQueryDmiString(RTSYSDMISTR_PRODUCT_NAME, szTmp, sizeof(szTmp));
         if (RT_SUCCESS(vrc) || vrc == VERR_BUFFER_OVERFLOW)
-            RTLogRelLogger(loggerRelease, 0, ~0U, "DMI Product Name: %s\n", szTmp);
+            RTLogRelLogger(pReleaseLogger, 0, ~0U, "DMI Product Name: %s\n", szTmp);
         vrc = RTSystemQueryDmiString(RTSYSDMISTR_PRODUCT_VERSION, szTmp, sizeof(szTmp));
         if (RT_SUCCESS(vrc) || vrc == VERR_BUFFER_OVERFLOW)
-            RTLogRelLogger(loggerRelease, 0, ~0U, "DMI Product Version: %s\n", szTmp);
+            RTLogRelLogger(pReleaseLogger, 0, ~0U, "DMI Product Version: %s\n", szTmp);
 
         ComPtr<IHost> pHost;
         pVirtualBox->COMGETTER(Host)(pHost.asOutParam());
@@ -5976,13 +6073,13 @@ HRESULT Console::consoleInitReleaseLog(const ComPtr<IMachine> aMachine)
         ULONG cMbHostRamAvail = 0;
         pHost->COMGETTER(MemorySize)(&cMbHostRam);
         pHost->COMGETTER(MemoryAvailable)(&cMbHostRamAvail);
-        RTLogRelLogger(loggerRelease, 0, ~0U, "Host RAM: %uMB RAM, available: %uMB\n",
+        RTLogRelLogger(pReleaseLogger, 0, ~0U, "Host RAM: %uMB RAM, available: %uMB\n",
                        cMbHostRam, cMbHostRamAvail);
 
         /* the package type is interesting for Linux distributions */
         char szExecName[RTPATH_MAX];
         char *pszExecName = RTProcGetExecutablePath(szExecName, sizeof(szExecName));
-        RTLogRelLogger(loggerRelease, 0, ~0U,
+        RTLogRelLogger(pReleaseLogger, 0, ~0U,
                        "Executable: %s\n"
                        "Process ID: %u\n"
                        "Package type: %s"
@@ -5995,11 +6092,11 @@ HRESULT Console::consoleInitReleaseLog(const ComPtr<IMachine> aMachine)
                        VBOX_PACKAGE_STRING);
 
         /* register this logger as the release logger */
-        RTLogRelSetDefaultInstance(loggerRelease);
+        RTLogRelSetDefaultInstance(pReleaseLogger);
         hrc = S_OK;
 
         /* Explicitly flush the log in case of VBOX_RELEASE_LOG=buffered. */
-        RTLogFlush(loggerRelease);
+        RTLogFlush(pReleaseLogger);
     }
     else
         hrc = setError(E_FAIL,
@@ -6330,6 +6427,7 @@ HRESULT Console::powerUp(IProgress **aProgress, bool aPaused)
         rc = consoleInitReleaseLog(mMachine);
         if (FAILED(rc))
             throw rc;
+        mptrExtPackManager->dumpAllToReleaseLog();
 
 #ifdef RT_OS_SOLARIS
         /* setup host core dumper for the VM */
@@ -7779,7 +7877,7 @@ HRESULT Console::attachToTapInterface(INetworkAdapter *networkAdapter)
         memset(&IfReq, 0, sizeof(IfReq));
         /* The name of the TAP interface we are using */
         Bstr tapDeviceName;
-        rc = networkAdapter->COMGETTER(HostInterface)(tapDeviceName.asOutParam());
+        rc = networkAdapter->COMGETTER(BridgedInterface)(tapDeviceName.asOutParam());
         if (FAILED(rc))
             tapDeviceName.setNull(); /* Is this necessary? */
         if (tapDeviceName.isEmpty())
@@ -7857,7 +7955,7 @@ HRESULT Console::attachToTapInterface(INetworkAdapter *networkAdapter)
      */
     /* The name of the TAP interface we are using */
     Bstr tapDeviceName;
-    rc = networkAdapter->COMGETTER(HostInterface)(tapDeviceName.asOutParam());
+    rc = networkAdapter->COMGETTER(BridgedInterface)(tapDeviceName.asOutParam());
     if (FAILED(rc))
         tapDeviceName.setNull(); /* Is this necessary? */
     if (tapDeviceName.isEmpty())
@@ -7944,7 +8042,7 @@ HRESULT Console::detachFromTapInterface(INetworkAdapter *networkAdapter)
          */
         Bstr tapDeviceName, tapTerminateApplication;
         bool isStatic = true;
-        rc = networkAdapter->COMGETTER(HostInterface)(tapDeviceName.asOutParam());
+        rc = networkAdapter->COMGETTER(BridgedInterface)(tapDeviceName.asOutParam());
         if (FAILED(rc) || tapDeviceName.isEmpty())
         {
             /* If the name is empty, this is a dynamic TAP device, so close it now,
@@ -9396,6 +9494,17 @@ typedef struct DRVMAINSTATUS
     /** The unit number corresponding to the last entry in the LED array.
      * (The size of the LED array is iLastLUN - iFirstLUN + 1.) */
     RTUINT              iLastLUN;
+    /** Pointer to the driver instance. */
+    PPDMDRVINS          pDrvIns;
+    /** The Media Notify interface. */
+    PDMIMEDIANOTIFY     IMediaNotify;
+    /** Map for translating PDM storage controller/LUN information to
+     * IMediumAttachment references. */
+    Console::MediumAttachmentMap *pmapMediumAttachments;
+    /** Device name+instance for mapping */
+    char                *pszDeviceInstance;
+    /** Pointer to the Console object, for driver triggered activities. */
+    Console             *pConsole;
 } DRVMAINSTATUS, *PDRVMAINSTATUS;
 
 
@@ -9410,7 +9519,7 @@ typedef struct DRVMAINSTATUS
  */
 DECLCALLBACK(void) Console::drvStatus_UnitChanged(PPDMILEDCONNECTORS pInterface, unsigned iLUN)
 {
-    PDRVMAINSTATUS pData = (PDRVMAINSTATUS)(void *)pInterface;
+    PDRVMAINSTATUS pData = (PDRVMAINSTATUS)((uintptr_t)pInterface - RT_OFFSETOF(DRVMAINSTATUS, ILedConnectors));
     if (iLUN >= pData->iFirstLUN && iLUN <= pData->iLastLUN)
     {
         PPDMLED pLed;
@@ -9424,6 +9533,59 @@ DECLCALLBACK(void) Console::drvStatus_UnitChanged(PPDMILEDCONNECTORS pInterface,
 
 
 /**
+ * Notification about a medium eject.
+ *
+ * @returns VBox status.
+ * @param   pInterface      Pointer to the interface structure containing the called function pointer.
+ * @param   uLUN            The unit number.
+ */
+DECLCALLBACK(int) Console::drvStatus_MediumEjected(PPDMIMEDIANOTIFY pInterface, unsigned uLUN)
+{
+    PDRVMAINSTATUS pData = (PDRVMAINSTATUS)((uintptr_t)pInterface - RT_OFFSETOF(DRVMAINSTATUS, IMediaNotify));
+    PPDMDRVINS pDrvIns = pData->pDrvIns;
+    LogFunc(("uLUN=%d\n", uLUN));
+    if (pData->pmapMediumAttachments)
+    {
+        AutoWriteLock alock(pData->pConsole COMMA_LOCKVAL_SRC_POS);
+
+        ComPtr<IMediumAttachment> pMediumAtt;
+        Utf8Str devicePath = Utf8StrFmt("%s/LUN#%u", pData->pszDeviceInstance, uLUN);
+        Console::MediumAttachmentMap::const_iterator end = pData->pmapMediumAttachments->end();
+        Console::MediumAttachmentMap::const_iterator it = pData->pmapMediumAttachments->find(devicePath);
+        if (it != end)
+            pMediumAtt = it->second;
+        Assert(!pMediumAtt.isNull());
+        if (!pMediumAtt.isNull())
+        {
+            IMedium *pMedium;
+            HRESULT rc = pMediumAtt->COMGETTER(Medium)(&pMedium);
+            AssertComRC(rc);
+            BOOL fHostDrive = FALSE;
+            rc = pMedium->COMGETTER(HostDrive)(&fHostDrive);
+            AssertComRC(rc);
+            if (!fHostDrive)
+            {
+                alock.release();
+
+                ComPtr<IMediumAttachment> pNewMediumAtt;
+                rc = pData->pConsole->mControl->EjectMedium(pMediumAtt, pNewMediumAtt.asOutParam());
+                if (SUCCEEDED(rc))
+                    fireMediumChangedEvent(pData->pConsole->mEventSource, pNewMediumAtt);
+
+                alock.acquire();
+                if (pNewMediumAtt != pMediumAtt)
+                {
+                    pData->pmapMediumAttachments->erase(devicePath);
+                    pData->pmapMediumAttachments->insert(std::make_pair(devicePath, pNewMediumAtt));
+                }
+            }
+        }
+    }
+    return VINF_SUCCESS;
+}
+
+
+/**
  * @interface_method_impl{PDMIBASE,pfnQueryInterface}
  */
 DECLCALLBACK(void *)  Console::drvStatus_QueryInterface(PPDMIBASE pInterface, const char *pszIID)
@@ -9432,6 +9594,7 @@ DECLCALLBACK(void *)  Console::drvStatus_QueryInterface(PPDMIBASE pInterface, co
     PDRVMAINSTATUS pThis = PDMINS_2_DATA(pDrvIns, PDRVMAINSTATUS);
     PDMIBASE_RETURN_INTERFACE(pszIID, PDMIBASE, &pDrvIns->IBase);
     PDMIBASE_RETURN_INTERFACE(pszIID, PDMILEDCONNECTORS, &pThis->ILedConnectors);
+    PDMIBASE_RETURN_INTERFACE(pszIID, PDMIMEDIANOTIFY, &pThis->IMediaNotify);
     return NULL;
 }
 
@@ -9471,7 +9634,7 @@ DECLCALLBACK(int) Console::drvStatus_Construct(PPDMDRVINS pDrvIns, PCFGMNODE pCf
     /*
      * Validate configuration.
      */
-    if (!CFGMR3AreValuesValid(pCfg, "papLeds\0First\0Last\0"))
+    if (!CFGMR3AreValuesValid(pCfg, "papLeds\0pmapMediumAttachments\0DeviceInstance\0pConsole\0First\0Last\0"))
         return VERR_PDM_DRVINS_UNKNOWN_CFG_VALUES;
     AssertMsgReturn(PDMDrvHlpNoAttach(pDrvIns) == VERR_PDM_NO_ATTACHED_DRIVER,
                     ("Configuration error: Not possible to attach anything to this driver!\n"),
@@ -9482,6 +9645,9 @@ DECLCALLBACK(int) Console::drvStatus_Construct(PPDMDRVINS pDrvIns, PCFGMNODE pCf
      */
     pDrvIns->IBase.pfnQueryInterface        = Console::drvStatus_QueryInterface;
     pData->ILedConnectors.pfnUnitChanged    = Console::drvStatus_UnitChanged;
+    pData->IMediaNotify.pfnEjected          = Console::drvStatus_MediumEjected;
+    pData->pDrvIns                          = pDrvIns;
+    pData->pszDeviceInstance                = NULL;
 
     /*
      * Read config.
@@ -9491,6 +9657,28 @@ DECLCALLBACK(int) Console::drvStatus_Construct(PPDMDRVINS pDrvIns, PCFGMNODE pCf
     {
         AssertMsgFailed(("Configuration error: Failed to query the \"papLeds\" value! rc=%Rrc\n", rc));
         return rc;
+    }
+
+    rc = CFGMR3QueryPtrDef(pCfg, "pmapMediumAttachments", (void **)&pData->pmapMediumAttachments, NULL);
+    if (RT_FAILURE(rc))
+    {
+        AssertMsgFailed(("Configuration error: Failed to query the \"pmapMediumAttachments\" value! rc=%Rrc\n", rc));
+        return rc;
+    }
+    if (pData->pmapMediumAttachments)
+    {
+        rc = CFGMR3QueryStringAlloc(pCfg, "DeviceInstance", &pData->pszDeviceInstance);
+        if (RT_FAILURE(rc))
+        {
+            AssertMsgFailed(("Configuration error: Failed to query the \"DeviceInstance\" value! rc=%Rrc\n", rc));
+            return rc;
+        }
+        rc = CFGMR3QueryPtr(pCfg, "pConsole", (void **)&pData->pConsole);
+        if (RT_FAILURE(rc))
+        {
+            AssertMsgFailed(("Configuration error: Failed to query the \"pConsole\" value! rc=%Rrc\n", rc));
+            return rc;
+        }
     }
 
     rc = CFGMR3QueryU32(pCfg, "First", &pData->iFirstLUN);
@@ -9532,7 +9720,7 @@ DECLCALLBACK(int) Console::drvStatus_Construct(PPDMDRVINS pDrvIns, PCFGMNODE pCf
 
 
 /**
- * Keyboard driver registration record.
+ * Console status driver (LED) registration record.
  */
 const PDMDRVREG Console::DrvStatusReg =
 {

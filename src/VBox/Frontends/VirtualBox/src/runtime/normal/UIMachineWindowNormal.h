@@ -51,6 +51,7 @@ private slots:
     void sltUSBDeviceStateChange();
     void sltNetworkAdapterChange();
     void sltSharedFolderChange();
+    void sltCPUExecutionCapChange();
 
     /* LED connections: */
     void sltUpdateIndicators();
@@ -61,8 +62,9 @@ private slots:
     void sltTryClose();
 
     /* Downloader listeners: */
-    void sltDownloaderAdditionsEmbed();
-    void sltDownloaderUserManualEmbed();
+    void sltEmbedDownloaderForAdditions();
+    void sltEmbedDownloaderForUserManual();
+    void sltEmbedDownloaderForExtensionPack();
 
 private:
 

@@ -765,14 +765,16 @@ static int usbLibDevGetHubPortDevices(HANDLE hHub, LPCSTR lpcszHubName, ULONG iP
         return VINF_SUCCESS;
     }
 
+    bool fFreeNameBuf = true;
+    char nameEmptyBuf = '\0';
     LPSTR lpszName = NULL;
     rc = usbLibDevStrDriverKeyGet(hHub, iPort, &lpszName);
-    if (RT_FAILURE(rc))
+    Assert(!!lpszName == !!RT_SUCCESS(rc));
+    if (!lpszName)
     {
-        return rc;
+        lpszName = &nameEmptyBuf;
+        fFreeNameBuf = false;
     }
-
-    Assert(lpszName);
 
     PUSB_CONFIGURATION_DESCRIPTOR pCfgDr = NULL;
     PVBOXUSB_STRING_DR_ENTRY pList = NULL;
@@ -797,8 +799,11 @@ static int usbLibDevGetHubPortDevices(HANDLE hHub, LPCSTR lpcszHubName, ULONG iP
 
     if (pCfgDr)
         usbLibDevCfgDrFree(pCfgDr);
-    if (lpszName)
+    if (fFreeNameBuf)
+    {
+        Assert(lpszName);
         usbLibDevStrFree(lpszName);
+    }
     if (pList)
         usbLibDevStrDrEntryFreeList(pList);
 
@@ -808,6 +813,7 @@ static int usbLibDevGetHubPortDevices(HANDLE hHub, LPCSTR lpcszHubName, ULONG iP
 static int usbLibDevGetHubDevices(LPCSTR lpszName, PUSBDEVICE *ppDevs, uint32_t *pcDevs)
 {
     LPSTR lpszDevName = (LPSTR)RTMemAllocZ(strlen(lpszName) + sizeof("\\\\.\\"));
+    HANDLE hDev = INVALID_HANDLE_VALUE;
     Assert(lpszDevName);
     if (!lpszDevName)
     {
@@ -821,7 +827,7 @@ static int usbLibDevGetHubDevices(LPCSTR lpszName, PUSBDEVICE *ppDevs, uint32_t 
     do
     {
         DWORD cbReturned = 0;
-        HANDLE hDev = CreateFile(lpszDevName, GENERIC_WRITE, FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
+        hDev = CreateFile(lpszDevName, GENERIC_WRITE, FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
         if (hDev == INVALID_HANDLE_VALUE)
         {
             AssertFailed();
@@ -844,6 +850,10 @@ static int usbLibDevGetHubDevices(LPCSTR lpszName, PUSBDEVICE *ppDevs, uint32_t 
             usbLibDevGetHubPortDevices(hDev, lpszName, i, ppDevs, pcDevs);
         }
     } while (0);
+
+    if (hDev != INVALID_HANDLE_VALUE)
+        CloseHandle(hDev);
+
     RTMemFree(lpszDevName);
 
     return rc;
@@ -1412,7 +1422,10 @@ USBLIB_DECL(int) USBLibInit(void)
                     }
                     else
                     {
-                        AssertMsgFailed((__FUNCTION__": Monitor driver version mismatch!!\n"));
+                        LogRel((__FUNCTION__": Monitor driver version mismatch!!\n"));
+#ifdef VBOX_WITH_ANNOYING_USB_ASSERTIONS
+                        AssertFailed();
+#endif
                         rc = VERR_VERSION_MISMATCH;
                     }
                 }

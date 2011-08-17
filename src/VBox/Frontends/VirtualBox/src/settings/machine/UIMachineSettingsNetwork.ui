@@ -18,21 +18,18 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>431</width>
-    <height>248</height>
+    <width>430</width>
+    <height>250</height>
    </rect>
   </property>
-  <layout class="QGridLayout" name="VBoxVMSettingsNetworkGridLayout">
+  <layout class="QGridLayout" name="m_pMainLayout">
    <item row="0" column="0" colspan="2">
-    <widget class="QCheckBox" name="mCbEnableAdapter">
+    <widget class="QCheckBox" name="m_pEnableAdapterCheckBox">
      <property name="whatsThis">
       <string>When checked, plugs this virtual network adapter into the virtual machine.</string>
      </property>
      <property name="text">
       <string>&amp;Enable Network Adapter</string>
-     </property>
-     <property name="checked">
-      <bool>true</bool>
      </property>
     </widget>
    </item>
@@ -53,8 +50,8 @@
     </spacer>
    </item>
    <item row="1" column="1">
-    <widget class="QWidget" name="m_pNetworkChild" native="1">
-     <layout class="QGridLayout" name="m_pNetworkChildGridLayout">
+    <widget class="QWidget" name="m_pAdapterOptionsContainer" native="1">
+     <layout class="QGridLayout" name="m_pAdapterOptionsLayout">
       <property name="margin">
        <number>0</number>
       </property>
@@ -67,12 +64,12 @@
          <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignVCenter</set>
         </property>
         <property name="buddy">
-         <cstring>m_pAttachmentTypeCombo</cstring>
+         <cstring>m_pAttachmentTypeComboBox</cstring>
         </property>
        </widget>
       </item>
       <item row="0" column="1">
-       <widget class="QComboBox" name="m_pAttachmentTypeCombo">
+       <widget class="QComboBox" name="m_pAttachmentTypeComboBox">
         <property name="sizePolicy">
          <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
           <horstretch>0</horstretch>
@@ -104,9 +101,6 @@
           <horstretch>1</horstretch>
           <verstretch>0</verstretch>
          </sizepolicy>
-        </property>
-        <property name="whatsThis">
-         <string>Selects the name of the network adapter for &lt;b&gt;Bridged Adapter&lt;/b&gt; or &lt;b&gt;Host-only Adapter&lt;/b&gt; attachments and the name of the network &lt;b&gt;Internal Network&lt;/b&gt; attachments.</string>
         </property>
        </widget>
       </item>
@@ -232,7 +226,24 @@
         </property>
        </widget>
       </item>
+      <item row="6" column="0">
+       <widget class="QLabel" name="m_pGenericPropertiesLabel">
+        <property name="text">
+         <string>Generic Properties:</string>
+        </property>
+        <property name="alignment">
+         <set>Qt::AlignRight|Qt::AlignTrailing|Qt::AlignTop</set>
+        </property>
+       </widget>
+      </item>
       <item row="6" column="1" colspan="3">
+       <widget class="QTextEdit" name="m_pGenericPropertiesTextEdit">
+        <property name="whatsThis">
+         <string>Enter any configuration settings here for the network attachment driver you will be using. The settings should be of the form &lt;b&gt;name=value&lt;/b&gt; and will depend on the driver. Use &lt;b&gt;shift-enter&lt;/b&gt; to add a new entry.</string>
+        </property>
+       </widget>
+      </item>
+      <item row="7" column="1" colspan="3">
        <widget class="QCheckBox" name="m_pCableConnectedCheckBox">
         <property name="whatsThis">
          <string>Indicates whether the virtual network cable is plugged in on machine startup or not.</string>
@@ -242,7 +253,7 @@
         </property>
        </widget>
       </item>
-      <item row="7" column="1">
+      <item row="8" column="1">
        <widget class="QPushButton" name="m_pPortForwardingButton">
         <property name="whatsThis">
          <string>Opens dialog to manage port forwarding rules.</string>
@@ -252,7 +263,7 @@
         </property>
        </widget>
       </item>
-      <item row="8" column="0" colspan="4">
+      <item row="9" column="0" colspan="4">
        <spacer name="m_pVerticalSpacer">
         <property name="orientation">
          <enum>Qt::Vertical</enum>
@@ -291,22 +302,5 @@
  <resources>
   <include location="../VirtualBox1.qrc"/>
  </resources>
- <connections>
-  <connection>
-   <sender>mCbEnableAdapter</sender>
-   <signal>toggled(bool)</signal>
-   <receiver>m_pNetworkChild</receiver>
-   <slot>setEnabled(bool)</slot>
-   <hints>
-    <hint type="sourcelabel">
-     <x>184</x>
-     <y>28</y>
-    </hint>
-    <hint type="destinationlabel">
-     <x>196</x>
-     <y>111</y>
-    </hint>
-   </hints>
-  </connection>
- </connections>
+ <connections/>
 </ui>

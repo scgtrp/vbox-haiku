@@ -67,6 +67,7 @@
  */
 
 #include <VBox/log.h>
+#include <iprt/asm.h>
 
 #include <unistd.h>
 #include <sys/types.h>
@@ -81,6 +82,9 @@
 #include <sys/ddi.h>
 #include <sys/sunddi.h>
 #include <sys/vfs.h>
+#include <sys/vmsystm.h>
+#include <vm/seg_kpm.h>
+#include <vm/pvn.h>
 #if !defined(VBOX_VFS_SOLARIS_10U6)
 #include <sys/vfs_opreg.h>
 #endif
@@ -208,7 +212,7 @@ sfnode_get_vnode(sfnode_t *node)
 		vp->v_vfsp = node->sf_sffs->sf_vfsp;
 		VFS_HOLD(vp->v_vfsp);
 		vn_setops(vp, sffs_ops);
-		vp->v_flag = VNOMAP | VNOSWAP;
+		vp->v_flag = VNOSWAP | VNOMAP;	/* @todo -XXX- remove VNOMAP when ro-mmap is working*/
 		vn_exists(vp);
 		vp->v_data = node;
 		node->sf_vnode = vp;
@@ -393,8 +397,8 @@ sfnode_make_stale(sfnode_t *node)
 static uint64_t
 sfnode_cur_time_usec(void)
 {
-	timestruc_t now = hrestime;
-	return (now.tv_sec * 1000000L + now.tv_nsec / 1000L);
+	clock_t now = drv_hztousec(ddi_get_lbolt());
+	return now;
 }
 
 static int
@@ -1452,6 +1456,379 @@ done:
 }
 
 
+#if 0
+static caddr_t
+sffs_page_map(
+	page_t *ppage,
+	enum seg_rw segaccess)
+{
+	/* Use seg_kpm driver if possible (64-bit) */
+	if (kpm_enable)
+		return (hat_kpm_mapin(ppage, NULL));
+	ASSERT(segaccess == S_READ || segaccess == S_WRITE);
+	return (ppmapin(ppage, PROT_READ | ((segaccess == S_WRITE) ? PROT_WRITE : 0), (caddr_t)-1));
+}
+
+
+static void
+sffs_page_unmap(
+	page_t *ppage,
+	caddr_t addr)
+{
+	if (kpm_enable)
+		hat_kpm_mapout(ppage, NULL, addr);
+	else
+		ppmapout(addr);
+}
+
+
+/*
+ * Called when there's no page in the cache. This will create new page(s) and read
+ * the file data into it.
+ */
+int
+sffs_readpages(
+	vnode_t		*dvp,
+	offset_t	off,
+	page_t		*pagelist[],
+	size_t		pagelistsize,
+	struct seg  *segp,
+	caddr_t		addr,
+	enum seg_rw	segaccess)
+{
+	ASSERT(MUTEX_HELD(&sffs_lock));
+
+	int error = 0;
+	u_offset_t io_off, total;
+	size_t io_len;
+	page_t *ppages;
+	page_t *pcur;
+
+	sfnode_t *node = VN2SFN(dvp);
+	ASSERT(node);
+	ASSERT(node->sf_file);
+
+	cmn_err(CE_NOTE, "sffs_readpages\n");
+	if (pagelistsize == PAGESIZE)
+	{
+		io_off = off;
+		io_len = PAGESIZE;
+
+		cmn_err(CE_NOTE, "sffs_readpages io_off=%lld io_len=%lld\n", (u_longlong_t)io_off, (u_longlong_t)io_len);
+
+		ppages = page_create_va(dvp, io_off, io_len, PG_WAIT | PG_EXCL, segp, addr);
+	}
+	else
+		ppages = pvn_read_kluster(dvp, off, segp, addr, &io_off, &io_len, off, pagelistsize, 0);
+
+	/* If page already exists return success */
+	if (!ppages)
+	{
+		cmn_err(CE_NOTE, "sffs_readpages nothing done\n");
+		*pagelist = NULL;
+		return (0);
+	}
+
+	/*
+	 * Map & read page-by-page.
+	 */
+	total = io_off + io_len;
+	pcur = ppages;
+	while (io_off < total)
+	{
+		ASSERT3U(io_off, ==, pcur->p_offset);
+
+		cmn_err(CE_NOTE, "sffs_readpages page-by-page reading io_off=%lld\n", (u_longlong_t)io_off);
+		caddr_t virtaddr = sffs_page_map(pcur, segaccess);
+		uint32_t bytes = PAGESIZE;
+		error = sfprov_read(node->sf_file, virtaddr, io_off, &bytes);
+		sffs_page_unmap(pcur, virtaddr);
+		if (error != 0 || bytes < PAGESIZE)
+		{
+			/* Get rid of all kluster pages read & bail.  */
+			pvn_read_done(ppages,  B_ERROR);
+			return (error);
+		}
+		pcur = pcur->p_next;
+		io_off += PAGESIZE;
+	}
+
+	/*
+	 * Fill in the pagelist from kluster at the requested offset.
+	 */
+	pvn_plist_init(ppages, pagelist, pagelistsize, off, io_len, segaccess);
+	ASSERT(pagelist == NULL || (*pagelist)->p_offset == off);
+	cmn_err(CE_NOTE, "sffs_readpages done\n");
+
+	return (0);
+}
+
+
+/*ARGSUSED*/
+static int
+sffs_getpage(
+	vnode_t		*dvp,
+	offset_t	off,
+	size_t		len,
+	uint_t 		*protp,
+	page_t 		*pagelist[],
+	size_t		pagelistsize,
+	struct seg	*segp,
+	caddr_t 	addr,
+	enum seg_rw	segaccess,
+	cred_t		*credp
+#if !defined(VBOX_VFS_SOLARIS_10U6)
+	, caller_context_t *ct
+#endif
+	)
+{
+	int error = 0;
+	page_t **pageliststart = pagelist;
+	sfnode_t *node = VN2SFN(dvp);
+	ASSERT(node);
+	ASSERT(node->sf_file);
+
+	if (segaccess == S_WRITE)
+		return (ENOSYS);	/* Will this ever happen? */
+
+	/* Don't bother about faultahead for now. */
+	if (pagelist == NULL)
+		return (0);
+
+	if (len > pagelistsize)
+		len = pagelistsize;
+	else
+		len = P2ROUNDUP(len, PAGESIZE);
+	ASSERT(pagelistsize >= len);
+
+	if (protp)
+		*protp = PROT_ALL;
+
+	mutex_enter(&sffs_lock);
+
+	/* Don't map pages past end of the file. */
+	if (off + len > node->sf_stat.sf_size + PAGEOFFSET)
+	{
+		mutex_exit(&sffs_lock);
+		return (EFAULT);
+	}
+
+	while (len > 0)
+	{
+		/*
+		 * Look for pages in the requested offset range, or create them if we can't find any.
+		 */
+		if ((*pagelist = page_lookup(dvp, off, SE_SHARED)) != NULL)
+			*(pagelist + 1) = NULL;
+		else if ((error = sffs_readpages(dvp, off, pagelist, pagelistsize, segp, addr, segaccess)) != 0)
+		{
+			while (pagelist > pageliststart)
+				page_unlock(*--pagelist);
+
+			*pagelist = NULL;
+			mutex_exit(&sffs_lock);
+			return (error);
+		}
+
+		cmn_err(CE_NOTE, "sffs_getpage addr=%p len=%lld off=%lld\n", addr, (u_longlong_t)len, (u_longlong_t)off);
+		while (*pagelist)
+		{
+			ASSERT3U((*pagelist)->p_offset, ==, off);
+			off += PAGESIZE;
+			addr += PAGESIZE;
+			if (len > 0)
+			{
+				ASSERT3U(len, >=, PAGESIZE);
+				len -= PAGESIZE;
+			}
+
+			ASSERT3U(pagelistsize,  >=, PAGESIZE);
+			pagelistsize -= PAGESIZE;
+			pagelist++;
+		}
+	}
+
+	/*
+	 * Fill the page list array with any pages left in the cache.
+	 */
+	while (   pagelistsize > 0
+		   && (*pagelist++ = page_lookup_nowait(dvp, off, SE_SHARED)))
+	{
+		off += PAGESIZE;
+		pagelistsize -= PAGESIZE;
+	}
+
+	*pagelist = NULL;
+	mutex_exit(&sffs_lock);
+	cmn_err(CE_NOTE,  "sffs_getpage done\n");
+	return (error);
+}
+
+
+/*ARGSUSED*/
+static int
+sffs_putpage(
+	vnode_t		*dvp,
+	offset_t	off,
+	size_t		len,
+	int			flags,
+	cred_t		*credp
+#if !defined(VBOX_VFS_SOLARIS_10U6)
+	, caller_context_t *ct
+#endif
+	)
+{
+	/*
+	 * We don't support PROT_WRITE mmaps. For normal writes we do not map and IO via
+	 * vop_putpage() either, therefore, afaik this shouldn't ever be called.
+	 */
+	return (ENOSYS);
+}
+
+
+/*ARGSUSED*/
+static int
+sffs_map(
+	vnode_t		*dvp,
+	offset_t	off,
+	struct as 	*asp,
+	caddr_t		*addrp,
+	size_t		len,
+	uchar_t		prot,
+	uchar_t		maxprot,
+	uint_t		flags,
+	cred_t 		*credp
+#if !defined(VBOX_VFS_SOLARIS_10U6)
+	, caller_context_t *ct
+#endif
+	)
+{
+	/*
+	 * Invocation: mmap()->smmap_common()->VOP_MAP()->sffs_map(). Once the
+	 * segment driver creates the new segment via segvn_create(), it'll
+	 * invoke down the line VOP_ADDMAP()->sffs_addmap()
+	 */
+	int error = 0;
+	sfnode_t *node = VN2SFN(dvp);
+	ASSERT(node);
+	if ((prot & PROT_WRITE))
+		return (ENOTSUP);
+
+	if (off < 0 || len > MAXOFFSET_T - off)
+		return (ENXIO);
+
+	if (dvp->v_type != VREG)
+		return (ENODEV);
+
+	if (dvp->v_flag & VNOMAP)
+		return (ENOSYS);
+
+	if (vn_has_mandatory_locks(dvp, node->sf_stat.sf_mode))
+		return (EAGAIN);
+
+	mutex_enter(&sffs_lock);
+	as_rangelock(asp);
+
+#if defined(VBOX_VFS_SOLARIS_10U6)
+	if ((flags & MAP_FIXED) == 0)
+	{
+		map_addr(addrp, len, off, 1, flags);
+		if (*addrp == NULL)
+			error = ENOMEM;
+	}
+	else
+		as_unmap(asp, *addrp, len);	/* User specified address, remove any previous mappings */
+#else
+	error = choose_addr(asp, addrp, len, off, ADDR_VACALIGN, flags);
+#endif
+
+	if (error)
+	{
+		as_rangeunlock(asp);
+		mutex_exit(&sffs_lock);
+		return (error);
+	}
+
+	segvn_crargs_t vnodeargs;
+	memset(&vnodeargs, 0, sizeof(vnodeargs));
+	vnodeargs.vp = dvp;
+	vnodeargs.cred = credp;
+	vnodeargs.offset = off;
+	vnodeargs.type = flags & MAP_TYPE;
+	vnodeargs.prot = prot;
+	vnodeargs.maxprot = maxprot;
+	vnodeargs.flags = flags & ~MAP_TYPE;
+	vnodeargs.amp = NULL;		/* anon. mapping */
+	vnodeargs.szc = 0;			/* preferred page size code */
+	vnodeargs.lgrp_mem_policy_flags = 0;
+
+	error = as_map(asp, *addrp, len, segvn_create, &vnodeargs);
+
+	as_rangeunlock(asp);
+	mutex_exit(&sffs_lock);
+	return (error);
+}
+
+
+/*ARGSUSED*/
+static int
+sffs_addmap(
+	vnode_t		*dvp,
+	offset_t	off,
+	struct as	*asp,
+	caddr_t		addr,
+	size_t		len,
+	uchar_t		prot,
+	uchar_t		maxprot,
+	uint_t		flags,
+	cred_t		*credp
+#if !defined(VBOX_VFS_SOLARIS_10U6)
+	, caller_context_t *ct
+#endif
+	)
+{
+	sfnode_t *node = VN2SFN(dvp);
+	uint64_t npages = btopr(len);
+
+	if (dvp->v_flag & VNOMAP)
+		return (ENOSYS);
+
+	ASSERT(node);
+	ASMAtomicAddU64(&node->sf_mapcnt, npages);
+	return (0);
+}
+
+
+/*ARGSUSED*/
+static int
+sffs_delmap(
+	vnode_t		*dvp,
+	offset_t	off,
+	struct as	*asp,
+	caddr_t		addr,
+	size_t		len,
+	uint_t		prot,
+	uint_t		maxprot,
+	uint_t		flags,
+	cred_t		*credp
+#if !defined(VBOX_VFS_SOLARIS_10U6)
+	, caller_context_t *ct
+#endif
+	)
+{
+	sfnode_t *node = VN2SFN(dvp);
+	uint64_t npages = btopr(len);
+
+	if (dvp->v_flag & VNOMAP)
+		return (ENOSYS);
+
+	ASSERT(node->sf_mapcnt >= npages);
+	ASMAtomicSubU64(&node->sf_mapcnt, npages);
+	return (0);
+}
+#endif
+
+
 /*ARGSUSED*/
 static int
 sffs_remove(
@@ -1758,6 +2135,15 @@ const fs_operation_def_t sffs_ops_template[] = {
 	VOPNAME_SETATTR,	sffs_setattr,
 	VOPNAME_SPACE,		sffs_space,
 	VOPNAME_WRITE,		sffs_write,
+
+# if 0
+	VOPNAME_MAP,		sffs_map,
+	VOPNAME_ADDMAP,		sffs_addmap,
+	VOPNAME_DELMAP,		sffs_delmap,
+	VOPNAME_GETPAGE,	sffs_getpage,
+	VOPNAME_PUTPAGE,	sffs_putpage,
+# endif
+
 	NULL,			NULL
 #else
 	VOPNAME_ACCESS,		{ .vop_access = sffs_access },
@@ -1780,6 +2166,15 @@ const fs_operation_def_t sffs_ops_template[] = {
 	VOPNAME_SETATTR,	{ .vop_setattr = sffs_setattr },
 	VOPNAME_SPACE,		{ .vop_space = sffs_space },
 	VOPNAME_WRITE,		{ .vop_write = sffs_write },
+
+# if 0
+	VOPNAME_MAP,		{ .vop_map = sffs_map },
+	VOPNAME_ADDMAP,		{ .vop_addmap = sffs_addmap },
+	VOPNAME_DELMAP,		{ .vop_delmap = sffs_delmap },
+	VOPNAME_GETPAGE,	{ .vop_getpage = sffs_getpage },
+	VOPNAME_PUTPAGE,	{ .vop_putpage = sffs_putpage },
+# endif
+
 	NULL,			NULL
 #endif
 };
@@ -1873,6 +2268,8 @@ sffs_purge(struct sffs_data *sffs)
 	return (0);
 }
 
+#if 0
+/* Debug helper functions */
 static void
 sfnode_print(sfnode_t *node)
 {
@@ -1891,8 +2288,8 @@ sfnode_print(sfnode_t *node)
 	Log(("%s\n", node->sf_is_stale ? " STALE" : ""));
 }
 
-void
-sfnode_list()
+static void
+sfnode_list(void)
 {
 	sfnode_t *n;
 	for (n = avl_first(&sfnodes); n != NULL; n = AVL_NEXT(&sfnodes, n))
@@ -1901,4 +2298,5 @@ sfnode_list()
 	    n = AVL_NEXT(&stale_sfnodes, n))
 		sfnode_print(n);
 }
+#endif
 

@@ -26,16 +26,17 @@
  * of the LGPL is applied is otherwise unspecified.
  */
 
-#define CPU_NO_GLOBAL_REGS
 #include "exec.h"
 #include "exec-all.h"
 #include "host-utils.h"
+#include "ioport.h"
 
 #ifdef VBOX
 # include "qemu-common.h"
 # include <math.h>
 # include "tcg.h"
 #endif /* VBOX */
+
 //#define DEBUG_PCALL
 
 
@@ -369,8 +370,7 @@ static void tss_load_seg(int seg_reg, int selector)
         if (seg_reg == R_SS || seg_reg == R_CS)
             raise_exception_err(EXCP0A_TSS, selector & 0xfffc);
 #ifdef VBOX
-# if 0
-        /** @todo: now we ignore loading 0 selectors, need to check what is correct once */
+# if 0  /** @todo now we ignore loading 0 selectors, need to check what is correct once */
         cpu_x86_load_seg_cache(env, seg_reg, selector,
                                0, 0, 0);
 # endif
@@ -674,10 +674,12 @@ static inline void check_io(int addr, int size)
 }
 
 #ifdef VBOX
+
 /* Keep in sync with gen_check_external_event() */
 void helper_check_external_event()
 {
-    if (    (env->interrupt_request & (  CPU_INTERRUPT_EXTERNAL_EXIT
+    if (    (env->interrupt_request & (  CPU_INTERRUPT_EXTERNAL_FLUSH_TLB
+                                       | CPU_INTERRUPT_EXTERNAL_EXIT
                                        | CPU_INTERRUPT_EXTERNAL_TIMER
                                        | CPU_INTERRUPT_EXTERNAL_DMA))
         ||  (   (env->interrupt_request & CPU_INTERRUPT_EXTERNAL_HARD)
@@ -694,6 +696,7 @@ void helper_sync_seg(uint32_t reg)
     if (env->segs[reg].newselector)
         sync_seg(env, reg, env->segs[reg].newselector);
 }
+
 #endif /* VBOX */
 
 void helper_check_iob(uint32_t t0)
@@ -713,32 +716,56 @@ void helper_check_iol(uint32_t t0)
 
 void helper_outb(uint32_t port, uint32_t data)
 {
+#ifndef VBOX
+    cpu_outb(port, data & 0xff);
+#else
     cpu_outb(env, port, data & 0xff);
+#endif
 }
 
 target_ulong helper_inb(uint32_t port)
 {
+#ifndef VBOX
+    return cpu_inb(port);
+#else
     return cpu_inb(env, port);
+#endif
 }
 
 void helper_outw(uint32_t port, uint32_t data)
 {
+#ifndef VBOX
+    cpu_outw(port, data & 0xffff);
+#else
     cpu_outw(env, port, data & 0xffff);
+#endif
 }
 
 target_ulong helper_inw(uint32_t port)
 {
+#ifndef VBOX
+    return cpu_inw(port);
+#else
     return cpu_inw(env, port);
+#endif
 }
 
 void helper_outl(uint32_t port, uint32_t data)
 {
+#ifndef VBOX
+    cpu_outl(port, data);
+#else
     cpu_outl(env, port, data);
+#endif
 }
 
 target_ulong helper_inl(uint32_t port)
 {
+#ifndef VBOX
+    return cpu_inl(port);
+#else
     return cpu_inl(env, port);
+#endif
 }
 
 static inline unsigned int get_sp_mask(unsigned int e2)
@@ -1405,18 +1432,11 @@ void helper_sysret(int dflag)
         env->eflags |= IF_MASK;
         cpu_x86_set_cpl(env, 3);
     }
-#ifdef CONFIG_KQEMU
-    if (kqemu_is_ok(env)) {
-        if (env->hflags & HF_LMA_MASK)
-            CC_OP = CC_OP_EFLAGS;
-        env->exception_index = -1;
-        cpu_loop_exit();
-    }
-#endif
 }
 #endif
 
 #ifdef VBOX
+
 /**
  * Checks and processes external VMM events.
  * Called by op_check_external_event() when any of the flags is set and can be serviced.
@@ -1457,7 +1477,14 @@ void helper_external_event(void)
                         ~CPU_INTERRUPT_EXTERNAL_TIMER);
         remR3TimersRun(env);
     }
+    if (env->interrupt_request & CPU_INTERRUPT_EXTERNAL_FLUSH_TLB)
+    {
+        ASMAtomicAndS32((int32_t volatile *)&env->interrupt_request,
+                        ~CPU_INTERRUPT_EXTERNAL_HARD);
+        cpu_interrupt(env, CPU_INTERRUPT_HARD);
+    }
 }
+
 /* helper for recording call instruction addresses for later scanning */
 void helper_record_call()
 {
@@ -1466,6 +1493,7 @@ void helper_record_call()
         &&  !(env->eflags & X86_EFL_IF))
         remR3RecordCall(env);
 }
+
 #endif /* VBOX */
 
 /* real mode interrupt */
@@ -1738,6 +1766,11 @@ void raise_exception(int exception_index)
     raise_interrupt(exception_index, 0, 0, 0);
 }
 
+void raise_exception_env(int exception_index, CPUState *nenv)
+{
+    env = nenv;
+    raise_exception(exception_index);
+}
 /* SMM support */
 
 #if defined(CONFIG_USER_ONLY)
@@ -2944,12 +2977,6 @@ void helper_lcall_protected(int new_cs, target_ulong new_eip,
         SET_ESP(sp, sp_mask);
         EIP = offset;
     }
-#ifdef CONFIG_KQEMU
-    if (kqemu_is_ok(env)) {
-        env->exception_index = -1;
-        cpu_loop_exit();
-    }
-#endif
 }
 
 /* real and vm86 mode iret */
@@ -3093,9 +3120,9 @@ static inline void helper_ret_protected(int shift, int is_iret, int addend)
 #ifdef VBOX
         if ((new_cs & 0x3) == 1 && (env->state & CPU_RAW_RING0))
         {
-#ifdef DEBUG
+# ifdef DEBUG
             printf("RPL 1 -> new_cs %04X -> %04X\n", new_cs, new_cs & 0xfffc);
-#endif
+# endif
             new_cs = new_cs & 0xfffc;
         }
 #endif
@@ -3325,24 +3352,11 @@ void helper_iret_protected(int shift, int next_eip)
         helper_ret_protected(shift, 1, 0);
     }
     env->hflags2 &= ~HF2_NMI_MASK;
-#ifdef CONFIG_KQEMU
-    if (kqemu_is_ok(env)) {
-        CC_OP = CC_OP_EFLAGS;
-        env->exception_index = -1;
-        cpu_loop_exit();
-    }
-#endif
 }
 
 void helper_lret_protected(int shift, int addend)
 {
     helper_ret_protected(shift, 0, addend);
-#ifdef CONFIG_KQEMU
-    if (kqemu_is_ok(env)) {
-        env->exception_index = -1;
-        cpu_loop_exit();
-    }
-#endif
 }
 
 void helper_sysenter(void)
@@ -3415,12 +3429,6 @@ void helper_sysexit(int dflag)
     }
     ESP = ECX;
     EIP = EDX;
-#ifdef CONFIG_KQEMU
-    if (kqemu_is_ok(env)) {
-        env->exception_index = -1;
-        cpu_loop_exit();
-    }
-#endif
 }
 
 #if defined(CONFIG_USER_ONLY)
@@ -3448,7 +3456,11 @@ target_ulong helper_read_crN(int reg)
         break;
     case 8:
         if (!(env->hflags2 & HF2_VINTR_MASK)) {
+#ifndef VBOX
+            val = cpu_get_apic_tpr(env->apic_state);
+#else  /* VBOX */
             val = cpu_get_apic_tpr(env);
+#endif /* VBOX */
         } else {
             val = env->v_tpr;
         }
@@ -3472,7 +3484,11 @@ void helper_write_crN(int reg, target_ulong t0)
         break;
     case 8:
         if (!(env->hflags2 & HF2_VINTR_MASK)) {
+#ifndef VBOX
+            cpu_set_apic_tpr(env->apic_state, t0);
+#else  /* VBOX */
             cpu_set_apic_tpr(env, t0);
+#endif /* VBOX */
         }
         env->v_tpr = t0 & 0x0f;
         break;
@@ -3535,23 +3551,19 @@ void helper_rdtsc(void)
     EDX = (uint32_t)(val >> 32);
 }
 
-#ifdef VBOX
 void helper_rdtscp(void)
 {
+    helper_rdtsc();
+#ifndef VBOX
+    ECX = (uint32_t)(env->tsc_aux);
+#else  /* VBOX */
     uint64_t val;
-    if ((env->cr[4] & CR4_TSD_MASK) && ((env->hflags & HF_CPL_MASK) != 0)) {
-        raise_exception(EXCP0D_GPF);
-    }
-
-    val = cpu_get_tsc(env);
-    EAX = (uint32_t)(val);
-    EDX = (uint32_t)(val >> 32);
     if (cpu_rdmsr(env, MSR_K8_TSC_AUX, &val) == 0)
         ECX = (uint32_t)(val);
     else
         ECX = 0;
-}
 #endif /* VBOX */
+}
 
 void helper_rdpmc(void)
 {
@@ -3603,7 +3615,7 @@ void helper_wrmsr(void)
         break;
     case MSR_IA32_APICBASE:
 # ifndef VBOX /* The CPUMSetGuestMsr call below does this now. */
-        cpu_set_apic_base(env, val);
+        cpu_set_apic_base(env->apic_state, val);
 # endif
         break;
     case MSR_EFER:
@@ -3704,6 +3716,9 @@ void helper_wrmsr(void)
             && (val == 0 || val == ~(uint64_t)0))
             env->mcg_ctl = val;
         break;
+    case MSR_TSC_AUX:
+        env->tsc_aux = val;
+        break;
 # endif /* !VBOX */
     default:
 # ifndef VBOX
@@ -3746,7 +3761,11 @@ void helper_rdmsr(void)
         val = env->sysenter_eip;
         break;
     case MSR_IA32_APICBASE:
+#ifndef VBOX
+        val = cpu_get_apic_base(env->apic_state);
+#else  /* VBOX */
         val = cpu_get_apic_base(env);
+#endif /* VBOX */
         break;
     case MSR_EFER:
         val = env->efer;
@@ -3787,15 +3806,11 @@ void helper_rdmsr(void)
     case MSR_KERNELGSBASE:
         val = env->kernelgsbase;
         break;
-#endif
-#ifdef CONFIG_KQEMU
-    case MSR_QPI_COMMBASE:
-        if (env->kqemu_enabled) {
-            val = kqemu_comm_base;
-        } else {
-            val = 0;
-        }
+# ifndef VBOX
+    case MSR_TSC_AUX:
+        val = env->tsc_aux;
         break;
+# endif /*!VBOX*/
 #endif
 # ifndef VBOX
     case MSR_MTRRphysBase(0):
@@ -5009,6 +5024,11 @@ void helper_fxsave(target_ulong ptr, int data64)
     CPU86_LDouble tmp;
     target_ulong addr;
 
+    /* The operand must be 16 byte aligned */
+    if (ptr & 0xf) {
+        raise_exception(EXCP0D_GPF);
+    }
+
     fpus = (env->fpus & ~0x3800) | (env->fpstt & 0x7) << 11;
     fptag = 0;
     for(i = 0; i < 8; i++) {
@@ -5064,6 +5084,11 @@ void helper_fxrstor(target_ulong ptr, int data64)
     int i, fpus, fptag, nb_xmm_regs;
     CPU86_LDouble tmp;
     target_ulong addr;
+
+    /* The operand must be 16 byte aligned */
+    if (ptr & 0xf) {
+        raise_exception(EXCP0D_GPF);
+    }
 
     env->fpuc = lduw(ptr);
     fpus = lduw(ptr + 2);
@@ -5817,13 +5842,16 @@ int emulate_single_instr(CPUX86State *env1)
         /*
          * Exit once we detect an external interrupt and interrupts are enabled
          */
-        if (   (env->interrupt_request & (CPU_INTERRUPT_EXTERNAL_EXIT|CPU_INTERRUPT_EXTERNAL_TIMER))
+        if (   (env->interrupt_request & (CPU_INTERRUPT_EXTERNAL_EXIT | CPU_INTERRUPT_EXTERNAL_TIMER))
             || (   (env->eflags & IF_MASK)
                 && !(env->hflags & HF_INHIBIT_IRQ_MASK)
                 && (env->interrupt_request & CPU_INTERRUPT_EXTERNAL_HARD) )
            )
         {
             break;
+        }
+        if (env->interrupt_request & CPU_INTERRUPT_EXTERNAL_FLUSH_TLB) {
+            tlb_flush(env, true);
         }
     }
     env->current_tb = current;
@@ -6634,6 +6662,7 @@ void helper_vmexit(uint32_t exit_code, uint64_t exit_info_1)
              ldl_phys(env->vm_vmcb + offsetof(struct vmcb, control.event_inj)));
     stl_phys(env->vm_vmcb + offsetof(struct vmcb, control.exit_int_info_err),
              ldl_phys(env->vm_vmcb + offsetof(struct vmcb, control.event_inj_err)));
+    stl_phys(env->vm_vmcb + offsetof(struct vmcb, control.event_inj), 0);
 
     env->hflags2 &= ~HF2_GIF_MASK;
     /* FIXME: Resets the current ASID register to zero (host ASID). */
@@ -6731,11 +6760,14 @@ target_ulong helper_bsf(target_ulong t0)
     return count;
 }
 
-target_ulong helper_bsr(target_ulong t0)
+target_ulong helper_lzcnt(target_ulong t0, int wordsize)
 {
     int count;
     target_ulong res, mask;
 
+    if (wordsize > 0 && t0 == 0) {
+        return wordsize;
+    }
     res = t0;
     count = TARGET_LONG_BITS - 1;
     mask = (target_ulong)1 << (TARGET_LONG_BITS - 1);
@@ -6743,9 +6775,16 @@ target_ulong helper_bsr(target_ulong t0)
         count--;
         res <<= 1;
     }
+    if (wordsize > 0) {
+        return wordsize - 1 - count;
+    }
     return count;
 }
 
+target_ulong helper_bsr(target_ulong t0)
+{
+	return helper_lzcnt(t0, 0);
+}
 
 static int compute_all_eflags(void)
 {

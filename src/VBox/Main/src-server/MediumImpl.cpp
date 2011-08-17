@@ -137,7 +137,9 @@ struct Medium::Data
 
     bool autoReset : 1;
 
+    /** New UUID to be set on the next queryInfo() call. */
     const Guid uuidImage;
+    /** New parent UUID to be set on the next queryInfo() call. */
     const Guid uuidParentImage;
 
     bool hostDrive : 1;
@@ -150,14 +152,11 @@ struct Medium::Data
 
     Utf8Str vdError;        /*< Error remembered by the VD error callback. */
 
-    VDINTERFACE vdIfError;
-    VDINTERFACEERROR vdIfCallsError;
+    VDINTERFACEERROR vdIfError;
 
-    VDINTERFACE vdIfConfig;
-    VDINTERFACECONFIG vdIfCallsConfig;
+    VDINTERFACECONFIG vdIfConfig;
 
-    VDINTERFACE vdIfTcpNet;
-    VDINTERFACETCPNET vdIfCallsTcpNet;
+    VDINTERFACETCPNET vdIfTcpNet;
 
     PVDINTERFACE vdDiskIfaces;
     PVDINTERFACE vdImageIfaces;
@@ -211,14 +210,12 @@ public:
 
         /* Set up a per-operation progress interface, can be used freely (for
          * binary operations you can use it either on the source or target). */
-        mVDIfCallsProgress.cbSize = sizeof(VDINTERFACEPROGRESS);
-        mVDIfCallsProgress.enmInterface = VDINTERFACETYPE_PROGRESS;
-        mVDIfCallsProgress.pfnProgress = vdProgressCall;
-        int vrc = VDInterfaceAdd(&mVDIfProgress,
+        mVDIfProgress.pfnProgress = vdProgressCall;
+        int vrc = VDInterfaceAdd(&mVDIfProgress.Core,
                                 "Medium::Task::vdInterfaceProgress",
                                 VDINTERFACETYPE_PROGRESS,
-                                &mVDIfCallsProgress,
                                 mProgress,
+                                sizeof(VDINTERFACEPROGRESS),
                                 &mVDOperationIfaces);
         AssertRC(vrc);
         if (RT_FAILURE(vrc))
@@ -259,8 +256,7 @@ private:
 
     static DECLCALLBACK(int) vdProgressCall(void *pvUser, unsigned uPercent);
 
-    VDINTERFACE mVDIfProgress;
-    VDINTERFACEPROGRESS mVDIfCallsProgress;
+    VDINTERFACEPROGRESS mVDIfProgress;
 
     /* Must have a strong VirtualBox reference during a task otherwise the
      * reference count might drop to 0 while a task is still running. This
@@ -338,6 +334,8 @@ public:
               Medium *aTarget,
               MediumVariant_T aVariant,
               Medium *aParent,
+              uint32_t idxSrcImageSame,
+              uint32_t idxDstImageSame,
               MediumLockList *aSourceMediumLockList,
               MediumLockList *aTargetMediumLockList,
               bool fKeepSourceMediumLockList = false,
@@ -348,6 +346,8 @@ public:
           mpSourceMediumLockList(aSourceMediumLockList),
           mpTargetMediumLockList(aTargetMediumLockList),
           mVariant(aVariant),
+          midxSrcImageSame(idxSrcImageSame),
+          midxDstImageSame(idxDstImageSame),
           mTargetCaller(aTarget),
           mParentCaller(aParent),
           mfKeepSourceMediumLockList(fKeepSourceMediumLockList),
@@ -378,6 +378,8 @@ public:
     MediumLockList *mpSourceMediumLockList;
     MediumLockList *mpTargetMediumLockList;
     MediumVariant_T mVariant;
+    uint32_t midxSrcImageSame;
+    uint32_t midxDstImageSame;
 
 private:
     virtual HRESULT handler();
@@ -582,7 +584,7 @@ public:
                const char *aFilename,
                MediumFormat *aFormat,
                MediumVariant_T aVariant,
-               void *aVDImageIOCallbacks,
+               VDINTERFACEIO *aVDImageIOIf,
                void *aVDImageIOUser,
                MediumLockList *aSourceMediumLockList,
                bool fKeepSourceMediumLockList = false)
@@ -596,11 +598,11 @@ public:
         AssertReturnVoidStmt(aSourceMediumLockList != NULL, mRC = E_FAIL);
 
         mVDImageIfaces = aMedium->m->vdImageIfaces;
-        if (aVDImageIOCallbacks)
+        if (aVDImageIOIf)
         {
-            int vrc = VDInterfaceAdd(&mVDInterfaceIO, "Medium::vdInterfaceIO",
-                                     VDINTERFACETYPE_IO, aVDImageIOCallbacks,
-                                     aVDImageIOUser, &mVDImageIfaces);
+            int vrc = VDInterfaceAdd(&aVDImageIOIf->Core, "Medium::vdInterfaceIO",
+                                     VDINTERFACETYPE_IO, aVDImageIOUser,
+                                     sizeof(VDINTERFACEIO), &mVDImageIfaces);
             AssertRCReturnVoidStmt(vrc, mRC = E_FAIL);
         }
     }
@@ -621,7 +623,6 @@ private:
     virtual HRESULT handler();
 
     bool mfKeepSourceMediumLockList;
-    VDINTERFACE mVDInterfaceIO;
 };
 
 class Medium::ImportTask : public Medium::Task
@@ -632,7 +633,7 @@ public:
                const char *aFilename,
                MediumFormat *aFormat,
                MediumVariant_T aVariant,
-               void *aVDImageIOCallbacks,
+               VDINTERFACEIO *aVDImageIOIf,
                void *aVDImageIOUser,
                Medium *aParent,
                MediumLockList *aTargetMediumLockList,
@@ -653,11 +654,11 @@ public:
             return;
 
         mVDImageIfaces = aMedium->m->vdImageIfaces;
-        if (aVDImageIOCallbacks)
+        if (aVDImageIOIf)
         {
-            int vrc = VDInterfaceAdd(&mVDInterfaceIO, "Medium::vdInterfaceIO",
-                                     VDINTERFACETYPE_IO, aVDImageIOCallbacks,
-                                     aVDImageIOUser, &mVDImageIfaces);
+            int vrc = VDInterfaceAdd(&aVDImageIOIf->Core, "Medium::vdInterfaceIO",
+                                     VDINTERFACETYPE_IO, aVDImageIOUser,
+                                     sizeof(VDINTERFACEIO), &mVDImageIfaces);
             AssertRCReturnVoidStmt(vrc, mRC = E_FAIL);
         }
     }
@@ -680,7 +681,6 @@ private:
 
     AutoCaller mParentCaller;
     bool mfKeepTargetMediumLockList;
-    VDINTERFACE mVDInterfaceIO;
 };
 
 /**
@@ -837,58 +837,52 @@ HRESULT Medium::FinalConstruct()
     m = new Data;
 
     /* Initialize the callbacks of the VD error interface */
-    m->vdIfCallsError.cbSize = sizeof(VDINTERFACEERROR);
-    m->vdIfCallsError.enmInterface = VDINTERFACETYPE_ERROR;
-    m->vdIfCallsError.pfnError = vdErrorCall;
-    m->vdIfCallsError.pfnMessage = NULL;
+    m->vdIfError.pfnError = vdErrorCall;
+    m->vdIfError.pfnMessage = NULL;
 
     /* Initialize the callbacks of the VD config interface */
-    m->vdIfCallsConfig.cbSize = sizeof(VDINTERFACECONFIG);
-    m->vdIfCallsConfig.enmInterface = VDINTERFACETYPE_CONFIG;
-    m->vdIfCallsConfig.pfnAreKeysValid = vdConfigAreKeysValid;
-    m->vdIfCallsConfig.pfnQuerySize = vdConfigQuerySize;
-    m->vdIfCallsConfig.pfnQuery = vdConfigQuery;
+    m->vdIfConfig.pfnAreKeysValid = vdConfigAreKeysValid;
+    m->vdIfConfig.pfnQuerySize = vdConfigQuerySize;
+    m->vdIfConfig.pfnQuery = vdConfigQuery;
 
     /* Initialize the callbacks of the VD TCP interface (we always use the host
      * IP stack for now) */
-    m->vdIfCallsTcpNet.cbSize = sizeof(VDINTERFACETCPNET);
-    m->vdIfCallsTcpNet.enmInterface = VDINTERFACETYPE_TCPNET;
-    m->vdIfCallsTcpNet.pfnSocketCreate = vdTcpSocketCreate;
-    m->vdIfCallsTcpNet.pfnSocketDestroy = vdTcpSocketDestroy;
-    m->vdIfCallsTcpNet.pfnClientConnect = vdTcpClientConnect;
-    m->vdIfCallsTcpNet.pfnClientClose = vdTcpClientClose;
-    m->vdIfCallsTcpNet.pfnIsClientConnected = vdTcpIsClientConnected;
-    m->vdIfCallsTcpNet.pfnSelectOne = vdTcpSelectOne;
-    m->vdIfCallsTcpNet.pfnRead = vdTcpRead;
-    m->vdIfCallsTcpNet.pfnWrite = vdTcpWrite;
-    m->vdIfCallsTcpNet.pfnSgWrite = vdTcpSgWrite;
-    m->vdIfCallsTcpNet.pfnFlush = vdTcpFlush;
-    m->vdIfCallsTcpNet.pfnSetSendCoalescing = vdTcpSetSendCoalescing;
-    m->vdIfCallsTcpNet.pfnGetLocalAddress = vdTcpGetLocalAddress;
-    m->vdIfCallsTcpNet.pfnGetPeerAddress = vdTcpGetPeerAddress;
-    m->vdIfCallsTcpNet.pfnSelectOneEx = NULL;
-    m->vdIfCallsTcpNet.pfnPoke = NULL;
+    m->vdIfTcpNet.pfnSocketCreate = vdTcpSocketCreate;
+    m->vdIfTcpNet.pfnSocketDestroy = vdTcpSocketDestroy;
+    m->vdIfTcpNet.pfnClientConnect = vdTcpClientConnect;
+    m->vdIfTcpNet.pfnClientClose = vdTcpClientClose;
+    m->vdIfTcpNet.pfnIsClientConnected = vdTcpIsClientConnected;
+    m->vdIfTcpNet.pfnSelectOne = vdTcpSelectOne;
+    m->vdIfTcpNet.pfnRead = vdTcpRead;
+    m->vdIfTcpNet.pfnWrite = vdTcpWrite;
+    m->vdIfTcpNet.pfnSgWrite = vdTcpSgWrite;
+    m->vdIfTcpNet.pfnFlush = vdTcpFlush;
+    m->vdIfTcpNet.pfnSetSendCoalescing = vdTcpSetSendCoalescing;
+    m->vdIfTcpNet.pfnGetLocalAddress = vdTcpGetLocalAddress;
+    m->vdIfTcpNet.pfnGetPeerAddress = vdTcpGetPeerAddress;
+    m->vdIfTcpNet.pfnSelectOneEx = NULL;
+    m->vdIfTcpNet.pfnPoke = NULL;
 
     /* Initialize the per-disk interface chain (could be done more globally,
      * but it's not wasting much time or space so it's not worth it). */
     int vrc;
-    vrc = VDInterfaceAdd(&m->vdIfError,
+    vrc = VDInterfaceAdd(&m->vdIfError.Core,
                          "Medium::vdInterfaceError",
-                         VDINTERFACETYPE_ERROR,
-                         &m->vdIfCallsError, this, &m->vdDiskIfaces);
+                         VDINTERFACETYPE_ERROR, this,
+                         sizeof(VDINTERFACEERROR), &m->vdDiskIfaces);
     AssertRCReturn(vrc, E_FAIL);
 
     /* Initialize the per-image interface chain */
-    vrc = VDInterfaceAdd(&m->vdIfConfig,
+    vrc = VDInterfaceAdd(&m->vdIfConfig.Core,
                          "Medium::vdInterfaceConfig",
-                         VDINTERFACETYPE_CONFIG,
-                         &m->vdIfCallsConfig, this, &m->vdImageIfaces);
+                         VDINTERFACETYPE_CONFIG, this,
+                         sizeof(VDINTERFACECONFIG), &m->vdImageIfaces);
     AssertRCReturn(vrc, E_FAIL);
 
-    vrc = VDInterfaceAdd(&m->vdIfTcpNet,
+    vrc = VDInterfaceAdd(&m->vdIfTcpNet.Core,
                          "Medium::vdInterfaceTcpNet",
-                         VDINTERFACETYPE_TCPNET,
-                         &m->vdIfCallsTcpNet, this, &m->vdImageIfaces);
+                         VDINTERFACETYPE_TCPNET, this,
+                         sizeof(VDINTERFACETCPNET), &m->vdImageIfaces);
     AssertRCReturn(vrc, E_FAIL);
 
     vrc = RTSemEventMultiCreate(&m->queryInfoSem);
@@ -920,15 +914,15 @@ void Medium::FinalRelease()
  * is set to the registry of the parent image to make sure they all end up in the same
  * file.
  *
- * For hard disks that don't have the VD_CAP_CREATE_FIXED or
- * VD_CAP_CREATE_DYNAMIC capability (and therefore cannot be created or deleted
+ * For hard disks that don't have the MediumFormatCapabilities_CreateFixed or
+ * MediumFormatCapabilities_CreateDynamic capability (and therefore cannot be created or deleted
  * with the means of VirtualBox) the associated storage unit is assumed to be
  * ready for use so the state of the hard disk object will be set to Created.
  *
  * @param aVirtualBox   VirtualBox object.
  * @param aFormat
  * @param aLocation     Storage unit location.
- * @param uuidMachineRegistry The registry to which this medium should be added (global registry UUI or medium UUID or empty if none).
+ * @param uuidMachineRegistry The registry to which this medium should be added (global registry UUID or machine UUID or empty if none).
  * @param pllRegistriesThatNeedSaving Optional list to receive the UUIDs of the media registries that need saving.
  */
 HRESULT Medium::init(VirtualBox *aVirtualBox,
@@ -1011,11 +1005,13 @@ HRESULT Medium::init(VirtualBox *aVirtualBox,
  * @param aVirtualBox   VirtualBox object.
  * @param aLocation     Storage unit location.
  * @param enOpenMode    Whether to open the medium read/write or read-only.
+ * @param fForceNewUuid Whether a new UUID should be set to avoid duplicates.
  * @param aDeviceType   Device type of medium.
  */
 HRESULT Medium::init(VirtualBox *aVirtualBox,
                      const Utf8Str &aLocation,
                      HDDOpenMode enOpenMode,
+                     bool fForceNewUuid,
                      DeviceType_T aDeviceType)
 {
     AssertReturn(aVirtualBox, E_INVALIDARG);
@@ -1050,7 +1046,9 @@ HRESULT Medium::init(VirtualBox *aVirtualBox,
     if (FAILED(rc)) return rc;
 
     /* get all the information about the medium from the storage unit */
-    rc = queryInfo(false /* fSetImageId */, false /* fSetParentId */);
+    if (fForceNewUuid)
+        unconst(m->uuidImage).create();
+    rc = queryInfo(fForceNewUuid /* fSetImageId */, false /* fSetParentId */);
 
     if (SUCCEEDED(rc))
     {
@@ -1088,7 +1086,7 @@ HRESULT Medium::init(VirtualBox *aVirtualBox,
  * @param aVirtualBox   VirtualBox object.
  * @param aParent       Parent medium disk or NULL for a root (base) medium.
  * @param aDeviceType   Device type of the medium.
- * @param uuidMachineRegistry The registry to which this medium should be added (global registry UUI or medium UUID).
+ * @param uuidMachineRegistry The registry to which this medium should be added (global registry UUID or machine UUID).
  * @param aNode         Configuration settings.
  * @param strMachineFolder The machine folder with which to resolve relative paths; if empty, then we use the VirtualBox home directory
  *
@@ -1178,24 +1176,29 @@ HRESULT Medium::init(VirtualBox *aVirtualBox,
         m->mapProperties[name] = value;
     }
 
-    // compose full path of the medium, if it's not fully qualified...
-    // slightly convoluted logic here. If the caller has given us a
-    // machine folder, then a relative path will be relative to that:
     Utf8Str strFull;
-    if (    !strMachineFolder.isEmpty()
-         && !RTPathStartsWithRoot(data.strLocation.c_str())
-       )
+    if (m->formatObj->getCapabilities() & MediumFormatCapabilities_File)
     {
-        strFull = strMachineFolder;
-        strFull += RTPATH_SLASH;
-        strFull += data.strLocation;
+        // compose full path of the medium, if it's not fully qualified...
+        // slightly convoluted logic here. If the caller has given us a
+        // machine folder, then a relative path will be relative to that:
+        if (    !strMachineFolder.isEmpty()
+             && !RTPathStartsWithRoot(data.strLocation.c_str())
+           )
+        {
+            strFull = strMachineFolder;
+            strFull += RTPATH_SLASH;
+            strFull += data.strLocation;
+        }
+        else
+        {
+            // Otherwise use the old VirtualBox "make absolute path" logic:
+            rc = m->pVirtualBox->calculateFullPath(data.strLocation, strFull);
+            if (FAILED(rc)) return rc;
+        }
     }
     else
-    {
-        // Otherwise use the old VirtualBox "make absolute path" logic:
-        rc = m->pVirtualBox->calculateFullPath(data.strLocation, strFull);
-        if (FAILED(rc)) return rc;
-    }
+        strFull = data.strLocation;
 
     rc = setLocation(strFull);
     if (FAILED(rc)) return rc;
@@ -1758,6 +1761,18 @@ STDMETHODIMP Medium::COMSETTER(Type)(MediumType_T aType)
     return rc;
 }
 
+STDMETHODIMP Medium::COMGETTER(AllowedTypes)(ComSafeArrayOut(MediumType_T, aAllowedTypes))
+{
+    CheckComArgOutSafeArrayPointerValid(aAllowedTypes);
+
+    AutoCaller autoCaller(this);
+    if (FAILED(autoCaller.rc())) return autoCaller.rc();
+
+    AutoReadLock alock(this COMMA_LOCKVAL_SRC_POS);
+
+    ReturnComNotImplemented();
+}
+
 STDMETHODIMP Medium::COMGETTER(Parent)(IMedium **aParent)
 {
     CheckComArgOutPointerValid(aParent);
@@ -1807,7 +1822,7 @@ STDMETHODIMP Medium::COMGETTER(ReadOnly)(BOOL *aReadOnly)
     AutoCaller autoCaller(this);
     if (FAILED(autoCaller.rc())) return autoCaller.rc();
 
-    /* isRadOnly() will do locking */
+    /* isReadOnly() will do locking */
 
     *aReadOnly = isReadOnly();
 
@@ -1952,12 +1967,22 @@ STDMETHODIMP Medium::SetIDs(BOOL aSetImageId,
     Guid imageId, parentId;
     if (aSetImageId)
     {
-        imageId = Guid(aImageId);
-        if (imageId.isEmpty())
-            return setError(E_INVALIDARG, tr("Argument %s is empty"), "aImageId");
+        if (Bstr(aImageId).isEmpty())
+            imageId.create();
+        else
+        {
+            imageId = Guid(aImageId);
+            if (imageId.isEmpty())
+                return setError(E_INVALIDARG, tr("Argument %s is empty"), "aImageId");
+        }
     }
     if (aSetParentId)
-        parentId = Guid(aParentId);
+    {
+        if (Bstr(aParentId).isEmpty())
+            parentId.create();
+        else
+            parentId = Guid(aParentId);
+    }
 
     unconst(m->uuidImage) = imageId;
     unconst(m->uuidParentImage) = parentId;
@@ -2497,7 +2522,9 @@ STDMETHODIMP Medium::CreateDiffStorage(IMedium *aTarget,
 
     ComObjPtr<Medium> diff = static_cast<Medium*>(aTarget);
 
-    AutoWriteLock alock(this COMMA_LOCKVAL_SRC_POS);
+    // locking: we need the tree lock first because we access parent pointers
+    AutoReadLock treeLock(m->pVirtualBox->getMediaTreeLockHandle() COMMA_LOCKVAL_SRC_POS);
+    AutoMultiWriteLock2 alock(this, diff COMMA_LOCKVAL_SRC_POS);
 
     if (m->type == MediumType_Writethrough)
         return setError(VBOX_E_INVALID_OBJECT_STATE,
@@ -2523,6 +2550,25 @@ STDMETHODIMP Medium::CreateDiffStorage(IMedium *aTarget,
         delete pMediumLockList;
         return rc;
     }
+
+    rc = pMediumLockList->Lock();
+    if (FAILED(rc))
+    {
+        delete pMediumLockList;
+
+        return setError(rc, tr("Could not lock medium when creating diff '%s'"),
+                        diff->getLocationFull().c_str());
+    }
+
+    Guid parentMachineRegistry;
+    if (getFirstRegistryMachineId(parentMachineRegistry))
+    {
+        /* since this medium has been just created it isn't associated yet */
+        diff->m->llRegistryIDs.push_back(parentMachineRegistry);
+    }
+
+    treeLock.release();
+    alock.release();
 
     ComObjPtr <Progress> pProgress;
 
@@ -2663,8 +2709,8 @@ STDMETHODIMP Medium::CloneTo(IMedium *aTarget,
         /* setup task object to carry out the operation asynchronously */
         pTask = new Medium::CloneTask(this, pProgress, pTarget,
                                       (MediumVariant_T)aVariant,
-                                      pParent, pSourceMediumLockList,
-                                      pTargetMediumLockList);
+                                      pParent, UINT32_MAX, UINT32_MAX,
+                                      pSourceMediumLockList, pTargetMediumLockList);
         rc = pTask->rc();
         AssertComRC(rc);
         if (FAILED(rc))
@@ -3244,7 +3290,7 @@ HRESULT Medium::addToRegistryIDList(GuidList &llRegistryIDs)
          it != m->llRegistryIDs.end();
          ++it)
     {
-        m->pVirtualBox->addGuidToListUniquely(llRegistryIDs, *it);
+        VirtualBox::addGuidToListUniquely(llRegistryIDs, *it);
     }
 
     return S_OK;
@@ -3305,7 +3351,12 @@ HRESULT Medium::addBackReference(const Guid &aMachineId,
     if (aSnapshotId.isEmpty())
     {
         /* sanity: no duplicate attachments */
-        AssertReturn(!it->fInCurState, E_FAIL);
+        if (it->fInCurState)
+            return setError(VBOX_E_OBJECT_IN_USE,
+                            tr("Cannot attach medium '%s' {%RTuuid}: medium is already associated with the current state of machine uuid {%RTuuid}!"),
+                            m->strLocationFull.c_str(),
+                            m->id.raw(),
+                            aMachineId.raw());
         it->fInCurState = true;
 
         return S_OK;
@@ -3329,8 +3380,7 @@ HRESULT Medium::addBackReference(const Guid &aMachineId,
                             tr("Cannot attach medium '%s' {%RTuuid} from snapshot '%RTuuid': medium is already in use by this snapshot!"),
                             m->strLocationFull.c_str(),
                             m->id.raw(),
-                            aSnapshotId.raw(),
-                            idOldSnapshot.raw());
+                            aSnapshotId.raw());
         }
     }
 
@@ -3437,6 +3487,11 @@ const Guid* Medium::getFirstMachineBackrefSnapshotId() const
         return NULL;
 
     return &ref.llSnapshotIds.front();
+}
+
+size_t Medium::getMachineBackRefCount() const
+{
+    return m->backRefs.size();
 }
 
 #ifdef DEBUG
@@ -3597,6 +3652,15 @@ bool Medium::isReadOnly()
     }
 
     AssertFailedReturn(false);
+}
+
+/**
+ * Internal method to return the medium's size. Must have caller + locking!
+ * @return
+ */
+void Medium::updateId(const Guid &id)
+{
+    unconst(m->id) = id;
 }
 
 /**
@@ -4173,6 +4237,11 @@ HRESULT Medium::deleteStorage(ComObjPtr<Progress> *aProgress,
 
         /* Undo deleting state if necessary. */
         AutoWriteLock alock(this COMMA_LOCKVAL_SRC_POS);
+        /* Make sure that any error signalled by unmarkForDeletion() is not
+         * ending up in the error list (if the caller uses MultiResult). It
+         * usually is spurious, as in most cases the medium hasn't been marked
+         * for deletion when the error was thrown above. */
+        ErrorInfoKeeper eik;
         unmarkForDeletion();
     }
 
@@ -4873,7 +4942,7 @@ HRESULT Medium::fixParentUuidOfChildren(const MediaList &childrenToReparent)
 HRESULT Medium::exportFile(const char *aFilename,
                            const ComObjPtr<MediumFormat> &aFormat,
                            MediumVariant_T aVariant,
-                           void *aVDImageIOCallbacks, void *aVDImageIOUser,
+                           PVDINTERFACEIO aVDImageIOIf, void *aVDImageIOUser,
                            const ComObjPtr<Progress> &aProgress)
 {
     AssertPtrReturn(aFilename, E_INVALIDARG);
@@ -4916,7 +4985,7 @@ HRESULT Medium::exportFile(const char *aFilename,
 
         /* setup task object to carry out the operation asynchronously */
         pTask = new Medium::ExportTask(this, aProgress, aFilename, aFormat,
-                                       aVariant, aVDImageIOCallbacks,
+                                       aVariant, aVDImageIOIf,
                                        aVDImageIOUser, pSourceMediumLockList);
         rc = pTask->rc();
         AssertComRC(rc);
@@ -4951,7 +5020,7 @@ HRESULT Medium::exportFile(const char *aFilename,
 HRESULT Medium::importFile(const char *aFilename,
                            const ComObjPtr<MediumFormat> &aFormat,
                            MediumVariant_T aVariant,
-                           void *aVDImageIOCallbacks, void *aVDImageIOUser,
+                           PVDINTERFACEIO aVDImageIOIf, void *aVDImageIOUser,
                            const ComObjPtr<Medium> &aParent,
                            const ComObjPtr<Progress> &aProgress)
 {
@@ -4999,7 +5068,7 @@ HRESULT Medium::importFile(const char *aFilename,
 
         /* setup task object to carry out the operation asynchronously */
         pTask = new Medium::ImportTask(this, aProgress, aFilename, aFormat,
-                                       aVariant, aVDImageIOCallbacks,
+                                       aVariant, aVDImageIOIf,
                                        aVDImageIOUser, aParent,
                                        pTargetMediumLockList);
         rc = pTask->rc();
@@ -5014,6 +5083,134 @@ HRESULT Medium::importFile(const char *aFilename,
 
     if (SUCCEEDED(rc))
         rc = startThread(pTask);
+    else if (pTask != NULL)
+        delete pTask;
+
+    return rc;
+}
+
+/**
+ * Internal version of the public CloneTo API which allows to enable certain
+ * optimizations to improve speed during VM cloning.
+ *
+ * @param aTarget            Target medium
+ * @param aVariant           Which exact image format variant to use
+ *                           for the destination image.
+ * @param aParent            Parent medium. May be NULL.
+ * @param aProgress          Progress object to use.
+ * @param idxSrcImageSame    The last image in the source chain which has the
+ *                           same content as the given image in the destination
+ *                           chain. Use UINT32_MAX to disable this optimization.
+ * @param idxDstImageSame    The last image in the destination chain which has the
+ *                           same content as the given image in the source chain.
+ *                           Use UINT32_MAX to disable this optimization.
+ * @return
+ */
+HRESULT Medium::cloneToEx(const ComObjPtr<Medium> &aTarget, ULONG aVariant,
+                          const ComObjPtr<Medium> &aParent, IProgress **aProgress,
+                          uint32_t idxSrcImageSame, uint32_t idxDstImageSame)
+{
+    CheckComArgNotNull(aTarget);
+    CheckComArgOutPointerValid(aProgress);
+    ComAssertRet(aTarget != this, E_INVALIDARG);
+
+    AutoCaller autoCaller(this);
+    if (FAILED(autoCaller.rc())) return autoCaller.rc();
+
+    HRESULT rc = S_OK;
+    ComObjPtr<Progress> pProgress;
+    Medium::Task *pTask = NULL;
+
+    try
+    {
+        // locking: we need the tree lock first because we access parent pointers
+        AutoReadLock treeLock(m->pVirtualBox->getMediaTreeLockHandle() COMMA_LOCKVAL_SRC_POS);
+        // and we need to write-lock the media involved
+        AutoMultiWriteLock3 alock(this, aTarget, aParent COMMA_LOCKVAL_SRC_POS);
+
+        if (    aTarget->m->state != MediumState_NotCreated
+            &&  aTarget->m->state != MediumState_Created)
+            throw aTarget->setStateError();
+
+        /* Build the source lock list. */
+        MediumLockList *pSourceMediumLockList(new MediumLockList());
+        rc = createMediumLockList(true /* fFailIfInaccessible */,
+                                  false /* fMediumLockWrite */,
+                                  NULL,
+                                  *pSourceMediumLockList);
+        if (FAILED(rc))
+        {
+            delete pSourceMediumLockList;
+            throw rc;
+        }
+
+        /* Build the target lock list (including the to-be parent chain). */
+        MediumLockList *pTargetMediumLockList(new MediumLockList());
+        rc = aTarget->createMediumLockList(true /* fFailIfInaccessible */,
+                                           true /* fMediumLockWrite */,
+                                           aParent,
+                                           *pTargetMediumLockList);
+        if (FAILED(rc))
+        {
+            delete pSourceMediumLockList;
+            delete pTargetMediumLockList;
+            throw rc;
+        }
+
+        rc = pSourceMediumLockList->Lock();
+        if (FAILED(rc))
+        {
+            delete pSourceMediumLockList;
+            delete pTargetMediumLockList;
+            throw setError(rc,
+                           tr("Failed to lock source media '%s'"),
+                           getLocationFull().c_str());
+        }
+        rc = pTargetMediumLockList->Lock();
+        if (FAILED(rc))
+        {
+            delete pSourceMediumLockList;
+            delete pTargetMediumLockList;
+            throw setError(rc,
+                           tr("Failed to lock target media '%s'"),
+                           aTarget->getLocationFull().c_str());
+        }
+
+        pProgress.createObject();
+        rc = pProgress->init(m->pVirtualBox,
+                             static_cast <IMedium *>(this),
+                             BstrFmt(tr("Creating clone medium '%s'"), aTarget->m->strLocationFull.c_str()).raw(),
+                             TRUE /* aCancelable */);
+        if (FAILED(rc))
+        {
+            delete pSourceMediumLockList;
+            delete pTargetMediumLockList;
+            throw rc;
+        }
+
+        /* setup task object to carry out the operation asynchronously */
+        pTask = new Medium::CloneTask(this, pProgress, aTarget,
+                                      (MediumVariant_T)aVariant,
+                                      aParent, idxSrcImageSame,
+                                      idxDstImageSame, pSourceMediumLockList,
+                                      pTargetMediumLockList);
+        rc = pTask->rc();
+        AssertComRC(rc);
+        if (FAILED(rc))
+            throw rc;
+
+        if (aTarget->m->state == MediumState_NotCreated)
+            aTarget->m->state = MediumState_Creating;
+    }
+    catch (HRESULT aRC) { rc = aRC; }
+
+    if (SUCCEEDED(rc))
+    {
+        rc = startThread(pTask);
+
+        if (SUCCEEDED(rc))
+            pProgress.queryInterfaceTo(aProgress);
+    }
     else if (pTask != NULL)
         delete pTask;
 
@@ -5085,9 +5282,9 @@ HRESULT Medium::queryInfo(bool fSetImageId, bool fSetParentId)
      * when opening media of some third-party formats for the first
      * time in VirtualBox (such as VMDK for which VDOpen() needs to
      * generate an UUID if it is missing) */
-    if (    (m->hddOpenMode == OpenReadOnly)
+    if (    m->hddOpenMode == OpenReadOnly
          || m->type == MediumType_Readonly
-         || !isImport
+         || (!isImport && !fSetImageId && !fSetParentId)
        )
         uOpenFlags |= VD_OPEN_FLAGS_READONLY;
 
@@ -5164,6 +5361,7 @@ HRESULT Medium::queryInfo(bool fSetImageId, bool fSetParentId)
                 {
                     vrc = VDSetUuid(hdd, 0, m->uuidImage.raw());
                     ComAssertRCThrow(vrc, E_FAIL);
+                    mediumId = m->uuidImage;
                 }
                 if (fSetParentId)
                 {
@@ -5193,6 +5391,7 @@ HRESULT Medium::queryInfo(bool fSetImageId, bool fSetParentId)
 
                     if (mediumId != uuid)
                     {
+                        /** @todo r=klaus this always refers to VirtualBox.xml as the medium registry, even for new VMs */
                         lastAccessError = Utf8StrFmt(
                                 tr("UUID {%RTuuid} of the medium '%s' does not match the value {%RTuuid} stored in the media registry ('%s')"),
                                 &uuid,
@@ -5208,13 +5407,15 @@ HRESULT Medium::queryInfo(bool fSetImageId, bool fSetParentId)
                 /* the backend does not support storing UUIDs within the
                  * underlying storage so use what we store in XML */
 
-                /* generate an UUID for an imported UUID-less medium */
-                if (isImport)
+                if (fSetImageId)
                 {
-                    if (fSetImageId)
-                        mediumId = m->uuidImage;
-                    else
-                        mediumId.create();
+                    /* set the UUID if an API client wants to change it */
+                    mediumId = m->uuidImage;
+                }
+                else if (isImport)
+                {
+                    /* generate an UUID for an imported UUID-less medium */
+                    mediumId.create();
                 }
             }
 
@@ -5300,6 +5501,7 @@ HRESULT Medium::queryInfo(bool fSetImageId, bool fSetParentId)
                         && m->pParent->getState() != MediumState_Inaccessible
                         && m->pParent->getId() != parentId)
                     {
+                        /** @todo r=klaus this always refers to VirtualBox.xml as the medium registry, even for new VMs */
                         lastAccessError = Utf8StrFmt(
                                 tr("Parent UUID {%RTuuid} of the medium '%s' does not match UUID {%RTuuid} of its parent medium stored in the media registry ('%s')"),
                                 &parentId, location.c_str(),
@@ -5333,7 +5535,7 @@ HRESULT Medium::queryInfo(bool fSetImageId, bool fSetParentId)
 
     alock.enter();
 
-    if (isImport)
+    if (isImport || fSetImageId)
         unconst(m->id) = mediumId;
 
     if (success)
@@ -5652,8 +5854,10 @@ HRESULT Medium::setLocation(const Utf8Str &aLocation,
             }
         }
 
-        // we must always have full paths now
-        if (!RTPathStartsWithRoot(locationFull.c_str()))
+        // we must always have full paths now (if it refers to a file)
+        if (   (   m->formatObj.isNull()
+                || m->formatObj->getCapabilities() & MediumFormatCapabilities_File)
+            && !RTPathStartsWithRoot(locationFull.c_str()))
             return setError(VBOX_E_FILE_ERROR,
                             tr("The given path '%s' is not fully qualified"),
                             locationFull.c_str());
@@ -6172,8 +6376,8 @@ HRESULT Medium::taskCreateBaseHandler(Medium::CreateBaseTask &task)
         Utf8Str format(m->strFormat);
         Utf8Str location(m->strLocationFull);
         uint64_t capabilities = m->formatObj->getCapabilities();
-        ComAssertThrow(capabilities & (  VD_CAP_CREATE_FIXED
-                                       | VD_CAP_CREATE_DYNAMIC), E_FAIL);
+        ComAssertThrow(capabilities & (  MediumFormatCapabilities_CreateFixed
+                                       | MediumFormatCapabilities_CreateDynamic), E_FAIL);
         Assert(m->state == MediumState_Creating);
 
         PVBOXHDD hdd;
@@ -6186,7 +6390,7 @@ HRESULT Medium::taskCreateBaseHandler(Medium::CreateBaseTask &task)
         try
         {
             /* ensure the directory exists */
-            if (capabilities & VD_CAP_FILE)
+            if (capabilities & MediumFormatCapabilities_File)
             {
                 rc = VirtualBox::ensureFilePathExists(location);
                 if (FAILED(rc))
@@ -6303,7 +6507,7 @@ HRESULT Medium::taskCreateDiffHandler(Medium::CreateDiffTask &task)
         Utf8Str targetFormat(pTarget->m->strFormat);
         Utf8Str targetLocation(pTarget->m->strLocationFull);
         uint64_t capabilities = pTarget->m->formatObj->getCapabilities();
-        ComAssertThrow(capabilities & VD_CAP_CREATE_DYNAMIC, E_FAIL);
+        ComAssertThrow(capabilities & MediumFormatCapabilities_CreateDynamic, E_FAIL);
 
         Assert(pTarget->m->state == MediumState_Creating);
         Assert(m->state == MediumState_LockedRead);
@@ -6353,7 +6557,7 @@ HRESULT Medium::taskCreateDiffHandler(Medium::CreateDiffTask &task)
             }
 
             /* ensure the target directory exists */
-            if (capabilities & VD_CAP_FILE)
+            if (capabilities & MediumFormatCapabilities_File)
             {
                 HRESULT rc = VirtualBox::ensureFilePathExists(targetLocation);
                 if (FAILED(rc))
@@ -6856,7 +7060,7 @@ HRESULT Medium::taskCloneHandler(Medium::CloneTask &task)
             thisLock.release();
 
             /* ensure the target directory exists */
-            if (capabilities & VD_CAP_FILE)
+            if (capabilities & MediumFormatCapabilities_File)
             {
                 HRESULT rc = VirtualBox::ensureFilePathExists(targetLocation);
                 if (FAILED(rc))
@@ -6912,19 +7116,40 @@ HRESULT Medium::taskCloneHandler(Medium::CloneTask &task)
                 }
 
                 /** @todo r=klaus target isn't locked, race getting the state */
-                vrc = VDCopy(hdd,
-                             VD_LAST_IMAGE,
-                             targetHdd,
-                             targetFormat.c_str(),
-                             (fCreatingTarget) ? targetLocation.c_str() : (char *)NULL,
-                             false /* fMoveByRename */,
-                             0 /* cbSize */,
-                             task.mVariant,
-                             targetId.raw(),
-                             VD_OPEN_FLAGS_NORMAL,
-                             NULL /* pVDIfsOperation */,
-                             pTarget->m->vdImageIfaces,
-                             task.mVDOperationIfaces);
+                if (task.midxSrcImageSame == UINT32_MAX)
+                {
+                    vrc = VDCopy(hdd,
+                                 VD_LAST_IMAGE,
+                                 targetHdd,
+                                 targetFormat.c_str(),
+                                 (fCreatingTarget) ? targetLocation.c_str() : (char *)NULL,
+                                 false /* fMoveByRename */,
+                                 0 /* cbSize */,
+                                 task.mVariant,
+                                 targetId.raw(),
+                                 VD_OPEN_FLAGS_NORMAL,
+                                 NULL /* pVDIfsOperation */,
+                                 pTarget->m->vdImageIfaces,
+                                 task.mVDOperationIfaces);
+                }
+                else
+                {
+                    vrc = VDCopyEx(hdd,
+                                   VD_LAST_IMAGE,
+                                   targetHdd,
+                                   targetFormat.c_str(),
+                                   (fCreatingTarget) ? targetLocation.c_str() : (char *)NULL,
+                                   false /* fMoveByRename */,
+                                   0 /* cbSize */,
+                                   task.midxSrcImageSame,
+                                   task.midxDstImageSame,
+                                   task.mVariant,
+                                   targetId.raw(),
+                                   VD_OPEN_FLAGS_NORMAL,
+                                   NULL /* pVDIfsOperation */,
+                                   pTarget->m->vdImageIfaces,
+                                   task.mVDOperationIfaces);
+                }
                 if (RT_FAILURE(vrc))
                     throw setError(VBOX_E_FILE_ERROR,
                                    tr("Could not create the clone medium '%s'%s"),
@@ -7009,6 +7234,7 @@ HRESULT Medium::taskCloneHandler(Medium::CloneTask &task)
     }
 
     // now, at the end of this task (always asynchronous), save the settings
+    if (SUCCEEDED(mrc))
     {
         // save the settings
         GuidList llRegistriesThatNeedSaving;
@@ -7505,7 +7731,7 @@ HRESULT Medium::taskExportHandler(Medium::ExportTask &task)
             thisLock.release();
 
             /* ensure the target directory exists */
-            if (capabilities & VD_CAP_FILE)
+            if (capabilities & MediumFormatCapabilities_File)
             {
                 rc = VirtualBox::ensureFilePathExists(targetLocation);
                 if (FAILED(rc))
@@ -7630,7 +7856,7 @@ HRESULT Medium::taskImportHandler(Medium::ImportTask &task)
             thisLock.release();
 
             /* ensure the target directory exists */
-            if (capabilities & VD_CAP_FILE)
+            if (capabilities & MediumFormatCapabilities_File)
             {
                 HRESULT rc = VirtualBox::ensureFilePathExists(targetLocation);
                 if (FAILED(rc))

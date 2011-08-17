@@ -96,7 +96,7 @@ public:
     /* Import methods */
     STDMETHOD(Read)(IN_BSTR path, IProgress **aProgress);
     STDMETHOD(Interpret)(void);
-    STDMETHOD(ImportMachines)(IProgress **aProgress);
+    STDMETHOD(ImportMachines)(ComSafeArrayIn(ImportOptions_T, options), IProgress **aProgress);
     /* Export methods */
     STDMETHOD(CreateVFSExplorer)(IN_BSTR aURI, IVFSExplorer **aExplorer);
     STDMETHOD(Write)(IN_BSTR format, BOOL fManifest, IN_BSTR path, IProgress **aProgress);
@@ -149,7 +149,7 @@ private:
     HRESULT readFS(TaskOVF *pTask);
     HRESULT readFSOVF(TaskOVF *pTask);
     HRESULT readFSOVA(TaskOVF *pTask);
-    HRESULT readFSImpl(TaskOVF *pTask, PVDINTERFACEIO pCallbacks, PSHA1STORAGE pStorage);
+    HRESULT readFSImpl(TaskOVF *pTask, const RTCString &strFilename, PVDINTERFACEIO pCallbacks, PSHA1STORAGE pStorage);
     HRESULT readS3(TaskOVF *pTask);
 
     /*******************************************************************************

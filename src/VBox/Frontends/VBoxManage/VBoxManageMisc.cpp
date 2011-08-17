@@ -54,6 +54,8 @@
 
 #include "VBoxManage.h"
 
+#include <list>
+
 using namespace com;
 
 
@@ -149,28 +151,27 @@ int handleUnregisterVM(HandlerArg *a)
         return errorSyntax(USAGE_UNREGISTERVM, "VM name required");
 
     ComPtr<IMachine> machine;
-    CHECK_ERROR(a->virtualBox, FindMachine(Bstr(VMName).raw(),
-                                           machine.asOutParam()));
-    if (machine)
+    CHECK_ERROR_RET(a->virtualBox, FindMachine(Bstr(VMName).raw(),
+                                               machine.asOutParam()),
+                    RTEXITCODE_FAILURE);
+    SafeIfaceArray<IMedium> aMedia;
+    CHECK_ERROR_RET(machine, Unregister(fDelete ? (CleanupMode_T)CleanupMode_DetachAllReturnHardDisksOnly : (CleanupMode_T)CleanupMode_DetachAllReturnNone,
+                                        ComSafeArrayAsOutParam(aMedia)),
+                    RTEXITCODE_FAILURE);
+    if (fDelete)
     {
-        SafeIfaceArray<IMedium> aMedia;
-        CleanupMode_T cleanupMode = CleanupMode_DetachAllReturnNone;
-        if (fDelete)
-            cleanupMode = CleanupMode_DetachAllReturnHardDisksOnly;
-        CHECK_ERROR(machine, Unregister(cleanupMode,
-                                        ComSafeArrayAsOutParam(aMedia)));
-        if (SUCCEEDED(rc))
+        ComPtr<IProgress> pProgress;
+        CHECK_ERROR_RET(machine, Delete(ComSafeArrayAsInParam(aMedia), pProgress.asOutParam()),
+                        RTEXITCODE_FAILURE);
+        rc = showProgress(pProgress);
+        if (FAILED(rc))
         {
-            if (fDelete)
-            {
-                ComPtr<IProgress> pProgress;
-                CHECK_ERROR(machine, Delete(ComSafeArrayAsInParam(aMedia), pProgress.asOutParam()));
-                if (SUCCEEDED(rc))
-                    CHECK_ERROR(pProgress, WaitForCompletion(-1));
-            }
+            com::ProgressErrorInfo ErrInfo(pProgress);
+            com::GluePrintErrorInfo(ErrInfo);
+            return RTEXITCODE_FAILURE;
         }
     }
-    return SUCCEEDED(rc) ? 0 : 1;
+    return RTEXITCODE_SUCCESS;
 }
 
 int handleCreateVM(HandlerArg *a)
@@ -269,20 +270,74 @@ int handleCreateVM(HandlerArg *a)
 
 static const RTGETOPTDEF g_aCloneVMOptions[] =
 {
+    { "--snapshot",       's', RTGETOPT_REQ_STRING },
     { "--name",           'n', RTGETOPT_REQ_STRING },
+    { "--mode",           'm', RTGETOPT_REQ_STRING },
+    { "--options",        'o', RTGETOPT_REQ_STRING },
     { "--register",       'r', RTGETOPT_REQ_NOTHING },
     { "--basefolder",     'p', RTGETOPT_REQ_STRING },
     { "--uuid",           'u', RTGETOPT_REQ_STRING },
 };
 
+static int parseCloneMode(const char *psz, CloneMode_T *pMode)
+{
+    if (!RTStrICmp(psz, "machine"))
+        *pMode = CloneMode_MachineState;
+    else if (!RTStrICmp(psz, "machineandchildren"))
+        *pMode = CloneMode_MachineAndChildStates;
+    else if (!RTStrICmp(psz, "all"))
+        *pMode = CloneMode_AllStates;
+    else
+        return VERR_PARSE_ERROR;
+
+    return VINF_SUCCESS;
+}
+
+static int parseCloneOptions(const char *psz, com::SafeArray<CloneOptions_T> *options)
+{
+    int rc = VINF_SUCCESS;
+    while (psz && *psz && RT_SUCCESS(rc))
+    {
+        size_t len;
+        const char *pszComma = strchr(psz, ',');
+        if (pszComma)
+            len = pszComma - psz;
+        else
+            len = strlen(psz);
+        if (len > 0)
+        {
+            if (!RTStrNICmp(psz, "KeepAllMACs", len))
+                options->push_back(CloneOptions_KeepAllMACs);
+            else if (!RTStrNICmp(psz, "KeepNATMACs", len))
+                options->push_back(CloneOptions_KeepNATMACs);
+            else if (!RTStrNICmp(psz, "KeepDiskNames", len))
+                options->push_back(CloneOptions_KeepDiskNames);
+            else if (   !RTStrNICmp(psz, "Link", len)
+                     || !RTStrNICmp(psz, "Linked", len))
+                options->push_back(CloneOptions_Link);
+            else
+                rc = VERR_PARSE_ERROR;
+        }
+        if (pszComma)
+            psz += len + 1;
+        else
+            psz += len;
+    }
+
+    return rc;
+}
+
 int handleCloneVM(HandlerArg *a)
 {
-    HRESULT rc;
-    const char *pszSrcName       = NULL;
-    const char *pszTrgName       = NULL;
-    const char *pszTrgBaseFolder = NULL;
-    bool fRegister               = false;
-    RTUUID trgUuid;
+    HRESULT                        rc;
+    const char                    *pszSrcName       = NULL;
+    const char                    *pszSnapshotName  = NULL;
+    CloneMode_T                    mode             = CloneMode_MachineState;
+    com::SafeArray<CloneOptions_T> options;
+    const char                    *pszTrgName       = NULL;
+    const char                    *pszTrgBaseFolder = NULL;
+    bool                           fRegister        = false;
+    Bstr                           bstrUuid;
 
     int c;
     RTGETOPTUNION ValueUnion;
@@ -294,6 +349,20 @@ int handleCloneVM(HandlerArg *a)
     {
         switch (c)
         {
+            case 's':   // --snapshot
+                pszSnapshotName = ValueUnion.psz;
+                break;
+
+            case 'm':   // --mode
+                if (RT_FAILURE(parseCloneMode(ValueUnion.psz, &mode)))
+                    return errorArgument("Invalid clone mode '%s'\n", ValueUnion.psz);
+                break;
+
+            case 'o':   // --options
+                if (RT_FAILURE(parseCloneOptions(ValueUnion.psz, &options)))
+                    return errorArgument("Invalid clone options '%s'\n", ValueUnion.psz);
+                break;
+
             case 'n':   // --name
                 pszTrgName = ValueUnion.psz;
                 break;
@@ -303,8 +372,11 @@ int handleCloneVM(HandlerArg *a)
                 break;
 
             case 'u':   // --uuid
+                RTUUID trgUuid;
                 if (RT_FAILURE(RTUuidFromStr(&trgUuid, ValueUnion.psz)))
                     return errorArgument("Invalid UUID format %s\n", ValueUnion.psz);
+                else
+                    bstrUuid = Guid(trgUuid).toUtf16().raw();
                 break;
 
             case 'r':   // --register
@@ -323,18 +395,31 @@ int handleCloneVM(HandlerArg *a)
         }
     }
 
-    /* ~heck for required options */
+    /* Check for required options */
     if (!pszSrcName)
         return errorSyntax(USAGE_CLONEVM, "VM name required");
 
+    /* Get the machine object */
     ComPtr<IMachine> srcMachine;
     CHECK_ERROR_RET(a->virtualBox, FindMachine(Bstr(pszSrcName).raw(),
                                                srcMachine.asOutParam()),
                     RTEXITCODE_FAILURE);
 
+    /* If a snapshot name/uuid was given, get the particular machine of this
+     * snapshot. */
+    if (pszSnapshotName)
+    {
+        ComPtr<ISnapshot> srcSnapshot;
+        CHECK_ERROR_RET(srcMachine, FindSnapshot(Bstr(pszSnapshotName).raw(),
+                                                 srcSnapshot.asOutParam()),
+                        RTEXITCODE_FAILURE);
+        CHECK_ERROR_RET(srcSnapshot, COMGETTER(Machine)(srcMachine.asOutParam()),
+                        RTEXITCODE_FAILURE);
+    }
+
     /* Default name necessary? */
     if (!pszTrgName)
-        pszTrgName = RTStrAPrintf2("%s Copy", pszSrcName);
+        pszTrgName = RTStrAPrintf2("%s Clone", pszSrcName);
 
     Bstr bstrSettingsFile;
     CHECK_ERROR_RET(a->virtualBox,
@@ -347,13 +432,16 @@ int handleCloneVM(HandlerArg *a)
     CHECK_ERROR_RET(a->virtualBox, CreateMachine(bstrSettingsFile.raw(),
                                                  Bstr(pszTrgName).raw(),
                                                  NULL,
-                                                 Guid(trgUuid).toUtf16().raw(),
+                                                 bstrUuid.raw(),
                                                  FALSE,
                                                  trgMachine.asOutParam()),
                     RTEXITCODE_FAILURE);
+
+    /* Start the cloning */
     ComPtr<IProgress> progress;
     CHECK_ERROR_RET(srcMachine, CloneTo(trgMachine,
-                                        FALSE,
+                                        mode,
+                                        ComSafeArrayAsInParam(options),
                                         progress.asOutParam()),
                     RTEXITCODE_FAILURE);
     rc = showProgress(progress);
@@ -377,7 +465,7 @@ int handleCloneVM(HandlerArg *a)
 int handleStartVM(HandlerArg *a)
 {
     HRESULT rc;
-    const char *VMName = NULL;
+    std::list<const char *> VMs;
     Bstr sessionType = "gui";
 
     static const RTGETOPTDEF s_aStartVMOptions[] =
@@ -421,10 +509,7 @@ int handleStartVM(HandlerArg *a)
                 break;
 
             case VINF_GETOPT_NOT_OPTION:
-                if (!VMName)
-                    VMName = ValueUnion.psz;
-                else
-                    return errorSyntax(USAGE_STARTVM, "Invalid parameter '%s'", ValueUnion.psz);
+                VMs.push_back(ValueUnion.psz);
                 break;
 
             default:
@@ -445,54 +530,73 @@ int handleStartVM(HandlerArg *a)
     }
 
     /* check for required options */
-    if (!VMName)
-        return errorSyntax(USAGE_STARTVM, "VM name required");
+    if (VMs.empty())
+        return errorSyntax(USAGE_STARTVM, "at least one VM name or uuid required");
 
-    ComPtr<IMachine> machine;
-    CHECK_ERROR(a->virtualBox, FindMachine(Bstr(VMName).raw(),
-                                           machine.asOutParam()));
-    if (machine)
+    for (std::list<const char *>::const_iterator it = VMs.begin();
+         it != VMs.end();
+         ++it)
     {
-        Bstr env;
-#if defined(RT_OS_LINUX) || defined(RT_OS_SOLARIS)
-        /* make sure the VM process will start on the same display as VBoxManage */
-        Utf8Str str;
-        const char *pszDisplay = RTEnvGet("DISPLAY");
-        if (pszDisplay)
-            str = Utf8StrFmt("DISPLAY=%s\n", pszDisplay);
-        const char *pszXAuth = RTEnvGet("XAUTHORITY");
-        if (pszXAuth)
-            str.append(Utf8StrFmt("XAUTHORITY=%s\n", pszXAuth));
-        env = str;
-#endif
-        ComPtr<IProgress> progress;
-        CHECK_ERROR_RET(machine, LaunchVMProcess(a->session, sessionType.raw(),
-                                                 env.raw(), progress.asOutParam()), rc);
-        if (!progress.isNull())
+        HRESULT rc2 = rc;
+        const char *pszVM = *it;
+        ComPtr<IMachine> machine;
+        CHECK_ERROR(a->virtualBox, FindMachine(Bstr(pszVM).raw(),
+                                               machine.asOutParam()));
+        if (machine)
         {
-            RTPrintf("Waiting for the VM to power on...\n");
-            CHECK_ERROR_RET(progress, WaitForCompletion(-1), 1);
-
-            BOOL completed;
-            CHECK_ERROR_RET(progress, COMGETTER(Completed)(&completed), rc);
-            ASSERT(completed);
-
-            LONG iRc;
-            CHECK_ERROR_RET(progress, COMGETTER(ResultCode)(&iRc), rc);
-            if (FAILED(iRc))
+            Bstr env;
+#if defined(RT_OS_LINUX) || defined(RT_OS_SOLARIS)
+            /* make sure the VM process will start on the same display as VBoxManage */
+            Utf8Str str;
+            const char *pszDisplay = RTEnvGet("DISPLAY");
+            if (pszDisplay)
+                str = Utf8StrFmt("DISPLAY=%s\n", pszDisplay);
+            const char *pszXAuth = RTEnvGet("XAUTHORITY");
+            if (pszXAuth)
+                str.append(Utf8StrFmt("XAUTHORITY=%s\n", pszXAuth));
+            env = str;
+#endif
+            ComPtr<IProgress> progress;
+            CHECK_ERROR(machine, LaunchVMProcess(a->session, sessionType.raw(),
+                                                 env.raw(), progress.asOutParam()));
+            if (SUCCEEDED(rc) && !progress.isNull())
             {
-                ProgressErrorInfo info(progress);
-                com::GluePrintErrorInfo(info);
-            }
-            else
-            {
-                RTPrintf("VM has been successfully started.\n");
+                RTPrintf("Waiting for VM \"%s\" to power on...\n", pszVM);
+                CHECK_ERROR(progress, WaitForCompletion(-1));
+                if (SUCCEEDED(rc))
+                {
+                    BOOL completed = true;
+                    CHECK_ERROR(progress, COMGETTER(Completed)(&completed));
+                    if (SUCCEEDED(rc))
+                    {
+                        ASSERT(completed);
+
+                        LONG iRc;
+                        CHECK_ERROR(progress, COMGETTER(ResultCode)(&iRc));
+                        if (SUCCEEDED(rc))
+                        {
+                            if (FAILED(iRc))
+                            {
+                                ProgressErrorInfo info(progress);
+                                com::GluePrintErrorInfo(info);
+                            }
+                            else
+                            {
+                                RTPrintf("VM \"%s\" has been successfully started.\n", pszVM);
+                            }
+                        }
+                    }
+                }
             }
         }
-    }
 
-    /* it's important to always close sessions */
-    a->session->UnlockMachine();
+        /* it's important to always close sessions */
+        a->session->UnlockMachine();
+
+        /* make sure that we remember the failed state */
+        if (FAILED(rc2))
+            rc = rc2;
+    }
 
     return SUCCEEDED(rc) ? 0 : 1;
 }
@@ -538,6 +642,14 @@ int handleAdoptState(HandlerArg *a)
                                            machine.asOutParam()));
     if (machine)
     {
+        char szStateFileAbs[RTPATH_MAX] = "";
+        int vrc = RTPathAbs(a->argv[1], szStateFileAbs, sizeof(szStateFileAbs));
+        if (RT_FAILURE(vrc))
+        {
+            RTMsgError("Cannot convert filename \"%s\" to absolute path", a->argv[0]);
+            return 1;
+        }
+
         do
         {
             /* we have to open a session for this task */
@@ -546,7 +658,7 @@ int handleAdoptState(HandlerArg *a)
             {
                 ComPtr<IConsole> console;
                 CHECK_ERROR_BREAK(a->session, COMGETTER(Console)(console.asOutParam()));
-                CHECK_ERROR_BREAK(console, AdoptSavedState(Bstr(a->argv[1]).raw()));
+                CHECK_ERROR_BREAK(console, AdoptSavedState(Bstr(szStateFileAbs).raw()));
             } while (0);
             CHECK_ERROR_BREAK(a->session, UnlockMachine());
         } while (0);
@@ -940,7 +1052,7 @@ int handleExtPack(HandlerArg *a)
         {
             switch (ch)
             {
-                case 'f':
+                case 'r':
                     fReplace = true;
                     break;
 

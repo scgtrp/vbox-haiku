@@ -34,6 +34,9 @@ class RemoteUSBDevice;
 class SharedFolder;
 class VRDEServerInfo;
 class AudioSniffer;
+#ifdef VBOX_WITH_USB_VIDEO
+class UsbWebcamInterface;
+#endif
 class ConsoleVRDPServer;
 class VMMDev;
 class Progress;
@@ -124,6 +127,8 @@ public:
     STDMETHOD(COMGETTER(SharedFolders))(ComSafeArrayOut(ISharedFolder *, aSharedFolders));
     STDMETHOD(COMGETTER(EventSource)) (IEventSource ** aEventSource);
     STDMETHOD(COMGETTER(AttachedPciDevices))(ComSafeArrayOut(IPciDeviceAttachment *, aAttachments));
+    STDMETHOD(COMGETTER(UseHostClipboard))(BOOL *aUseHostClipboard);
+    STDMETHOD(COMSETTER(UseHostClipboard))(BOOL aUseHostClipboard);
 
     // IConsole methods
     STDMETHOD(PowerUp)(IProgress **aProgress);
@@ -150,6 +155,8 @@ public:
     STDMETHOD(TakeSnapshot)(IN_BSTR aName, IN_BSTR aDescription,
                             IProgress **aProgress);
     STDMETHOD(DeleteSnapshot)(IN_BSTR aId, IProgress **aProgress);
+    STDMETHOD(DeleteSnapshotAndAllChildren)(IN_BSTR aId, IProgress **aProgress);
+    STDMETHOD(DeleteSnapshotRange)(IN_BSTR aStartId, IN_BSTR aEndId, IProgress **aProgress);
     STDMETHOD(RestoreSnapshot)(ISnapshot *aSnapshot, IProgress **aProgress);
     STDMETHOD(Teleport)(IN_BSTR aHostname, ULONG aPort, IN_BSTR aPassword, ULONG aMaxDowntime, IProgress **aProgress);
 
@@ -168,6 +175,8 @@ public:
     AudioSniffer *getAudioSniffer() const { return mAudioSniffer; }
 
     const ComPtr<IMachine> &machine() const { return mMachine; }
+
+    bool useHostClipboard() { return mfUseHostClipboard; }
 
     /** Method is called only from ConsoleVRDPServer */
     IVRDEServer *getVRDEServer() const { return mVRDEServer; }
@@ -447,6 +456,7 @@ public:
 
     typedef std::map<Utf8Str, ComObjPtr<SharedFolder> > SharedFolderMap;
     typedef std::map<Utf8Str, SharedFolderData> SharedFolderDataMap;
+    typedef std::map<Utf8Str, ComPtr<IMediumAttachment> > MediumAttachmentMap;
 
 private:
 
@@ -542,6 +552,12 @@ private:
                                                    IMediumAttachment *aMediumAtt,
                                                    bool fForce);
 
+    HRESULT attachRawPciDevices(PVM pVM, BusAssignmentManager *BusMgr, PCFGMNODE pDevices);
+    void attachStatusDriver(PCFGMNODE pCtlInst, PPDMLED *papLeds,
+                            uint64_t uFirst, uint64_t uLast,
+                            Console::MediumAttachmentMap *pmapMediumAttachments,
+                            const char *pcszDevice, unsigned uInstance);
+
     int configNetwork(const char *pszDevice, unsigned uInstance, unsigned uLun,
                       INetworkAdapter *aNetworkAdapter, PCFGMNODE pCfg,
                       PCFGMNODE pLunL0, PCFGMNODE pInst,
@@ -615,6 +631,7 @@ private:
 
     static DECLCALLBACK(void *) drvStatus_QueryInterface(PPDMIBASE pInterface, const char *pszIID);
     static DECLCALLBACK(void)   drvStatus_UnitChanged(PPDMILEDCONNECTORS pInterface, unsigned iLUN);
+    static DECLCALLBACK(int)    drvStatus_MediumEjected(PPDMIMEDIANOTIFY pInterface, unsigned iLUN);
     static DECLCALLBACK(void)   drvStatus_Destruct(PPDMDRVINS pDrvIns);
     static DECLCALLBACK(int)    drvStatus_Construct(PPDMDRVINS pDrvIns, PCFGMNODE pCfg, uint32_t fFlags);
 
@@ -718,12 +735,15 @@ private:
 
     VMMDev * m_pVMMDev;
     AudioSniffer * const mAudioSniffer;
+#ifdef VBOX_WITH_USB_VIDEO
+    UsbWebcamInterface * const mUsbWebcamInterface;
+#endif
     BusAssignmentManager* mBusMgr;
 
     enum
     {
         iLedFloppy  = 0,
-        cLedFloppy  = 1,
+        cLedFloppy  = 2,
         iLedIde     = iLedFloppy + cLedFloppy,
         cLedIde     = 4,
         iLedSata    = iLedIde + cLedIde,
@@ -739,6 +759,9 @@ private:
     PPDMLED      mapNetworkLeds[SchemaDefs::NetworkAdapterCount];
     PPDMLED      mapSharedFolderLed;
     PPDMLED      mapUSBLed[2];
+
+    MediumAttachmentMap mapMediumAttachments;
+
 /* Note: FreeBSD needs this whether netflt is used or not. */
 #if ((defined(RT_OS_LINUX) && !defined(VBOX_WITH_NETFLT)) || defined(RT_OS_FREEBSD))
     Utf8Str      maTAPDeviceName[8];
@@ -746,6 +769,8 @@ private:
 #endif
 
     bool mVMStateChangeCallbackDisabled;
+
+    bool mfUseHostClipboard;
 
     /** Local machine state value. */
     MachineState_T mMachineState;

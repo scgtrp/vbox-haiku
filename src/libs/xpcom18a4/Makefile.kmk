@@ -239,7 +239,7 @@ NSPRPUB-PRIV-HEADERS_SOURCES = \
 	nsprpub/pr/include/private/pprthred.h \
 	nsprpub/pr/include/private/prpriv.h
 
-STRING-HEADERS_INST = $(INST_SDK)bindings/xpcom/include/string
+STRING-HEADERS_INST = $(INST_SDK)bindings/xpcom/include/string/
 STRING-HEADERS_IFFLAGS = -m 644
 STRING-HEADERS_SOURCES = \
 	xpcom/string/public/nsAString.h \
@@ -273,7 +273,7 @@ STRING-HEADERS_SOURCES = \
 	xpcom/string/public/string-template-def-unichar.h \
 	xpcom/string/public/string-template-undef.h
 
-XPCOM-HEADERS_INST = $(INST_SDK)bindings/xpcom/include/xpcom
+XPCOM-HEADERS_INST = $(INST_SDK)bindings/xpcom/include/xpcom/
 XPCOM-HEADERS_IFFLAGS = -m 644
 XPCOM-HEADERS_SOURCES = \
 	xpcom/base/nsAgg.h \
@@ -1311,7 +1311,7 @@ VBoxXPCOMBase-xpt-inst_CLEAN = \
 # combined typelib library
 $(PATH_TARGET)/VBox-xpcom-xpt-files/VBoxXPCOMBase.xpt: $$(VBOX_XPTFILES) | $$(xpt_link_1_TARGET) $(PATH_TARGET)/VBox-xpcom-xpt-files/
 	$(call MSG_LINK,XPCOM_TYPELIB,$@)
-	$(QUIET)$(MKDIR) -p -- $(PATH_BIN)/components
+	$(QUIET)$(MKDIR) -p -- $(PATH_STAGE_BIN)/components
 	$(QUIET)$(xpt_link_1_TARGET) $@ $^
 
 
@@ -1353,9 +1353,9 @@ $(PATH_TARGET)/VBox-xpcom-idl-timestamp: $$(addprefix $$(VBOX_PATH_SDK)/bindings
 # HACK ALERT! Make sure main doesn't start using xpidl before we're done
 # with the idl files here. The trick here is that we're using TARGET_xpidl,
 # i.e. the copy residing in obj/, while VBOX_XPIDL is pointing to
-# INSTARGET_xpidl which is the one in bin/.
+# xpidl_1_STAGE_TARGET which is the one in bin/.
 #
-$(VBOX_XPIDL): $(PATH_TARGET)/VBox-xpcom-idl-timestamp
+$(VBOX_XPIDL): | $(PATH_TARGET)/VBox-xpcom-idl-timestamp
 
 
 #

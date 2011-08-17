@@ -21,7 +21,7 @@
 *   Header Files                                                               *
 *******************************************************************************/
 #include <VBox/types.h>
-#include <VBox/x86.h>
+#include <iprt/x86.h>
 
 
 #define VBOX_WITH_HGCM                  /* grumble */
@@ -55,6 +55,8 @@
 #undef LOG_GROUP
 #include "../PC/DevAPIC.cpp"
 #undef LOG_GROUP
+#include "../PC/DevIoApic.cpp"
+#undef LOG_GROUP
 #include "../PC/DevHPET.cpp"
 #undef LOG_GROUP
 #include "../PC/DevLPC.cpp"
@@ -65,7 +67,7 @@
 #ifdef VBOX_WITH_USB
 # undef LOG_GROUP
 # include "../USB/DevOHCI.cpp"
-# ifdef VBOX_WITH_EHCI
+# ifdef VBOX_WITH_EHCI_IMPL
 #  include "../USB/DevEHCI.cpp"
 # endif
 #endif
@@ -88,7 +90,7 @@
 # include "../Storage/DevLsiLogicSCSI.cpp"
 #endif
 
-#ifdef VBOX_WITH_PCI_PASSTHROUGH
+#ifdef VBOX_WITH_PCI_PASSTHROUGH_IMPL
 # undef LOG_GROUP
 # include "../Bus/DevPciRaw.cpp"
 #endif
@@ -282,7 +284,7 @@ int main()
 #endif
     //CHECK_MEMBER_ALIGNMENT(E1KSTATE, csTx, 8);
 #ifdef VBOX_WITH_USB
-# ifdef VBOX_WITH_EHCI
+# ifdef VBOX_WITH_EHCI_IMPL
     CHECK_MEMBER_ALIGNMENT(EHCI, RootHub, 8);
 #  ifdef VBOX_WITH_STATISTICS
     CHECK_MEMBER_ALIGNMENT(EHCI, StatCanceledIsocUrbs, 8);
@@ -323,8 +325,8 @@ int main()
     CHECK_MEMBER_ALIGNMENT(VPCISTATE, led, 4);
     CHECK_MEMBER_ALIGNMENT(VPCISTATE, Queues, 8);
 #endif
-#ifdef VBOX_WITH_PCI_PASSTHROUGH
-    //CHECK_MEMBER_ALIGNMENT(PCIRAWSENDREQ, u.aGetRegionInfo.u64RegionSize, 8);
+#ifdef VBOX_WITH_PCI_PASSTHROUGH_IMPL
+    CHECK_MEMBER_ALIGNMENT(PCIRAWSENDREQ, u.aGetRegionInfo.u64RegionSize, 8);
 #endif
 
 #ifdef VBOX_WITH_RAW_MODE

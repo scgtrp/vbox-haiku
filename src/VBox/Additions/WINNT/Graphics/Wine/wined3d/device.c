@@ -1547,6 +1547,7 @@ static void destroy_dummy_textures(IWineD3DDeviceImpl *device, const struct wine
 
 static HRESULT WINAPI IWineD3DDeviceImpl_AcquireFocusWindow(IWineD3DDevice *iface, HWND window)
 {
+#ifndef VBOX_WITH_WDDM
     IWineD3DDeviceImpl *device = (IWineD3DDeviceImpl *)iface;
 
     if (!wined3d_register_window(window, device))
@@ -1557,16 +1558,22 @@ static HRESULT WINAPI IWineD3DDeviceImpl_AcquireFocusWindow(IWineD3DDevice *ifac
 
     device->focus_window = window;
     SetForegroundWindow(window);
-
+#else
+    ERR("should not be here");
+#endif
     return WINED3D_OK;
 }
 
 static void WINAPI IWineD3DDeviceImpl_ReleaseFocusWindow(IWineD3DDevice *iface)
 {
+#ifndef VBOX_WITH_WDDM
     IWineD3DDeviceImpl *device = (IWineD3DDeviceImpl *)iface;
 
     if (device->focus_window) wined3d_unregister_window(device->focus_window);
     device->focus_window = NULL;
+#else
+    ERR("should not be here");
+#endif
 }
 
 static HRESULT WINAPI IWineD3DDeviceImpl_Init3D(IWineD3DDevice *iface,
@@ -6267,11 +6274,20 @@ static HRESULT updateSurfaceDesc(IWineD3DSurfaceImpl *surface, const WINED3DPRES
 
     if (surface->texture_name)
     {
-        struct wined3d_context *context = context_acquire(device, NULL, CTXUSAGE_RESOURCELOAD);
-        ENTER_GL();
-        glDeleteTextures(1, &surface->texture_name);
-        LEAVE_GL();
-        context_release(context);
+#ifdef VBOX_WITH_WDDM
+# ifdef DEBUG_misha
+        /* shared case needs testing! */
+        Assert(!VBOXSHRC_IS_SHARED(surface));
+# endif
+        if (!VBOXSHRC_IS_SHARED_OPENED(surface))
+#endif
+        {
+            struct wined3d_context *context = context_acquire(device, NULL, CTXUSAGE_RESOURCELOAD);
+            ENTER_GL();
+            glDeleteTextures(1, &surface->texture_name);
+            LEAVE_GL();
+            context_release(context);
+        }
         surface->texture_name = 0;
         surface->Flags &= ~SFLAG_CLIENT;
     }
@@ -7252,6 +7268,7 @@ void get_drawable_size_backbuffer(struct wined3d_context *context, UINT *width, 
     *height = swapchain->presentParms.BackBufferHeight;
 }
 
+#ifndef VBOX_WITH_WDDM
 LRESULT device_process_message(IWineD3DDeviceImpl *device, HWND window,
         UINT message, WPARAM wparam, LPARAM lparam, WNDPROC proc)
 {
@@ -7273,3 +7290,4 @@ LRESULT device_process_message(IWineD3DDeviceImpl *device, HWND window,
 
     return CallWindowProcW(proc, window, message, wparam, lparam);
 }
+#endif

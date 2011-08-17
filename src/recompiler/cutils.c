@@ -25,7 +25,7 @@
 #include "host-utils.h"
 
 #ifdef VBOX
-#include "osdep.h"
+# include "osdep.h"
 
 
 static inline int toupper(int ch) {
@@ -611,6 +611,23 @@ int qemu_fls(int i)
 }
 
 #ifndef VBOX
+
+/*
+ * Make sure data goes on disk, but if possible do not bother to
+ * write out the inode just for timestamp updates.
+ *
+ * Unfortunately even in 2009 many operating systems do not support
+ * fdatasync and have to fall back to fsync.
+ */
+int qemu_fdatasync(int fd)
+{
+#ifdef CONFIG_FDATASYNC
+    return fdatasync(fd);
+#else
+    return fsync(fd);
+#endif
+}
+
 /* io vectors */
 
 void qemu_iovec_init(QEMUIOVector *qiov, int alloc_hint)
@@ -645,6 +662,31 @@ void qemu_iovec_add(QEMUIOVector *qiov, void *base, size_t len)
     qiov->iov[qiov->niov].iov_len = len;
     qiov->size += len;
     ++qiov->niov;
+}
+
+/*
+ * Copies iovecs from src to the end dst until src is completely copied or the
+ * total size of the copied iovec reaches size. The size of the last copied
+ * iovec is changed in order to fit the specified total size if it isn't a
+ * perfect fit already.
+ */
+void qemu_iovec_concat(QEMUIOVector *dst, QEMUIOVector *src, size_t size)
+{
+    int i;
+    size_t done;
+
+    assert(dst->nalloc != -1);
+
+    done = 0;
+    for (i = 0; (i < src->niov) && (done != size); i++) {
+        if (done + src->iov[i].iov_len > size) {
+            qemu_iovec_add(dst, src->iov[i].iov_base, size - done);
+            break;
+        } else {
+            qemu_iovec_add(dst, src->iov[i].iov_base, src->iov[i].iov_len);
+        }
+        done += src->iov[i].iov_len;
+    }
 }
 
 void qemu_iovec_destroy(QEMUIOVector *qiov)
@@ -689,4 +731,22 @@ void qemu_iovec_from_buffer(QEMUIOVector *qiov, const void *buf, size_t count)
     }
 }
 
+#ifndef _WIN32
+/* Sets a specific flag */
+int fcntl_setfl(int fd, int flag)
+{
+    int flags;
+
+    flags = fcntl(fd, F_GETFL);
+    if (flags == -1)
+        return -errno;
+
+    if (fcntl(fd, F_SETFL, flags | flag) == -1)
+        return -errno;
+
+    return 0;
+}
+#endif
+
 #endif /* !VBOX */
+

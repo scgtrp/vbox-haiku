@@ -182,6 +182,8 @@
 # define xfds_win_bit     FD_OOB_BIT
 # define closefds_win     FD_CLOSE
 # define closefds_win_bit FD_CLOSE_BIT
+# define connectfds_win     FD_CONNECT
+# define connectfds_win_bit FD_CONNECT_BIT
 
 # define closefds_win FD_CLOSE
 # define closefds_win_bit FD_CLOSE_BIT
@@ -199,6 +201,12 @@
 
 #define TCP_ENGAGE_EVENT2(so, fdset1, fdset2) \
     DO_ENGAGE_EVENT2((so), fdset1, fdset2, tcp)
+
+#ifdef RT_OS_WINDOWS
+# define WIN_TCP_ENGAGE_EVENT2(so, fdset, fdset2) TCP_ENGAGE_EVENT2(so, fdset1, fdset2)
+#else
+# define WIN_TCP_ENGAGE_EVENT2(so, fdset, fdset2) do{}while(0)
+#endif
 
 #define UDP_ENGAGE_EVENT(so, fdset) \
     DO_ENGAGE_EVENT1((so), fdset, udp)
@@ -334,7 +342,7 @@ static int get_dns_addr_domain(PNATState pData, bool fVerbose,
                 return VERR_NO_MEMORY;
             }
 
-            Log(("NAT: adding %R[IP4] to DNS server list\n", &InAddr));
+            Log(("NAT: adding %RTnaipv4 to DNS server list\n", InAddr));
             if ((InAddr.s_addr & RT_H2N_U32_C(IN_CLASSA_NET)) == RT_N2H_U32_C(INADDR_LOOPBACK & IN_CLASSA_NET))
                 pDns->de_addr.s_addr = RT_H2N_U32(RT_N2H_U32(pData->special_addr.s_addr) | CTL_ALIAS);
             else
@@ -579,13 +587,14 @@ int slirp_init(PNATState *ppData, uint32_t u32NetAddr, uint32_t u32Netmask,
 {
     int fNATfailed = 0;
     int rc;
-    PNATState pData = RTMemAllocZ(sizeof(NATState));
-    *ppData = pData;
-    if (!pData)
-        return VERR_NO_MEMORY;
+    PNATState pData;
     if (u32Netmask & 0x1f)
         /* CTL is x.x.x.15, bootp passes up to 16 IPs (15..31) */
         return VERR_INVALID_PARAMETER;
+    pData = RTMemAllocZ(RT_ALIGN_Z(sizeof(NATState), sizeof(uint64_t)));
+    *ppData = pData;
+    if (!pData)
+        return VERR_NO_MEMORY;
     pData->fPassDomain = !fUseHostResolver ? fPassDomain : false;
     pData->fUseHostResolver = fUseHostResolver;
     pData->pvUser = pvUser;
@@ -596,6 +605,7 @@ int slirp_init(PNATState *ppData, uint32_t u32NetAddr, uint32_t u32Netmask,
     pData->socket_snd = 64 * _1K;
     tcp_sndspace = 64 * _1K;
     tcp_rcvspace = 64 * _1K;
+    pData->soMaxConn = 1; /* historical value */
 
 #ifdef RT_OS_WINDOWS
     {
@@ -614,10 +624,12 @@ int slirp_init(PNATState *ppData, uint32_t u32NetAddr, uint32_t u32Netmask,
     link_up = 1;
 
     rc = bootp_dhcp_init(pData);
-    if (rc != 0)
+    if (RT_FAILURE(rc))
     {
-        Log(("NAT: DHCP server initialization was failed\n"));
-        return VINF_NAT_DNS;
+        Log(("NAT: DHCP server initialization failed\n"));
+        RTMemFree(pData);
+        *ppData = NULL;
+        return rc;
     }
     debug_init();
     if_init(pData);
@@ -932,7 +944,11 @@ void slirp_select_fill(PNATState pData, int *pnfds, struct pollfd *polls)
         {
             Log2(("connecting %R[natsock] engaged\n",so));
             STAM_COUNTER_INC(&pData->StatTCPHot);
+#ifdef RT_OS_WINDOWS
+            WIN_TCP_ENGAGE_EVENT2(so, writefds, connectfds);
+#else
             TCP_ENGAGE_EVENT1(so, writefds);
+#endif
         }
 
         /*
@@ -950,7 +966,12 @@ void slirp_select_fill(PNATState pData, int *pnfds, struct pollfd *polls)
          * receive more, and we have room for it XXX /2 ?
          */
         /* @todo: vvl - check which predicat here will be more useful here in rerm of new sbufs. */
-        if (CONN_CANFRCV(so) && (SBUF_LEN(&so->so_snd) < (SBUF_SIZE(&so->so_snd)/2)))
+        if (   CONN_CANFRCV(so)
+            && (SBUF_LEN(&so->so_snd) < (SBUF_SIZE(&so->so_snd)/2))
+#ifdef RT_OS_WINDOWS
+            && !(so->so_state & SS_ISFCONNECTING)
+#endif
+        )
         {
             STAM_COUNTER_INC(&pData->StatTCPHot);
             TCP_ENGAGE_EVENT2(so, readfds, xfds);
@@ -1020,6 +1041,63 @@ done:
 #endif /* !RT_OS_WINDOWS */
 
     STAM_PROFILE_STOP(&pData->StatFill, a);
+}
+
+
+static bool slirpConnectOrWrite(PNATState pData, struct socket *so, bool fConnectOnly)
+{
+    int ret;
+    LogFlowFunc(("ENTER: so:%R[natsock], fConnectOnly:%RTbool\n", so, fConnectOnly));
+    /*
+     * Check for non-blocking, still-connecting sockets
+     */
+    if (so->so_state & SS_ISFCONNECTING)
+    {
+        Log2(("connecting %R[natsock] catched\n", so));
+        /* Connected */
+        so->so_state &= ~SS_ISFCONNECTING;
+
+        /*
+         * This should be probably guarded by PROBE_CONN too. Anyway,
+         * we disable it on OS/2 because the below send call returns
+         * EFAULT which causes the opened TCP socket to close right
+         * after it has been opened and connected.
+         */
+#ifndef RT_OS_OS2
+    ret = send(so->s, (const char *)&ret, 0, 0);
+    if (ret < 0)
+    {
+        /* XXXXX Must fix, zero bytes is a NOP */
+        if (   errno == EAGAIN
+            || errno == EWOULDBLOCK
+            || errno == EINPROGRESS
+            || errno == ENOTCONN)
+        {
+            LogFlowFunc(("LEAVE: true"));
+            return false;
+        }
+
+        /* else failed */
+        so->so_state = SS_NOFDREF;
+    }
+    /* else so->so_state &= ~SS_ISFCONNECTING; */
+#endif
+
+        /*
+         * Continue tcp_input
+         */
+        TCP_INPUT(pData, (struct mbuf *)NULL, sizeof(struct ip), so);
+        /* continue; */
+    }
+    else if (!fConnectOnly)
+        SOWRITE(ret, pData, so);
+    /*
+     * XXX If we wrote something (a lot), there could be the need
+     * for a window update. In the worst case, the remote will send
+     * a window probe to get things going again.
+     */
+    LogFlowFunc(("LEAVE: true"));
+    return true;
 }
 
 #if defined(RT_OS_WINDOWS)
@@ -1147,6 +1225,12 @@ void slirp_select_poll(PNATState pData, struct pollfd *polls, int ndfs)
              */
             &&  !CHECK_FD_SET(so, NetworkEvents, closefds)
 #endif
+#ifdef RT_OS_WINDOWS
+            /**
+             * In some cases FD_CLOSE comes with FD_OOB, that confuse tcp processing.
+             */
+            && !WIN_CHECK_FD_SET(so, NetworkEvents, closefds)
+#endif
         )
         {
             sorecvoob(pData, so);
@@ -1158,6 +1242,16 @@ void slirp_select_poll(PNATState pData, struct pollfd *polls, int ndfs)
         else if (   CHECK_FD_SET(so, NetworkEvents, readfds)
                  || WIN_CHECK_FD_SET(so, NetworkEvents, acceptds))
         {
+
+#ifdef RT_OS_WINDOWS
+            if (WIN_CHECK_FD_SET(so, NetworkEvents, connectfds))
+            {
+                /* Finish connection first */
+                /* should we ignore return value? */
+                bool fRet = slirpConnectOrWrite(pData, so, true);
+                LogFunc(("fRet:%RTbool\n", fRet));
+            }
+#endif
             /*
              * Check for incoming connections
              */
@@ -1209,53 +1303,14 @@ void slirp_select_poll(PNATState pData, struct pollfd *polls, int ndfs)
         /*
          * Check sockets for writing
          */
-        if (CHECK_FD_SET(so, NetworkEvents, writefds))
-        {
-            /*
-             * Check for non-blocking, still-connecting sockets
-             */
-            if (so->so_state & SS_ISFCONNECTING)
-            {
-                Log2(("connecting %R[natsock] catched\n", so));
-                /* Connected */
-                so->so_state &= ~SS_ISFCONNECTING;
-
-                /*
-                 * This should be probably guarded by PROBE_CONN too. Anyway,
-                 * we disable it on OS/2 because the below send call returns
-                 * EFAULT which causes the opened TCP socket to close right
-                 * after it has been opened and connected.
-                 */
-#ifndef RT_OS_OS2
-                ret = send(so->s, (const char *)&ret, 0, 0);
-                if (ret < 0)
-                {
-                    /* XXXXX Must fix, zero bytes is a NOP */
-                    if (   errno == EAGAIN
-                        || errno == EWOULDBLOCK
-                        || errno == EINPROGRESS
-                        || errno == ENOTCONN)
-                        CONTINUE(tcp);
-
-                    /* else failed */
-                    so->so_state = SS_NOFDREF;
-                }
-                /* else so->so_state &= ~SS_ISFCONNECTING; */
+        if (    CHECK_FD_SET(so, NetworkEvents, writefds)
+#ifdef RT_OS_WINDOWS
+            ||  WIN_CHECK_FD_SET(so, NetworkEvents, connectfds)
 #endif
-
-                /*
-                 * Continue tcp_input
-                 */
-                TCP_INPUT(pData, (struct mbuf *)NULL, sizeof(struct ip), so);
-                /* continue; */
-            }
-            else
-                SOWRITE(ret, pData, so);
-            /*
-             * XXX If we wrote something (a lot), there could be the need
-             * for a window update. In the worst case, the remote will send
-             * a window probe to get things going again.
-             */
+            )
+        {
+            if(!slirpConnectOrWrite(pData, so, false))
+                CONTINUE(tcp);
         }
 
         /*
@@ -1469,7 +1524,7 @@ static void arp_input(PNATState pData, struct mbuf *m)
                 static bool fGratuitousArpReported;
                 if (!fGratuitousArpReported)
                 {
-                    LogRel(("NAT: Gratuitous ARP [IP:%R[IP4], ether:%RTmac]\n",
+                    LogRel(("NAT: Gratuitous ARP [IP:%RTnaipv4, ether:%RTmac]\n",
                             ah->ar_sip, ah->ar_sha));
                     fGratuitousArpReported = true;
                 }
@@ -1560,6 +1615,8 @@ void if_encap(PNATState pData, uint16_t eth_proto, struct mbuf *m, int flags)
     uint8_t *mbuf = NULL;
     size_t mlen = 0;
     STAM_PROFILE_START(&pData->StatIF_encap, a);
+    LogFlowFunc(("ENTER: pData:%p, eth_proto:%RX16, m:%p, flags:%d\n",
+                pData, eth_proto, m, flags));
 
     M_ASSERTPKTHDR(m);
     m->m_data -= ETH_HLEN;
@@ -1600,12 +1657,14 @@ void if_encap(PNATState pData, uint16_t eth_proto, struct mbuf *m, int flags)
     }
     mbuf = mtod(m, uint8_t *);
     eh->h_proto = RT_H2N_U16(eth_proto);
+    LogFunc(("eh(dst:%RTmac, src:%RTmac)\n", eh->h_dest, eh->h_source));
     if (flags & ETH_ENCAP_URG)
         slirp_urg_output(pData->pvUser, m, mbuf, mlen);
     else
         slirp_output(pData->pvUser, m, mbuf, mlen);
 done:
     STAM_PROFILE_STOP(&pData->StatIF_encap, a);
+    LogFlowFuncLeave();
 }
 
 /**
@@ -1685,8 +1744,8 @@ static void activate_port_forwarding(PNATState pData, const uint8_t *h_source)
             rule->guest_addr.s_addr = guest_addr;
 #endif
 
-        LogRel(("NAT: set redirect %s host port %d => guest port %d @ %R[IP4]\n",
-               rule->proto == IPPROTO_UDP ? "UDP" : "TCP", rule->host_port, rule->guest_port, &guest_addr));
+        LogRel(("NAT: set redirect %s host port %d => guest port %d @ %RTnaipv4\n",
+               rule->proto == IPPROTO_UDP ? "UDP" : "TCP", rule->host_port, rule->guest_port, guest_addr));
 
         if (rule->proto == IPPROTO_UDP)
             so = udp_listen(pData, rule->bind_ip.s_addr, RT_H2N_U16(rule->host_port), guest_addr,
@@ -1799,8 +1858,8 @@ int slirp_remove_redirect(PNATState pData, int is_udp, struct in_addr host_addr,
             && rule->guest_addr.s_addr == guest_addr.s_addr
             && rule->activated)
         {
-            LogRel(("NAT: remove redirect %s host port %d => guest port %d @ %R[IP4]\n",
-                   rule->proto == IPPROTO_UDP ? "UDP" : "TCP", rule->host_port, rule->guest_port, &guest_addr));
+            LogRel(("NAT: remove redirect %s host port %d => guest port %d @ %RTnaipv4\n",
+                   rule->proto == IPPROTO_UDP ? "UDP" : "TCP", rule->host_port, rule->guest_port, guest_addr));
 
             LibAliasUninit(rule->so->so_la);
             if (is_udp)
@@ -1934,6 +1993,18 @@ void slirp_set_dhcp_dns_proxy(PNATState pData, bool fDNSProxy)
             LogRel(("NAT: (" #name ":%d)\n", (val)));                               \
     } while (0)
 
+void slirp_set_somaxconn(PNATState pData, int iSoMaxConn)
+{
+    LogFlowFunc(("iSoMaxConn:d\n", iSoMaxConn));
+    if (iSoMaxConn > SOMAXCONN)
+    {
+        LogRel(("New value of somaxconn(%d) bigger than SOMAXCONN(%d)\n", iSoMaxConn, SOMAXCONN));
+        pData->soMaxConn = SOMAXCONN;
+    }
+    pData->soMaxConn = iSoMaxConn > 0 ? iSoMaxConn : pData->soMaxConn;
+    LogRel(("New value of somaxconn: %d\n", pData->soMaxConn));
+    LogFlowFuncLeave();
+}
 /* don't allow user set less 8kB and more than 1M values */
 #define _8K_1M_CHECK_ARG(name, val) CHECK_ARG(name, (val), 8, 1024)
 void slirp_set_rcvbuf(PNATState pData, int kilobytes)
@@ -2013,11 +2084,13 @@ void slirp_arp_who_has(PNATState pData, uint32_t dst)
     struct mbuf *m;
     struct ethhdr *ehdr;
     struct arphdr *ahdr;
+    LogFlowFunc(("ENTER: %RTnaipv4\n", dst));
 
     m = m_getcl(pData, M_NOWAIT, MT_HEADER, M_PKTHDR);
     if (m == NULL)
     {
         Log(("NAT: Can't alloc mbuf for ARP request\n"));
+        LogFlowFuncLeave();
         return;
     }
     ehdr = mtod(m, struct ethhdr *);
@@ -2039,6 +2112,7 @@ void slirp_arp_who_has(PNATState pData, uint32_t dst)
     m->m_data += ETH_HLEN;
     m->m_len -= ETH_HLEN;
     if_encap(pData, ETH_P_ARP, m, ETH_ENCAP_URG);
+    LogFlowFuncLeave();
 }
 
 /* updates the arp cache
@@ -2094,8 +2168,8 @@ int slirp_arp_cache_update_or_add(PNATState pData, uint32_t dst, const uint8_t *
         static bool fBroadcastEtherAddReported;
         if (!fBroadcastEtherAddReported)
         {
-            LogRel(("NAT: Attempt to add pair [%RTmac:%R[IP4]] in ARP cache was ignored\n",
-                    mac, &dst));
+            LogRel(("NAT: Attempt to add pair [%RTmac:%RTnaipv4] in ARP cache was ignored\n",
+                    mac, dst));
             fBroadcastEtherAddReported = true;
         }
         return 1;
@@ -2144,15 +2218,15 @@ void slirp_info(PNATState pData, PCDBGFINFOHLP pHlp, const char *pszArgs)
     pHlp->pfnPrintf(pHlp, "NAT ARP cache:\n");
     LIST_FOREACH(ac, &pData->arp_cache, list)
     {
-        pHlp->pfnPrintf(pHlp, " %R[IP4] %RTmac\n", &ac->ip, &ac->ether);
+        pHlp->pfnPrintf(pHlp, " %RTnaipv4 %RTmac\n", ac->ip, &ac->ether);
     }
 
     pHlp->pfnPrintf(pHlp, "NAT rules:\n");
     LIST_FOREACH(rule, &pData->port_forward_rule_head, list)
     {
-        pHlp->pfnPrintf(pHlp, " %s %d => %R[IP4]:%d %c\n",
+        pHlp->pfnPrintf(pHlp, " %s %d => %RTnaipv4:%d %c\n",
                         rule->proto == IPPROTO_UDP ? "UDP" : "TCP",
-                        rule->host_port, &rule->guest_addr.s_addr, rule->guest_port,
+                        rule->host_port, rule->guest_addr.s_addr, rule->guest_port,
                         rule->activated ? ' ' : '*');
     }
 }

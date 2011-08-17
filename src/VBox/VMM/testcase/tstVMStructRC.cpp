@@ -80,7 +80,7 @@ AssertCompileSize(RTHCPHYS, 8);
 #include "REMInternal.h"
 #include <VBox/vmm/vm.h>
 #include <VBox/param.h>
-#include <VBox/x86.h>
+#include <iprt/x86.h>
 #include <iprt/assert.h>
 
 /* we don't use iprt here because we're pretending to be in GC! */
@@ -233,7 +233,7 @@ int main()
     GEN_CHECK_OFF(IOMTREES, IOPortTreeRC);
     GEN_CHECK_OFF(IOMTREES, MMIOTree);
     GEN_CHECK_OFF(IOMTREES, IOPortStatTree);
-    GEN_CHECK_OFF(IOMTREES, MMIOStatTree);
+    GEN_CHECK_OFF(IOMTREES, MmioStatTree);
 
     GEN_CHECK_SIZE(MM);
     GEN_CHECK_OFF(MM, offVM);
@@ -289,7 +289,8 @@ int main()
     GEN_CHECK_OFF(MMLOOKUPHYPER, pszDesc);
 
     GEN_CHECK_SIZE(PDM);
-    GEN_CHECK_OFF(PDM, offVM);
+    GEN_CHECK_OFF(PDM, CritSect);
+    GEN_CHECK_OFF(PDM, NopCritSect);
     GEN_CHECK_OFF(PDM, pDevs);
     GEN_CHECK_OFF(PDM, pDevInstances);
     GEN_CHECK_OFF(PDM, pUsbDevs);
@@ -363,7 +364,6 @@ int main()
     GEN_CHECK_OFF(PDMCPU, apQueuedCritSectsLeaves);
     GEN_CHECK_OFF(PDM, pQueueFlushR0);
     GEN_CHECK_OFF(PDM, pQueueFlushRC);
-    GEN_CHECK_OFF(PDM, CritSect);
     GEN_CHECK_OFF(PDM, StatQueuedCritSectLeaves);
 
     GEN_CHECK_SIZE(PDMDEVINSINT);

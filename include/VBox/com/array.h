@@ -167,6 +167,7 @@
 #include "VBox/com/defs.h"
 #include "VBox/com/ptr.h"
 #include "VBox/com/assert.h"
+#include "iprt/cpp/list.h"
 
 #ifdef VBOX_WITH_XPCOM
 
@@ -1006,6 +1007,21 @@ public:
 #endif /* !VBOX_WITH_XPCOM */
 
         return *this;
+    }
+
+    /**
+     * Returns a copy of this SafeArray as RTCList<T>.
+     */
+    RTCList<T> toList()
+    {
+        RTCList<T> list(size());
+        for (size_t i = 0; i < size(); ++i)
+#ifdef VBOX_WITH_XPCOM
+            list.append(m.arr[i]);
+#else
+            list.append(m.raw[i]);
+#endif
+        return list;
     }
 
     inline void initFrom(const com::SafeArray<T> & aRef);

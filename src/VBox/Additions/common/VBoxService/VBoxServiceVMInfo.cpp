@@ -194,19 +194,19 @@ static void vboxserviceVMInfoWriteFixedProperties(void)
      * Retrieve version information about Guest Additions and installed files (components).
      */
     char *pszAddVer;
-    char *pszAddVerEx;
+    char *pszAddVerExt;
     char *pszAddRev;
-    rc = VbglR3GetAdditionsVersion(&pszAddVer, &pszAddVerEx, &pszAddRev);
+    rc = VbglR3GetAdditionsVersion(&pszAddVer, &pszAddVerExt, &pszAddRev);
     VBoxServiceWritePropF(g_uVMInfoGuestPropSvcClientID, "/VirtualBox/GuestAdd/Version",
                           "%s", RT_FAILURE(rc) ? "" : pszAddVer);
-    VBoxServiceWritePropF(g_uVMInfoGuestPropSvcClientID, "/VirtualBox/GuestAdd/VersionEx",
-                          "%s", RT_FAILURE(rc) ? "" : pszAddVerEx);
+    VBoxServiceWritePropF(g_uVMInfoGuestPropSvcClientID, "/VirtualBox/GuestAdd/VersionExt",
+                          "%s", RT_FAILURE(rc) ? "" : pszAddVerExt);
     VBoxServiceWritePropF(g_uVMInfoGuestPropSvcClientID, "/VirtualBox/GuestAdd/Revision",
                           "%s", RT_FAILURE(rc) ? "" : pszAddRev);
     if (RT_SUCCESS(rc))
     {
         RTStrFree(pszAddVer);
-        RTStrFree(pszAddVerEx);
+        RTStrFree(pszAddVerExt);
         RTStrFree(pszAddRev);
     }
 
@@ -270,8 +270,8 @@ static int vboxserviceVMInfoWriteUsers(void)
     while (   (ut_user = getutxent())
            && RT_SUCCESS(rc))
     {
-        VBoxServiceVerbose(4, "VMInfo: Found logged in user \"%s\"\n", ut_user->ut_user);
-
+        VBoxServiceVerbose(4, "VMInfo/Users: Found logged in user \"%s\"\n",
+                           ut_user->ut_user);
         if (cUsersInList > cListSize)
         {
             cListSize += 32;
@@ -327,10 +327,26 @@ static int vboxserviceVMInfoWriteUsers(void)
     endutxent(); /* Close utmpx file. */
 #endif
     Assert(RT_FAILURE(rc) || cUsersInList == 0 || (pszUserList && *pszUserList));
-    if (RT_FAILURE(rc))
-        cUsersInList = 0;
 
-    VBoxServiceVerbose(4, "VMInfo: cUsersInList: %u, pszUserList: %s, rc=%Rrc\n",
+    /* If the user enumeration above failed, reset the user count to 0 except
+     * we didn't have enough memory anymore. In that case we want to preserve
+     * the previous user count in order to not confuse third party tools which
+     * rely on that count. */
+    if (RT_FAILURE(rc))
+    {
+        if (rc == VERR_NO_MEMORY)
+        {
+            static int s_iVMInfoBitchedOOM = 0;
+            if (s_iVMInfoBitchedOOM++ < 3)
+                VBoxServiceVerbose(0, "VMInfo/Users: Warning: Not enough memory available to enumerate users! Keeping old value (%u)\n",
+                                   g_cVMInfoLoggedInUsers);
+            cUsersInList = g_cVMInfoLoggedInUsers;
+        }
+        else
+            cUsersInList = 0;
+    }
+
+    VBoxServiceVerbose(4, "VMInfo/Users: cUsersInList: %u, pszUserList: %s, rc=%Rrc\n",
                        cUsersInList, pszUserList ? pszUserList : "<NULL>", rc);
 
     if (pszUserList && cUsersInList > 0)
@@ -380,6 +396,15 @@ static int vboxserviceVMInfoWriteNetwork(void)
             dwRet = GetAdaptersInfo(pAdpInfo, &cbAdpInfo);
         }
     }
+    else if (dwRet == ERROR_NO_DATA)
+    {
+        VBoxServiceVerbose(3, "VMInfo/Network: No network adapters available\n");
+
+        /* If no network adapters available / present in the
+         * system we pretend success to not bail out too early. */
+        dwRet = ERROR_SUCCESS;
+    }
+
     if (dwRet != ERROR_SUCCESS)
     {
         if (pAdpInfo)
@@ -682,7 +707,7 @@ static int vboxserviceVMInfoWriteNetwork(void)
         RTStrPrintf(szPropPath, sizeof(szPropPath), "/VirtualBox/GuestInfo/Net/%u/Status", cIfacesReport);
         VBoxServicePropCacheUpdate(&g_VMInfoPropCache, szPropPath, fIfUp ? "Up" : "Down");
         cIfacesReport++;
-    }
+    } /* For all interfaces */
 
     close(sd);
     if (RT_FAILURE(rc))
@@ -776,7 +801,7 @@ DECLCALLBACK(int) VBoxServiceVMInfoWorker(bool volatile *pfShutdown)
         VbglR3GetSessionId(&idNewSession);
         if (idNewSession != g_idVMInfoSession)
         {
-            VBoxServiceVerbose(3, "VMInfo: The VM session ID changed, flushing all properties.\n");
+            VBoxServiceVerbose(3, "VMInfo: The VM session ID changed, flushing all properties\n");
             vboxserviceVMInfoWriteFixedProperties();
             VBoxServicePropCacheFlush(&g_VMInfoPropCache);
             g_idVMInfoSession = idNewSession;

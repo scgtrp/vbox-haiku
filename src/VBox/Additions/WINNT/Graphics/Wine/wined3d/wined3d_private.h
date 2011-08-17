@@ -50,6 +50,10 @@
 #endif
 #include "wine/debug.h"
 #include "wine/unicode.h"
+#ifdef VBOX_WITH_WDDM
+# include "vboxext.h"
+#endif
+
 
 #ifndef VBOX_WINE_WITHOUT_LIBWINE
 #include "objbase.h"
@@ -710,6 +714,10 @@ enum fogmode {
 
 struct wined3d_context;
 
+#define WINED3D_PSARGS_PROJECTED          (1<<3)
+#define WINED3D_PSARGS_TEXTRANSFORM_SHIFT 4
+#define WINED3D_PSARGS_TEXTRANSFORM_MASK  0xF
+
 /* Stateblock dependent parameters which have to be hardcoded
  * into the shader code
  */
@@ -718,8 +726,9 @@ struct ps_compile_args {
     enum vertexprocessing_mode  vp_mode;
     enum fogmode                fog;
     /* Projected textures(ps 1.0-1.3) */
+    WORD                        tex_transform;
     /* Texture types(2D, Cube, 3D) in ps 1.x */
-    BOOL                        srgb_correction;
+    WORD                        srgb_correction;
     WORD                        np2_fixup;
     /* Bitmap for NP2 texcoord fixups (16 samplers max currently).
        D3D9 has a limit of 16 samplers and the fixup is superfluous
@@ -1128,8 +1137,10 @@ struct wined3d_context
     HGLRC restore_ctx;
     HDC restore_dc;
     HGLRC                   glCtx;
+#ifndef VBOX_WITH_WDDM
     HWND                    win_handle;
     HDC                     hdc;
+#endif
     int pixel_format;
     GLint                   aux_buffers;
 
@@ -1627,8 +1638,10 @@ typedef struct IWineD3DImpl
 } IWineD3DImpl;
 
 HRESULT wined3d_init(IWineD3DImpl *wined3d, UINT version, IUnknown *parent) DECLSPEC_HIDDEN;
+#ifndef VBOX_WITH_WDDM
 BOOL wined3d_register_window(HWND window, struct IWineD3DDeviceImpl *device) DECLSPEC_HIDDEN;
 void wined3d_unregister_window(HWND window) DECLSPEC_HIDDEN;
+#endif
 
 /*****************************************************************************
  * IWineD3DDevice implementation structure
@@ -1703,7 +1716,9 @@ struct IWineD3DDeviceImpl
     /* Internal use fields  */
     WINED3DDEVICE_CREATION_PARAMETERS createParms;
     WINED3DDEVTYPE                  devType;
+#ifndef VBOX_WITH_WDDM
     HWND focus_window;
+#endif
 
     IWineD3DSwapChain     **swapchains;
     UINT                    NumberOfSwapChains;
@@ -1778,8 +1793,10 @@ HRESULT device_init(IWineD3DDeviceImpl *device, IWineD3DImpl *wined3d,
         UINT adapter_idx, WINED3DDEVTYPE device_type, HWND focus_window, DWORD flags,
         IUnknown *parent, IWineD3DDeviceParent *device_parent) DECLSPEC_HIDDEN;
 void device_preload_textures(IWineD3DDeviceImpl *device) DECLSPEC_HIDDEN;
+#ifndef VBOX_WITH_WDDM
 LRESULT device_process_message(IWineD3DDeviceImpl *device, HWND window,
         UINT message, WPARAM wparam, LPARAM lparam, WNDPROC proc) DECLSPEC_HIDDEN;
+#endif
 void device_resource_add(IWineD3DDeviceImpl *This, IWineD3DResource *resource) DECLSPEC_HIDDEN;
 void device_resource_released(IWineD3DDeviceImpl *This, IWineD3DResource *resource) DECLSPEC_HIDDEN;
 void device_stream_info_from_declaration(IWineD3DDeviceImpl *This,
@@ -1835,7 +1852,8 @@ typedef struct IWineD3DResourceClass
     BYTE                   *heapMemory; /* Pointer to the HeapAlloced block of memory */
 #ifdef VBOX_WITH_WDDM
     DWORD                   sharerc_flags; /* shared resource flags */
-    DWORD                   sharerc_handle;
+    DWORD                   sharerc_handle; /* shared resource handle */
+    DWORD                   sharerc_locks; /* lock count */
 #endif
     struct list             privateData;
     struct list             resource_list_entry;

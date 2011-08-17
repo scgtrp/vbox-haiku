@@ -69,6 +69,7 @@ typedef struct _VBOXWDDM_POINTER_INFO
 
 typedef struct _VBOXWDDM_GLOBAL_POINTER_INFO
 {
+    uint32_t iLastReportedScreen;
     uint32_t cVisible;
 } VBOXWDDM_GLOBAL_POINTER_INFO, *PVBOXWDDM_GLOBAL_POINTER_INFO;
 
@@ -115,6 +116,7 @@ typedef struct VBOXWDDM_ALLOCATION
     LIST_ENTRY SwapchainEntry;
     struct VBOXWDDM_SWAPCHAIN *pSwapchain;
     VBOXWDDM_ALLOC_TYPE enmType;
+    volatile uint32_t cRefs;
 //    VBOXWDDM_ALLOCUSAGE_TYPE enmCurrentUsage;
     D3DDDI_RESOURCEFLAGS fRcFlags;
     UINT SegmentId;
@@ -122,6 +124,7 @@ typedef struct VBOXWDDM_ALLOCATION
 #ifdef VBOX_WITH_VIDEOHWACCEL
     VBOXVHWA_SURFHANDLE hHostHandle;
 #endif
+    BOOLEAN fDeleted;
     BOOLEAN bVisible;
     BOOLEAN bAssigned;
     VBOXWDDM_SURFACE_DESC SurfDesc;
@@ -140,7 +143,9 @@ typedef struct VBOXWDDM_ALLOCATION
 typedef struct VBOXWDDM_RESOURCE
 {
     uint32_t fFlags;
+    volatile uint32_t cRefs;
     VBOXWDDM_RC_DESC RcDesc;
+    BOOLEAN fDeleted;
     uint32_t cAllocations;
     VBOXWDDM_ALLOCATION aAllocations[1];
 } VBOXWDDM_RESOURCE, *PVBOXWDDM_RESOURCE;
@@ -189,14 +194,11 @@ typedef struct VBOXWDDM_SWAPCHAIN
 
 typedef struct VBOXWDDM_CONTEXT
 {
-//    LIST_ENTRY ListEntry;
     struct VBOXWDDM_DEVICE * pDevice;
     HANDLE hContext;
     VBOXWDDM_CONTEXT_TYPE enmType;
     UINT  NodeOrdinal;
     UINT  EngineAffinity;
-//    UINT uLastCompletedCmdFenceId;
-    FAST_MUTEX SwapchainMutex;
     VBOXWDDM_HTABLE Swapchains;
     VBOXVIDEOCM_CTX CmContext;
     VBOXVIDEOCM_ALLOC_CONTEXT AllocContext;
@@ -258,8 +260,8 @@ typedef struct VBOXWDDM_VIDEOMODES_INFO
 {
     int32_t iPreferredMode;
     uint32_t cModes;
-    uint32_t cPrevModes;
     VIDEO_MODE_INFORMATION aModes[VBOXWDDM_MAX_VIDEOMODES];
+    int32_t iPreferredResolution;
     uint32_t cResolutions;
     D3DKMDT_2DREGION aResolutions[VBOXWDDM_MAX_VIDEOMODES];
 } VBOXWDDM_VIDEOMODES_INFO, *PVBOXWDDM_VIDEOMODES_INFO;

@@ -43,14 +43,23 @@ register struct CPUX86State *env asm(AREG0);
 #include "qemu-common.h"
 #include "qemu-log.h"
 
+#undef EAX
 #define EAX (env->regs[R_EAX])
+#undef ECX
 #define ECX (env->regs[R_ECX])
+#undef EDX
 #define EDX (env->regs[R_EDX])
+#undef EBX
 #define EBX (env->regs[R_EBX])
+#undef ESP
 #define ESP (env->regs[R_ESP])
+#undef EBP
 #define EBP (env->regs[R_EBP])
+#undef ESI
 #define ESI (env->regs[R_ESI])
+#undef EDI
 #define EDI (env->regs[R_EDI])
+#undef EIP
 #define EIP (env->eip)
 #define DF  (env->df)
 
@@ -74,6 +83,7 @@ void do_interrupt_user(int intno, int is_int, int error_code,
                        target_ulong next_eip);
 void QEMU_NORETURN raise_exception_err(int exception_index, int error_code);
 void QEMU_NORETURN raise_exception(int exception_index);
+void QEMU_NORETURN raise_exception_env(int exception_index, CPUState *nenv);
 void do_smm_enter(void);
 
 /* n must be a constant to be efficient */
@@ -115,30 +125,6 @@ static inline void svm_check_intercept(uint32_t type)
 #define floatx_round_to_int floatx80_round_to_int
 #define floatx_compare floatx80_compare
 #define floatx_compare_quiet floatx80_compare_quiet
-#ifdef VBOX
-#undef sin
-#undef cos
-#undef sqrt
-#undef pow
-#undef log
-#undef tan
-#undef atan2
-#undef floor
-#undef ceil
-#undef ldexp
-#endif /* !VBOX */
-#if !defined(VBOX) || !defined(_MSC_VER)
-#define sin sinl
-#define cos cosl
-#define sqrt sqrtl
-#define pow powl
-#define log logl
-#define tan tanl
-#define atan2 atan2l
-#define floor floorl
-#define ceil ceill
-#define ldexp ldexpl
-#endif
 #else
 #define floatx_to_int32 float64_to_int32
 #define floatx_to_int64 float64_to_int64
@@ -158,16 +144,29 @@ static inline void svm_check_intercept(uint32_t type)
 #endif
 
 #ifdef VBOX
-extern CPU86_LDouble sin(CPU86_LDouble x);
-extern CPU86_LDouble cos(CPU86_LDouble x);
-extern CPU86_LDouble sqrt(CPU86_LDouble x);
-extern CPU86_LDouble pow(CPU86_LDouble, CPU86_LDouble);
-extern CPU86_LDouble log(CPU86_LDouble x);
-extern CPU86_LDouble tan(CPU86_LDouble x);
-extern CPU86_LDouble atan2(CPU86_LDouble, CPU86_LDouble);
-extern CPU86_LDouble floor(CPU86_LDouble x);
-extern CPU86_LDouble ceil(CPU86_LDouble x);
-#endif /* VBOX */
+# ifdef IPRT_NO_CRT
+#  undef  sin  
+#  undef  cos  
+#  undef  sqrt 
+#  undef  pow  
+#  undef  log  
+#  undef  tan  
+#  undef  atan2
+#  undef  floor
+#  undef  ceil 
+#  undef  ldexp
+#  define sin   sinl  
+#  define cos   cosl  
+#  define sqrt  sqrtl 
+#  define pow   powl  
+#  define log   logl  
+#  define tan   tanl  
+#  define atan2 atan2l
+#  define floor floorl
+#  define ceil  ceill 
+#  define ldexp ldexpl
+# endif
+#endif
 
 #define RC_MASK         0xc00
 #define RC_NEAR		0x000
@@ -201,7 +200,7 @@ typedef union {
 /* NOTE: arm is horrible as double 32 bit words are stored in big endian ! */
 typedef union {
     double d;
-#if !defined(WORDS_BIGENDIAN) && !defined(__arm__)
+#if !defined(HOST_WORDS_BIGENDIAN) && !defined(__arm__)
     struct {
         uint32_t lower;
         int32_t upper;
@@ -327,62 +326,6 @@ static inline void load_eflags(int eflags, int update_mask)
         (eflags & update_mask) | 0x2;
 }
 
-static inline void env_to_regs(void)
-{
-#ifdef reg_EAX
-    EAX = env->regs[R_EAX];
-#endif
-#ifdef reg_ECX
-    ECX = env->regs[R_ECX];
-#endif
-#ifdef reg_EDX
-    EDX = env->regs[R_EDX];
-#endif
-#ifdef reg_EBX
-    EBX = env->regs[R_EBX];
-#endif
-#ifdef reg_ESP
-    ESP = env->regs[R_ESP];
-#endif
-#ifdef reg_EBP
-    EBP = env->regs[R_EBP];
-#endif
-#ifdef reg_ESI
-    ESI = env->regs[R_ESI];
-#endif
-#ifdef reg_EDI
-    EDI = env->regs[R_EDI];
-#endif
-}
-
-static inline void regs_to_env(void)
-{
-#ifdef reg_EAX
-    env->regs[R_EAX] = EAX;
-#endif
-#ifdef reg_ECX
-    env->regs[R_ECX] = ECX;
-#endif
-#ifdef reg_EDX
-    env->regs[R_EDX] = EDX;
-#endif
-#ifdef reg_EBX
-    env->regs[R_EBX] = EBX;
-#endif
-#ifdef reg_ESP
-    env->regs[R_ESP] = ESP;
-#endif
-#ifdef reg_EBP
-    env->regs[R_EBP] = EBP;
-#endif
-#ifdef reg_ESI
-    env->regs[R_ESI] = ESI;
-#endif
-#ifdef reg_EDI
-    env->regs[R_EDI] = EDI;
-#endif
-}
-
 static inline int cpu_has_work(CPUState *env)
 {
     int work;
@@ -419,3 +362,9 @@ static inline void cpu_load_efer(CPUState *env, uint64_t val)
     if (env->efer & MSR_EFER_SVME)
         env->hflags |= HF_SVME_MASK;
 }
+
+static inline void cpu_pc_from_tb(CPUState *env, TranslationBlock *tb)
+{
+    env->eip = tb->pc - tb->cs_base;
+}
+

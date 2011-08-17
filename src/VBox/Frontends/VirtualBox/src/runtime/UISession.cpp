@@ -6,7 +6,7 @@
  */
 
 /*
- * Copyright (C) 2011 Oracle Corporation
+ * Copyright (C) 2006-2011 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -25,11 +25,11 @@
 /* Local includes */
 #include "UISession.h"
 #include "UIMachine.h"
-#include "UIActionsPool.h"
+#include "UIActionPoolRuntime.h"
 #include "UIMachineLogic.h"
 #include "UIMachineWindow.h"
 #include "UIMachineMenuBar.h"
-#include "VBoxProblemReporter.h"
+#include "UIMessageCenter.h"
 #include "UIFirstRunWzd.h"
 #include "UIConsoleEventHandler.h"
 #ifdef VBOX_WITH_VIDEOHWACCEL
@@ -136,6 +136,9 @@ UISession::UISession(UIMachine *pMachine, CSession &sessionReference)
             Qt::QueuedConnection);
 #endif /* Q_WS_MAC */
 
+    connect(gConsoleEvents, SIGNAL(sigCPUExecutionCapChange()),
+            this, SIGNAL(sigCPUExecutionCapChange()));
+
     /* Prepare main menu: */
     prepareMenuPool();
 
@@ -199,6 +202,20 @@ void UISession::powerUp()
     CMachine machine = session().GetMachine();
     CConsole console = session().GetConsole();
 
+    /* Apply debug settings from the command line. */
+    CMachineDebugger debugger = console.GetDebugger();
+    if (debugger.isOk())
+    {
+        if (vboxGlobal().isPatmDisabled())
+            debugger.SetPATMEnabled(false);
+        if (vboxGlobal().isCsamDisabled())
+            debugger.SetCSAMEnabled(false);
+        if (vboxGlobal().isSupervisorCodeExecedRecompiled())
+            debugger.SetRecompileSupervisor(true);
+        if (vboxGlobal().isUserCodeExecedRecompiled())
+            debugger.SetRecompileUser(true);
+    }
+
     /* Power UP machine: */
     CProgress progress = vboxGlobal().isStartPausedEnabled() || vboxGlobal().isDebuggerAutoShowEnabled(machine) ?
                          console.PowerUpPaused() : console.PowerUp();
@@ -207,7 +224,7 @@ void UISession::powerUp()
     if (!console.isOk())
     {
         if (vboxGlobal().showStartVMErrors())
-            vboxProblem().cannotStartMachine(console);
+            msgCenter().cannotStartMachine(console);
         QTimer::singleShot(0, this, SLOT(sltCloseVirtualSession()));
         return;
     }
@@ -218,15 +235,15 @@ void UISession::powerUp()
 
     /* Show "Starting/Restoring" progress dialog: */
     if (isSaved())
-        vboxProblem().showModalProgressDialog(progress, machine.GetName(), ":/progress_state_restore_90px.png", mainMachineWindow(), true, 0);
+        msgCenter().showModalProgressDialog(progress, machine.GetName(), ":/progress_state_restore_90px.png", mainMachineWindow(), true, 0);
     else
-        vboxProblem().showModalProgressDialog(progress, machine.GetName(), ":/progress_start_90px.png", mainMachineWindow(), true);
+        msgCenter().showModalProgressDialog(progress, machine.GetName(), ":/progress_start_90px.png", mainMachineWindow(), true);
 
     /* Check for a progress failure: */
     if (progress.GetResultCode() != 0)
     {
         if (vboxGlobal().showStartVMErrors())
-            vboxProblem().cannotStartMachine(progress);
+            msgCenter().cannotStartMachine(progress);
         QTimer::singleShot(0, this, SLOT(sltCloseVirtualSession()));
         return;
     }
@@ -258,9 +275,9 @@ void UISession::powerUp()
         setPause(true);
 
         if (fIs64BitsGuest)
-            fShouldWeClose = vboxProblem().warnAboutVirtNotEnabled64BitsGuest(fVTxAMDVSupported);
+            fShouldWeClose = msgCenter().warnAboutVirtNotEnabled64BitsGuest(fVTxAMDVSupported);
         else
-            fShouldWeClose = vboxProblem().warnAboutVirtNotEnabledGuestRequired(fVTxAMDVSupported);
+            fShouldWeClose = msgCenter().warnAboutVirtNotEnabledGuestRequired(fVTxAMDVSupported);
 
         if (fShouldWeClose)
         {
@@ -273,21 +290,21 @@ void UISession::powerUp()
                 if (uimachine()->machineLogic())
                     uimachine()->machineLogic()->setPreventAutoClose(true);
                 /* Show the power down progress dialog */
-                vboxProblem().showModalProgressDialog(progress, machine.GetName(), ":/progress_poweroff_90px.png", mainMachineWindow(), true);
+                msgCenter().showModalProgressDialog(progress, machine.GetName(), ":/progress_poweroff_90px.png", mainMachineWindow(), true);
                 if (progress.GetResultCode() != 0)
-                    vboxProblem().cannotStopMachine(progress);
+                    msgCenter().cannotStopMachine(progress);
                 /* Allow further auto-closing: */
                 if (uimachine()->machineLogic())
                     uimachine()->machineLogic()->setPreventAutoClose(false);
             }
             else
-                vboxProblem().cannotStopMachine(console);
+                msgCenter().cannotStopMachine(console);
             /* Now signal the destruction of the rest. */
             QTimer::singleShot(0, this, SLOT(sltCloseVirtualSession()));
             return;
         }
-        else
-            setPause(false);
+
+        setPause(false);
     }
 
 #ifdef VBOX_WITH_VIDEOHWACCEL
@@ -305,11 +322,6 @@ void UISession::powerUp()
     emit sigMachineStarted();
 }
 
-UIActionsPool* UISession::actionsPool() const
-{
-    return m_pMachine->actionsPool();
-}
-
 QWidget* UISession::mainMachineWindow() const
 {
     return uimachine()->machineLogic()->mainMachineWindow()->machineWindow();
@@ -323,7 +335,7 @@ UIMachineLogic* UISession::machineLogic() const
 QMenu* UISession::newMenu(UIMainMenuType fOptions /* = UIMainMenuType_ALL */)
 {
     /* Create new menu: */
-    QMenu *pMenu = m_pMenuPool->createMenu(actionsPool(), fOptions);
+    QMenu *pMenu = m_pMenuPool->createMenu(fOptions);
 
     /* Re-init menu pool for the case menu were recreated: */
     reinitMenuPool();
@@ -335,7 +347,7 @@ QMenu* UISession::newMenu(UIMainMenuType fOptions /* = UIMainMenuType_ALL */)
 QMenuBar* UISession::newMenuBar(UIMainMenuType fOptions /* = UIMainMenuType_ALL */)
 {
     /* Create new menubar: */
-    QMenuBar *pMenuBar = m_pMenuPool->createMenuBar(actionsPool(), fOptions);
+    QMenuBar *pMenuBar = m_pMenuPool->createMenuBar(fOptions);
 
     /* Re-init menu pool for the case menu were recreated: */
     reinitMenuPool();
@@ -362,9 +374,9 @@ bool UISession::setPause(bool fOn)
     if (!ok)
     {
         if (fOn)
-            vboxProblem().cannotPauseMachine(console);
+            msgCenter().cannotPauseMachine(console);
         else
-            vboxProblem().cannotResumeMachine(console);
+            msgCenter().cannotResumeMachine(console);
     }
 
     return ok;
@@ -393,7 +405,7 @@ void UISession::sltInstallGuestAdditionsFrom(const QString &strSource)
     bool fResult = guest.isOk();
     if (fResult)
     {
-        vboxProblem().showModalProgressDialog(progressInstall, tr("Install"), ":/progress_install_guest_additions_90px.png",
+        msgCenter().showModalProgressDialog(progressInstall, tr("Install"), ":/progress_install_guest_additions_90px.png",
                                               mainMachineWindow(), true, 500 /* 500ms delay. */);
         if (progressInstall.GetCanceled())
             return;
@@ -407,7 +419,7 @@ void UISession::sltInstallGuestAdditionsFrom(const QString &strSource)
             if (   !SUCCEEDED_WARNING(rc)
                 && rc != VBOX_E_NOT_SUPPORTED)
             {
-                vboxProblem().cannotUpdateGuestAdditions(progressInstall, mainMachineWindow());
+                msgCenter().cannotUpdateGuestAdditions(progressInstall, mainMachineWindow());
 
                 /* Log the error message in the release log. */
                 QString strErr = progressInstall.GetErrorInfo().GetText();
@@ -425,7 +437,7 @@ void UISession::sltInstallGuestAdditionsFrom(const QString &strSource)
         CMedium image = vbox.FindMedium(strSource, KDeviceType_DVD);
         if (image.isNull())
         {
-            image = vbox.OpenMedium(strSource, KDeviceType_DVD, KAccessMode_ReadWrite);
+            image = vbox.OpenMedium(strSource, KDeviceType_DVD, KAccessMode_ReadWrite, false /* fForceNewUuid */);
             if (vbox.isOk())
                 strUuid = image.GetId();
         }
@@ -434,7 +446,7 @@ void UISession::sltInstallGuestAdditionsFrom(const QString &strSource)
 
         if (!vbox.isOk())
         {
-            vboxProblem().cannotOpenMedium(0, vbox, VBoxDefs::MediumType_DVD, strSource);
+            msgCenter().cannotOpenMedium(0, vbox, VBoxDefs::MediumType_DVD, strSource);
             return;
         }
 
@@ -478,17 +490,17 @@ void UISession::sltInstallGuestAdditionsFrom(const QString &strSource)
             if (!machine.isOk())
             {
                 /* Ask for force mounting: */
-                if (vboxProblem().cannotRemountMedium(0, machine, vboxMedium, true /* mount? */, true /* retry? */) == QIMessageBox::Ok)
+                if (msgCenter().cannotRemountMedium(0, machine, vboxMedium, true /* mount? */, true /* retry? */) == QIMessageBox::Ok)
                 {
                     /* Force mount medium to the predefined port/device: */
                     machine.MountMedium(strCntName, iCntPort, iCntDevice, vboxMedium.medium(), true /* force */);
                     if (!machine.isOk())
-                        vboxProblem().cannotRemountMedium(0, machine, vboxMedium, true /* mount? */, false /* retry? */);
+                        msgCenter().cannotRemountMedium(0, machine, vboxMedium, true /* mount? */, false /* retry? */);
                 }
             }
         }
         else
-            vboxProblem().cannotMountGuestAdditions(machine.GetName());
+            msgCenter().cannotMountGuestAdditions(machine.GetName());
     }
 }
 
@@ -507,9 +519,9 @@ void UISession::sltCloseVirtualSession()
     }
 
     /* Recursively close all the opened warnings... */
-    if (vboxProblem().isAnyWarningShown())
+    if (msgCenter().isAnyWarningShown())
     {
-        vboxProblem().closeAllWarnings();
+        msgCenter().closeAllWarnings();
         QTimer::singleShot(0, this, SLOT(sltCloseVirtualSession()));
         return;
     }
@@ -613,10 +625,10 @@ void UISession::sltVRDEChange()
     const CVRDEServer &server = machine.GetVRDEServer();
     bool fIsVRDEServerAvailable = !server.isNull();
     /* Show/Hide VRDE action depending on VRDE server availability status: */
-    uimachine()->actionsPool()->action(UIActionIndex_Toggle_VRDEServer)->setVisible(fIsVRDEServerAvailable);
+    gActionPool->action(UIActionIndexRuntime_Toggle_VRDEServer)->setVisible(fIsVRDEServerAvailable);
     /* Check/Uncheck VRDE action depending on VRDE server activity status: */
     if (fIsVRDEServerAvailable)
-        uimachine()->actionsPool()->action(UIActionIndex_Toggle_VRDEServer)->setChecked(server.GetEnabled());
+        gActionPool->action(UIActionIndexRuntime_Toggle_VRDEServer)->setChecked(server.GetEnabled());
     /* Notify listeners about VRDE change: */
     emit sigVRDEChange();
 }
@@ -675,7 +687,7 @@ void UISession::loadSessionSettings()
 
         /* Should guest autoresize? */
         strSettings = machine.GetExtraData(VBoxDefs::GUI_AutoresizeGuest);
-        QAction *pGuestAutoresizeSwitch = uimachine()->actionsPool()->action(UIActionIndex_Toggle_GuestAutoresize);
+        QAction *pGuestAutoresizeSwitch = gActionPool->action(UIActionIndexRuntime_Toggle_GuestAutoresize);
         pGuestAutoresizeSwitch->setChecked(strSettings != "off");
 
 #if 0 /* Disabled for now! */
@@ -700,7 +712,7 @@ void UISession::saveSessionSettings()
 
         /* Remember if guest should autoresize: */
         machine.SetExtraData(VBoxDefs::GUI_AutoresizeGuest,
-                             uimachine()->actionsPool()->action(UIActionIndex_Toggle_GuestAutoresize)->isChecked() ?
+                             gActionPool->action(UIActionIndexRuntime_Toggle_GuestAutoresize)->isChecked() ?
                              QString() : "off");
 
 #if 0 /* Disabled for now! */
@@ -977,8 +989,8 @@ void UISession::reinitMenuPool()
             if (attachment.GetType() == KDeviceType_Floppy)
                 ++iDevicesCountFD;
         }
-        QAction *pOpticalDevicesMenu = uimachine()->actionsPool()->action(UIActionIndex_Menu_OpticalDevices);
-        QAction *pFloppyDevicesMenu = uimachine()->actionsPool()->action(UIActionIndex_Menu_FloppyDevices);
+        QAction *pOpticalDevicesMenu = gActionPool->action(UIActionIndexRuntime_Menu_OpticalDevices);
+        QAction *pFloppyDevicesMenu = gActionPool->action(UIActionIndexRuntime_Menu_FloppyDevices);
         pOpticalDevicesMenu->setData(iDevicesCountCD);
         pOpticalDevicesMenu->setVisible(iDevicesCountCD);
         pFloppyDevicesMenu->setData(iDevicesCountFD);
@@ -999,7 +1011,7 @@ void UISession::reinitMenuPool()
             }
         }
         /* Show/Hide Network Adapters action depending on overall adapters activity status: */
-        uimachine()->actionsPool()->action(UIActionIndex_Simple_NetworkAdaptersDialog)->setVisible(fAtLeastOneAdapterActive);
+        gActionPool->action(UIActionIndexRuntime_Simple_NetworkAdaptersDialog)->setVisible(fAtLeastOneAdapterActive);
     }
 
     /* USB stuff: */
@@ -1008,20 +1020,15 @@ void UISession::reinitMenuPool()
         const CUSBController &usbController = machine.GetUSBController();
         bool fUSBControllerEnabled = !usbController.isNull() && usbController.GetEnabled() && usbController.GetProxyAvailable();
         /* Show/Hide USB menu depending on controller availability, activity and USB-proxy presence: */
-        uimachine()->actionsPool()->action(UIActionIndex_Menu_USBDevices)->setVisible(fUSBControllerEnabled);
+        gActionPool->action(UIActionIndexRuntime_Menu_USBDevices)->setVisible(fUSBControllerEnabled);
     }
 }
 
 void UISession::preparePowerUp()
 {
-#ifdef VBOX_WITH_UPDATE_REQUEST
-    /* Check for updates if necessary: */
-    vboxGlobal().showUpdateDialog(false /* force request? */);
-#endif
-
     /* Notify user about mouse&keyboard auto-capturing: */
     if (vboxGlobal().settings().autoCapture())
-        vboxProblem().remindAboutAutoCapture();
+        msgCenter().remindAboutAutoCapture();
 
     /* Shows first run wizard if necessary: */
     const CMachine &machine = session().GetMachine();

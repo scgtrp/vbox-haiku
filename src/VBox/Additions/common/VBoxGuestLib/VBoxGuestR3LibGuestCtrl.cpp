@@ -92,8 +92,7 @@ VBGLR3DECL(int) VbglR3GuestCtrlDisconnect(uint32_t u32ClientId)
 
 
 /**
- * Gets a host message.
- *
+ * Waits until a new host message arrives.
  * This will block until a message becomes available.
  *
  * @returns VBox status code.
@@ -102,7 +101,7 @@ VBGLR3DECL(int) VbglR3GuestCtrlDisconnect(uint32_t u32ClientId)
  * @param   puNumParms      Where to store the number  of parameters which will be received
  *                          in a second call to the host.
  */
-VBGLR3DECL(int) VbglR3GuestCtrlGetHostMsg(uint32_t u32ClientId, uint32_t *puMsg, uint32_t *puNumParms)
+VBGLR3DECL(int) VbglR3GuestCtrlWaitForHostMsg(uint32_t u32ClientId, uint32_t *puMsg, uint32_t *puNumParms)
 {
     AssertPtrReturn(puMsg, VERR_INVALID_PARAMETER);
     AssertPtrReturn(puNumParms, VERR_INVALID_PARAMETER);

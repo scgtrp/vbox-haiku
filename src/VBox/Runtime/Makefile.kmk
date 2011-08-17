@@ -44,20 +44,21 @@ else ifdef VBOX_ONLY_TESTSUITE
  # Only build the testsuite.
  #
  LIBRARIES += RuntimeGuestR3 RuntimeGuestR3Shared RuntimeR3 RuntimeR0
+ LIBRARIES.solaris += RuntimeR0Stub
  LIBRARIES.win += RuntimeR0Stub
 
 else ifdef VBOX_ONLY_DOCS
  #
  # Build docs only - need just regular R3 runtime.
  #
- LIBRARIES += RuntimeR3
- DLLS += VBoxRT
+ LIBRARIES += RuntimeR3 RuntimeBldProg
 
 else ifdef VBOX_ONLY_EXTPACKS_USE_IMPLIBS
  #
  # Build docs only - need just regular R3 runtime.
  #
  LIBRARIES += RuntimeBldProg
+ LIBRARIES.solaris += RuntimeR0Stub
  LIBRARIES.win += RuntimeR0Stub RuntimeRCStub
  include $(PATH_SUB_CURRENT)/tools/Makefile.kmk
 
@@ -73,6 +74,7 @@ else # !VBOX_ONLY_ADDITIONS && !VBOX_ONLY_TESTSUITE && !VBOX_ONLY_DOCS
 
  BLDPROGS += uniread
  LIBRARIES += RuntimeR3 RuntimeBldProg RuntimeR0 RuntimeEFCPP RuntimeR3NoCRTGCC
+ LIBRARIES.solaris += RuntimeR0Stub
  LIBRARIES.win += RuntimeR0Stub
  ifdef VBOX_WITH_RAW_MODE
   LIBRARIES += RuntimeRC
@@ -215,9 +217,6 @@ RuntimeR3_DEFS          = IN_RT_R3 IN_SUP_R3 LDR_WITH_NATIVE LDR_WITH_ELF32 LDR_
 ifdef IPRT_WITH_KSTUFF
  RuntimeR3_DEFS        += LDR_WITH_KLDR
 endif
-ifdef VBOX_MAIN_RELEASE_LOG ## @todo (dmik): temporary, until RTThreadSelf/RTThreadAdopt are properly updated
- RuntimeR3_DEFS        += RTCRITSECT_STRICT
-endif
 ifdef IPRT_WITH_LZJB
  RuntimeR3_DEFS        += RTZIP_USE_LZJB
 endif
@@ -275,6 +274,7 @@ RuntimeR3_SOURCES       = \
 	common/dbg/dbgmodcontainer.cpp \
 	common/dbg/dbgmodnm.cpp \
 	common/dvm/dvm.cpp \
+	common/dvm/dvmbsdlabel.cpp \
 	common/dvm/dvmgpt.cpp \
 	common/dvm/dvmmbr.cpp \
 	common/err/errinfo.cpp \
@@ -293,6 +293,8 @@ RuntimeR3_SOURCES       = \
 	common/log/logrelellipsis.cpp \
 	common/log/logcom.cpp \
 	common/log/logformat.cpp \
+	common/log/tracebuf.cpp \
+	common/log/tracedefault.cpp \
 	common/misc/RTAssertMsg1Weak.cpp \
 	common/misc/RTAssertMsg2.cpp \
 	common/misc/RTAssertMsg2Add.cpp \
@@ -463,6 +465,7 @@ RuntimeR3_SOURCES       = \
 	r3/test.cpp \
 	r3/testi.cpp \
 	r3/tcp.cpp \
+	r3/udp.cpp \
 	r3/generic/semspinmutex-r3-generic.cpp
 
 #if1of ($(KBUILD_TARGET_ARCH),amd64 x86)
@@ -541,6 +544,7 @@ RuntimeR3_SOURCES.win = \
         r3/win/RTSystemQueryTotalRam-win.cpp \
 	r3/win/alloc-win.cpp \
 	r3/win/dir-win.cpp \
+	r3/win/errvars-win.cpp \
 	r3/win/fileio-win.cpp \
 	r3/win/fs-win.cpp \
 	r3/win/ldrNative-win.cpp \
@@ -559,6 +563,7 @@ RuntimeR3_SOURCES.win = \
 	r3/win/symlink-win.cpp \
 	r3/win/rtFileNativeSetAttributes-win.cpp \
 	r3/win/thread-win.cpp \
+	r3/win/thread2-win.cpp \
 	r3/win/time-win.cpp \
 	r3/win/timer-win.cpp \
 	r3/win/tls-win.cpp \
@@ -581,8 +586,6 @@ RuntimeR3_SOURCES.linux = \
  	generic/RTSemEventMultiWaitNoResume-2-ex-generic.cpp \
 	generic/RTTimeLocalNow-generic.cpp \
 	generic/RTTimerCreate-generic.cpp \
-	generic/RTThreadGetAffinity-stub-generic.cpp \
-	generic/RTThreadSetAffinity-stub-generic.cpp \
 	generic/RTThreadSetAffinityToCpu-generic.cpp \
 	generic/RTUuidCreate-generic.cpp \
 	generic/mppresent-generic.cpp \
@@ -594,6 +597,7 @@ RuntimeR3_SOURCES.linux = \
 	r3/linux/sched-linux.cpp \
 	r3/linux/sysfs.cpp \
 	r3/linux/time-linux.cpp \
+	r3/linux/thread-affinity-linux.cpp \
 	r3/linux/RTProcIsRunningByName-linux.cpp \
 	r3/linux/RTSystemQueryDmiString-linux.cpp \
 	r3/posix/RTFileQueryFsSizes-posix.cpp \
@@ -607,6 +611,7 @@ RuntimeR3_SOURCES.linux = \
 	r3/posix/rtmempage-exec-mmap-heap-posix.cpp \
 	r3/posix/dir-posix.cpp \
 	r3/posix/env-posix.cpp \
+	r3/posix/errvars-posix.cpp \
 	r3/posix/fileio-posix.cpp \
 	r3/posix/fileio2-posix.cpp \
 	r3/posix/filelock-posix.cpp \
@@ -626,6 +631,7 @@ RuntimeR3_SOURCES.linux = \
 	r3/posix/semrw-posix.cpp \
 	r3/posix/symlink-posix.cpp \
 	r3/posix/thread-posix.cpp \
+	r3/posix/thread2-posix.cpp \
 	r3/posix/timelocal-posix.cpp \
 	r3/posix/timer-posix.cpp \
 	r3/posix/tls-posix.cpp \
@@ -698,6 +704,7 @@ RuntimeR3_SOURCES.os2   = \
 	r3/posix/rtmempage-exec-mmap-heap-posix.cpp \
 	r3/posix/dir-posix.cpp \
 	r3/posix/env-posix.cpp \
+	r3/posix/errvars-posix.cpp \
 	r3/posix/fileio-posix.cpp \
 	r3/posix/fileio2-posix.cpp \
 	r3/posix/fs-posix.cpp \
@@ -756,6 +763,7 @@ RuntimeR3_SOURCES.darwin = \
 	r3/posix/RTTimeSet-posix.cpp \
 	r3/posix/dir-posix.cpp \
 	r3/posix/env-posix.cpp \
+	r3/posix/errvars-posix.cpp \
 	r3/posix/fileio-posix.cpp \
 	r3/posix/fileio2-posix.cpp \
 	r3/posix/fs-posix.cpp \
@@ -775,6 +783,7 @@ RuntimeR3_SOURCES.darwin = \
 	r3/posix/semmutex-posix.cpp \
 	r3/posix/symlink-posix.cpp \
 	r3/posix/thread-posix.cpp \
+	r3/posix/thread2-posix.cpp \
 	r3/posix/timelocal-posix.cpp \
 	r3/posix/tls-posix.cpp \
 	r3/posix/utf8-posix.cpp
@@ -814,6 +823,7 @@ RuntimeR3_SOURCES.freebsd = \
 	r3/posix/RTTimeSet-posix.cpp \
 	r3/posix/dir-posix.cpp \
 	r3/posix/env-posix.cpp \
+	r3/posix/errvars-posix.cpp \
 	r3/posix/fileio-posix.cpp \
 	r3/posix/fileio2-posix.cpp \
 	r3/posix/filelock-posix.cpp \
@@ -837,6 +847,7 @@ RuntimeR3_SOURCES.freebsd = \
 	r3/posix/semrw-posix.cpp \
 	r3/posix/symlink-posix.cpp \
 	r3/posix/thread-posix.cpp \
+	r3/posix/thread2-posix.cpp \
 	r3/posix/time-posix.cpp \
 	r3/posix/timelocal-posix.cpp \
 	r3/posix/timer-posix.cpp \
@@ -870,6 +881,7 @@ RuntimeR3_SOURCES.solaris = \
 	r3/posix/RTTimeSet-posix.cpp \
 	r3/posix/dir-posix.cpp \
 	r3/posix/env-posix.cpp \
+	r3/posix/errvars-posix.cpp \
 	r3/posix/fileio-posix.cpp \
 	r3/posix/fileio2-posix.cpp \
 	r3/posix/filelock-posix.cpp \
@@ -893,6 +905,7 @@ RuntimeR3_SOURCES.solaris = \
 	r3/posix/semrw-posix.cpp \
 	r3/posix/symlink-posix.cpp \
 	r3/posix/thread-posix.cpp \
+	r3/posix/thread2-posix.cpp \
 	r3/posix/time-posix.cpp \
 	r3/posix/timelocal-posix.cpp \
 	r3/posix/timer-posix.cpp \
@@ -989,6 +1002,7 @@ RuntimeR3L4_INCS          = \
 	$(L4_INCDIR)
 
 RuntimeR3L4_SOURCES = \
+	generic/errvars-generic.cpp \
 	generic/fs-stubs-generic.cpp \
 	generic/pathhost-generic.cpp \
 	generic/RTDirQueryInfo-generic.cpp \
@@ -1123,7 +1137,7 @@ RuntimeGuestR3Mini_INST                     := $(INST_ADDITIONS_LIB)
 RuntimeGuestR3Mini_SDKS.win                 := $(RuntimeR3_SDKS.win)
 RuntimeGuestR3Mini_DEFS                     := \
 	$(filter-out RTCRITSECT_STRICT RT_NO_GIP RT_WITH_ICONV_CACHE, $(RuntimeR3_DEFS)) \
-	RT_MINI
+	RT_MINI IN_RT_STATIC RTMEM_NO_WRAP_TO_EF_APIS
 RuntimeGuestR3Mini_DEFS.$(KBUILD_TARGET)    := $(RuntimeR3_DEFS.$(KBUILD_TARGET))
 RuntimeGuestR3Mini_DEFS.$(KBUILD_HOST)      := $(RuntimeR3_DEFS.$(KBUILD_HOST))
 RuntimeGuestR3Mini_INCS                     := $(RuntimeR3_INCS)
@@ -1191,6 +1205,7 @@ RuntimeGuestR3Mini_SOURCES = \
 	generic/critsect-generic.cpp \
 	generic/pathhost-generic.cpp \
 	generic/RTAssertShouldPanic-generic.cpp \
+	generic/errvars-generic.cpp \
 	r3/alloc.cpp \
 	r3/alloc-ef.cpp \
 	r3/fileio.cpp \
@@ -1205,6 +1220,7 @@ RuntimeGuestR3Mini_SOURCES.freebsd = \
 	r3/posix/path-posix.cpp \
 	r3/posix/path2-posix.cpp \
 	r3/posix/utf8-posix.cpp \
+	r3/posix/thread2-posix.cpp \
 	common/err/errmsgxpcom.cpp
 RuntimeGuestR3Mini_SOURCES.linux = \
 	r3/posix/RTMemProtect-posix.cpp \
@@ -1216,6 +1232,7 @@ RuntimeGuestR3Mini_SOURCES.linux = \
 	r3/posix/path-posix.cpp \
 	r3/posix/path2-posix.cpp \
 	r3/posix/utf8-posix.cpp \
+	r3/posix/thread2-posix.cpp \
 	common/err/errmsgxpcom.cpp
 RuntimeGuestR3Mini_SOURCES.solaris = \
 	r3/posix/RTMemProtect-posix.cpp \
@@ -1227,12 +1244,14 @@ RuntimeGuestR3Mini_SOURCES.solaris = \
 	r3/posix/path-posix.cpp \
 	r3/posix/path2-posix.cpp \
 	r3/posix/utf8-posix.cpp \
+	r3/posix/thread2-posix.cpp \
 	common/err/errmsgxpcom.cpp
 RuntimeGuestR3Mini_SOURCES.win = \
 	r3/win/alloc-win.cpp \
 	r3/win/fileio-win.cpp \
 	r3/win/path-win.cpp \
 	r3/win/utf8-win.cpp \
+	r3/win/thread2-win.cpp \
 	win/errmsgwin.cpp \
 	win/RTErrConvertFromWin32.cpp
 
@@ -1302,23 +1321,24 @@ VBoxRT_INCS                    = $(RuntimeR3_INCS)
 VBoxRT_INCS.$(KBUILD_TARGET)   = $(RuntimeR3_INCS.$(KBUILD_TARGET))
 VBoxRT_INCS.$(KBUILD_TARGET).$(KBUILD_TARGET_ARCH) = $(RuntimeR3_INCS.$(KBUILD_TARGET).$(KBUILD_TARGET_ARCH))
 VBoxRT_LIBS                    = \
-	$(PATH_LIB)/VBox-liblzf$(VBOX_SUFF_LIB) \
+	$(PATH_STAGE_LIB)/VBox-liblzf$(VBOX_SUFF_LIB) \
 	$(SDK_VBOX_ZLIB_LIBS)
 if1of ($(KBUILD_TARGET_ARCH), amd64 x86)
 VBoxRT_LIBS                   += \
-	$(PATH_LIB)/SUPR3$(VBOX_SUFF_LIB)
+	$(PATH_STAGE_LIB)/SUPR3$(VBOX_SUFF_LIB)
 endif
 ifdef IPRT_WITH_KSTUFF
  VBoxRT_LIBS                  += \
-   	$(PATH_LIB)/VBox-kStuff$(VBOX_SUFF_LIB)
+   	$(PATH_STAGE_LIB)/VBox-kStuff$(VBOX_SUFF_LIB)
 endif
 ifndef SDK_VBOX_LIBXML2_LIBS
  VBoxRT_LIBS                 += \
-	$(PATH_LIB)/VBox-libxml2$(VBOX_SUFF_LIB)
+	$(PATH_STAGE_LIB)/VBox-libxml2$(VBOX_SUFF_LIB)
 endif
 ifndef SDK_VBOX_OPENSSL_LIBS
  VBoxRT_LIBS                 += \
-	$(PATH_LIB)/VBox-libcrypto$(VBOX_SUFF_LIB)
+	$(PATH_STAGE_LIB)/VBox-libcrypto$(VBOX_SUFF_LIB) \
+	$(PATH_STAGE_LIB)/VBox-libssl$(VBOX_SUFF_LIB)
 endif
 ifdef IPRT_WITH_LZO
  VBoxRT_LIBS                  += lzo2
@@ -1348,7 +1368,7 @@ VBoxRT_LDFLAGS.win             = /MANIFEST
 endif
 VBoxRT_LDFLAGS.l4              = \
 	-Wl,-whole-archive \
-	$(PATH_LIB)/RuntimeR3L4$(VBOX_SUFF_LIB) \
+	$(PATH_STAGE_LIB)/RuntimeR3L4$(VBOX_SUFF_LIB) \
 	-Wl,-no-whole-archive
 ifeq ($(KBUILD_TARGET),l4)
 VBoxRT_LIBS                   += \
@@ -1356,7 +1376,7 @@ VBoxRT_LIBS                   += \
 	$(L4_LIBDIR)/libl4sys.p.a
 endif
 VBoxRT_LIBS.l4                 = \
-	$(PATH_LIB)/RuntimeR3L4$(VBOX_SUFF_LIB)
+	$(PATH_STAGE_LIB)/RuntimeR3L4$(VBOX_SUFF_LIB)
 
 if1of ($(DLLS), VBoxRT)
 $$(VBoxRT_0_OUTDIR)/VBoxRT.def: \
@@ -1380,11 +1400,11 @@ VBoxRT_NOINST = true
 DLLS += VBoxRTDummy
 VBoxRTDummy_TEMPLATE = VBOXR3
 VBoxRTDummy_NOINST = true
-VBoxRTDummy_LIBS = $(PATH_BIN)/VBoxRT.so
-VBoxRTDummy_CLEAN= $(PATH_BIN)/VBoxRT.so
-BLDDIRS += $(PATH_BIN)
+VBoxRTDummy_LIBS = $(PATH_STAGE_BIN)/VBoxRT.so
+VBoxRTDummy_CLEAN= $(PATH_STAGE_BIN)/VBoxRT.so
+BLDDIRS += $(PATH_STAGE_BIN)
 
-$(PATH_BIN)/VBoxRT.so: $$(VBoxRT_1_TARGET) | $$(dir $$@)
+$(PATH_STAGE_BIN)/VBoxRT.so: $$(VBoxRT_1_TARGET) | $$(dir $$@)
 	$(INSTALL) $< $@
 	chcon -t texrel_shlib_t $@ || true
 
@@ -1499,6 +1519,8 @@ RuntimeR0_SOURCES       = \
 	common/log/logrelellipsis.cpp \
 	common/log/logcom.cpp \
 	common/log/logformat.cpp \
+	common/log/tracebuf.cpp \
+	common/log/tracedefault.cpp \
 	common/misc/RTAssertMsg1Weak.cpp \
 	common/misc/RTAssertMsg2.cpp \
 	common/misc/RTAssertMsg2Add.cpp \
@@ -1511,6 +1533,7 @@ RuntimeR0_SOURCES       = \
 	common/misc/sanity-c.c \
 	common/misc/sanity-cpp.cpp \
 	common/misc/term.cpp \
+ 	common/path/RTPathFilename.cpp \
 	common/string/strncmp.cpp \
 	common/string/strpbrk.cpp \
 	common/string/RTStrCat.cpp \
@@ -1581,11 +1604,13 @@ RuntimeR0_SOURCES.os2 = \
 
 
 #
-# RuntimeR0Stub - Ring-0 context startup stub for Windows.
+# RuntimeR0Stub - Ring-0 context startup stub for Windows and Solaris.
 #
-RuntimeR0Stub_TEMPLATE    = VBoxR0
+RuntimeR0Stub_TEMPLATE    = $(if-expr "$(KBUILD_TARGET)" == "solaris",VBOXR0DRV,VBoxR0)
 RuntimeR0Stub_SOURCES.win = \
 	nt/NtProcessStartup-stub.cpp
+RuntimeR0Stub_SOURCES.solaris = \
+	r0drv/solaris/modulestub-r0drv-solaris.c
 
 
 #
@@ -1599,7 +1624,7 @@ RuntimeR0Drv_DEFS.linux = MODULE KBUILD_MODNAME=KBUILD_STR\(vboxdrv\) KBUILD_BAS
 
 RuntimeR0Drv_INCS      := $(PATH_SUB_CURRENT) include
 RuntimeR0Drv_INCS.freebsd = \
-	$(PATH_INS)/gen-sys-hdrs
+	$(PATH_STAGE)/gen-sys-hdrs
 RuntimeR0Drv_INCS.linux = \
 	r0drv/linux
 RuntimeR0Drv_INCS.solaris = \
@@ -1621,6 +1646,8 @@ RuntimeR0Drv_SOURCES    = \
 	common/log/logrelellipsis.cpp \
 	common/log/logcom.cpp \
 	common/log/logformat.cpp \
+	common/log/tracebuf.cpp \
+	common/log/tracedefault.cpp \
 	common/misc/RTAssertMsg1Weak.cpp \
 	common/misc/RTAssertMsg2.cpp \
 	common/misc/RTAssertMsg2Add.cpp \
@@ -1667,6 +1694,7 @@ RuntimeR0Drv_SOURCES    = \
 	common/string/RTStrNCmp.cpp \
 	common/string/RTStrNLen.cpp \
 	common/string/RTStrNLenEx.cpp \
+	common/string/straprintf.cpp \
 	common/string/strformat.cpp \
 	common/string/strformatnum.cpp \
 	common/string/strformatrt.cpp \
@@ -1686,6 +1714,7 @@ RuntimeR0Drv_SOURCES    = \
  	generic/RTSemEventWaitNoResume-2-ex-generic.cpp \
  	generic/RTSemEventMultiWait-2-ex-generic.cpp \
  	generic/RTSemEventMultiWaitNoResume-2-ex-generic.cpp \
+	generic/errvars-generic.cpp \
 	generic/uuid-generic.cpp \
 	r0drv/alloc-r0drv.cpp \
 	r0drv/initterm-r0drv.cpp \
@@ -1779,6 +1808,7 @@ RuntimeR0Drv_SOURCES.darwin = \
 	r0drv/darwin/alloc-r0drv-darwin.cpp \
 	r0drv/darwin/assert-r0drv-darwin.cpp \
 	r0drv/darwin/initterm-r0drv-darwin.cpp \
+	r0drv/darwin/mach_kernel-r0drv-darwin.cpp \
 	r0drv/darwin/memobj-r0drv-darwin.cpp \
 	r0drv/darwin/mp-r0drv-darwin.cpp \
 	r0drv/darwin/memuserkernel-r0drv-darwin.cpp \
@@ -1965,8 +1995,8 @@ RuntimeR0Drv_SOURCES.solaris = \
 ## PORTME: Porters create and add their selection of platform specific Ring-0 Driver files here.
 
 RuntimeR0Drv_ORDERDEPS.freebsd = \
-  	$(PATH_INS)/gen-sys-hdrs/bus_if.h \
-  	$(PATH_INS)/gen-sys-hdrs/device_if.h
+  	$(PATH_STAGE)/gen-sys-hdrs/bus_if.h \
+  	$(PATH_STAGE)/gen-sys-hdrs/device_if.h
 
 
 #
@@ -2007,6 +2037,8 @@ ifdef VBOX_WITH_RAW_MODE
  	common/log/logrelellipsis.cpp \
  	common/log/logcom.cpp \
  	common/log/logformat.cpp \
+	common/log/tracebuf.cpp \
+	common/log/tracedefault.cpp \
  	common/misc/RTAssertMsg1Weak.cpp \
  	common/misc/RTAssertMsg2.cpp \
  	common/misc/RTAssertMsg2Add.cpp \
@@ -2018,6 +2050,7 @@ ifdef VBOX_WITH_RAW_MODE
  	common/misc/buildconfig.cpp \
  	common/misc/sanity-c.c \
  	common/misc/sanity-cpp.cpp \
+ 	common/path/RTPathFilename.cpp \
  	common/string/strformat.cpp \
  	common/string/strformatnum.cpp \
  	common/string/strformatrt.cpp \
@@ -2025,6 +2058,8 @@ ifdef VBOX_WITH_RAW_MODE
  	common/string/strncmp.cpp \
  	common/string/strpbrk.cpp \
  	common/string/strprintf.cpp \
+ 	common/string/RTStrCopy.cpp \
+ 	common/string/RTStrCopyEx.cpp \
  	common/table/avllu32.cpp \
  	common/table/avlou32.cpp \
  	common/table/avlogcphys.cpp \
@@ -2040,6 +2075,7 @@ ifdef VBOX_WITH_RAW_MODE
  	common/time/timesup.cpp \
  	gc/initterm-gc.cpp \
  	generic/RTAssertShouldPanic-generic.cpp \
+	generic/errvars-generic.cpp \
  	\
  	$(RuntimeNoCrt_SOURCES)
 

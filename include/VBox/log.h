@@ -3,7 +3,7 @@
  */
 
 /*
- * Copyright (C) 2006-2007 Oracle Corporation
+ * Copyright (C) 2006-2011 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -59,10 +59,10 @@ typedef enum LOGGROUP
 {
     /** The default VBox group. */
     LOG_GROUP_DEFAULT = RTLOGGROUP_FIRST_USER,
+    /** Auto-logon group. */
+    LOG_GROUP_AUTOLOGON,
     /** CFGM group. */
     LOG_GROUP_CFGM,
-    /** Core Dumper group. **/
-    LOG_GROUP_CORE_DUMPER,
     /** CPUM group. */
     LOG_GROUP_CPUM,
     /** CSAM group. */
@@ -183,6 +183,8 @@ typedef enum LOGGROUP
     LOG_GROUP_DRV_LWIP,
     /** Video Miniport driver group. */
     LOG_GROUP_DRV_MINIPORT,
+    /** Mouse driver group. */
+    LOG_GROUP_DRV_MOUSE,
     /** Mouse Queue driver group. */
     LOG_GROUP_DRV_MOUSE_QUEUE,
     /** Named Pipe stream driver group. */
@@ -199,6 +201,8 @@ typedef enum LOGGROUP
     LOG_GROUP_DRV_TRANSPORT_ASYNC,
     /** TUN network transport driver group */
     LOG_GROUP_DRV_TUN,
+    /** UDP tunnet network transport driver group. */
+    LOG_GROUP_DRV_UDPTUNNEL,
     /** USB Proxy driver group. */
     LOG_GROUP_DRV_USBPROXY,
     /** VBoxHDD media driver group. */
@@ -319,6 +323,8 @@ typedef enum LOGGROUP
     LOG_GROUP_TM,
     /** TRPM group. */
     LOG_GROUP_TRPM,
+    /** USB cardreader group. */
+    LOG_GROUP_USB_CARDREADER,
     /** USB driver group. */
     LOG_GROUP_USB_DRV,
     /** USBFilter group. */
@@ -374,8 +380,8 @@ typedef enum LOGGROUP
 {                   \
     RT_LOGGROUP_NAMES, \
     "DEFAULT",      \
+    "AUTOLOGON",    \
     "CFGM",         \
-    "CORE_DUMPER",  \
     "CPUM",         \
     "CSAM",         \
     "DBGC",         \
@@ -436,6 +442,7 @@ typedef enum LOGGROUP
     "DRV_KBD_QUEUE", \
     "DRV_LWIP",     \
     "DRV_MINIPORT", \
+    "DRV_MOUSE", \
     "DRV_MOUSE_QUEUE", \
     "DRV_NAMEDPIPE", \
     "DRV_NAT",      \
@@ -444,6 +451,7 @@ typedef enum LOGGROUP
     "DRV_SCSIHOST", \
     "DRV_TRANSPORT_ASYNC", \
     "DRV_TUN",      \
+    "DRV_UDPTUNNEL", \
     "DRV_USBPROXY", \
     "DRV_VBOXHDD",  \
     "DRV_VD",       \
@@ -504,6 +512,7 @@ typedef enum LOGGROUP
     "SUP_DRV",      \
     "TM",           \
     "TRPM",         \
+    "USB_CARDREADER",\
     "USB_DRV",      \
     "USB_FILTER",   \
     "USB_KBD",      \

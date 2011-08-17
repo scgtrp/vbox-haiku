@@ -78,7 +78,7 @@ typedef struct DRVHOSTFLOPPY
  */
 static DECLCALLBACK(int) drvHostFloppyGetMediaSize(PDRVHOSTBASE pThis, uint64_t *pcb)
 {
-    int rc = ioctl(pThis->FileDevice, FDFLUSH);
+    int rc = ioctl(RTFileToNative(pThis->hFileDevice), FDFLUSH);
     if (rc)
     {
         rc = RTErrConvertFromErrno (errno);
@@ -87,7 +87,7 @@ static DECLCALLBACK(int) drvHostFloppyGetMediaSize(PDRVHOSTBASE pThis, uint64_t 
     }
 
     floppy_drive_struct DrvStat;
-    rc = ioctl(pThis->FileDevice, FDGETDRVSTAT, &DrvStat);
+    rc = ioctl(RTFileToNative(pThis->hFileDevice), FDGETDRVSTAT, &DrvStat);
     if (rc)
     {
         rc = RTErrConvertFromErrno(errno);
@@ -96,7 +96,7 @@ static DECLCALLBACK(int) drvHostFloppyGetMediaSize(PDRVHOSTBASE pThis, uint64_t 
     }
     pThis->fReadOnly = !(DrvStat.flags & FD_DISK_WRITABLE);
 
-    return RTFileSeek(pThis->FileDevice, 0, RTFILE_SEEK_END, pcb);
+    return RTFileSeek(pThis->hFileDevice, 0, RTFILE_SEEK_END, pcb);
 }
 #endif /* RT_OS_LINUX */
 
@@ -113,7 +113,7 @@ static DECLCALLBACK(int) drvHostFloppyPoll(PDRVHOSTBASE pThis)
 {
     PDRVHOSTFLOPPY          pThisFloppy = (PDRVHOSTFLOPPY)pThis;
     floppy_drive_struct     DrvStat;
-    int rc = ioctl(pThis->FileDevice, FDPOLLDRVSTAT, &DrvStat);
+    int rc = ioctl(RTFileToNative(pThis->hFileDevice), FDPOLLDRVSTAT, &DrvStat);
     if (rc)
         return RTErrConvertFromErrno(errno);
 

@@ -25,19 +25,21 @@
 
 /* Local includes */
 #include "VBoxGlobal.h"
-#include "VBoxProblemReporter.h"
+#include "UIMessageCenter.h"
 #include "VBoxUtils.h"
 
 #include "UISession.h"
-#include "UIActionsPool.h"
+#include "UIActionPoolRuntime.h"
 #include "UIIndicatorsPool.h"
 #include "UIKeyboardHandler.h"
 #include "UIMouseHandler.h"
 #include "UIMachineLogic.h"
 #include "UIMachineWindowNormal.h"
 #include "UIMachineView.h"
+#include "UIUpdateManager.h"
 #include "UIDownloaderAdditions.h"
 #include "UIDownloaderUserManual.h"
+#include "UIDownloaderExtensionPack.h"
 #ifdef Q_WS_MAC
 # include "UIImageTools.h"
 #endif /* Q_WS_MAC */
@@ -157,23 +159,35 @@ void UIMachineWindowNormal::sltSharedFolderChange()
     updateAppearanceOf(UIVisualElement_SharedFolderStuff);
 }
 
+void UIMachineWindowNormal::sltCPUExecutionCapChange()
+{
+    updateAppearanceOf(UIVisualElement_VirtualizationStuff);
+}
+
 void UIMachineWindowNormal::sltTryClose()
 {
     UIMachineWindow::sltTryClose();
 }
 
-void UIMachineWindowNormal::sltDownloaderAdditionsEmbed()
+void UIMachineWindowNormal::sltEmbedDownloaderForAdditions()
 {
     /* If there is an additions download running show the process bar: */
     if (UIDownloaderAdditions *pDl = UIDownloaderAdditions::current())
-        statusBar()->addWidget(pDl->processWidget(this), 0);
+        statusBar()->addWidget(pDl->progressWidget(this), 0);
 }
 
-void UIMachineWindowNormal::sltDownloaderUserManualEmbed()
+void UIMachineWindowNormal::sltEmbedDownloaderForUserManual()
 {
     /* If there is an additions download running show the process bar: */
     if (UIDownloaderUserManual *pDl = UIDownloaderUserManual::current())
-        statusBar()->addWidget(pDl->processWidget(this), 0);
+        statusBar()->addWidget(pDl->progressWidget(this), 0);
+}
+
+void UIMachineWindowNormal::sltEmbedDownloaderForExtensionPack()
+{
+    /* If there is an extension pack download running show the process bar: */
+    if (UIDownloaderExtensionPack *pDl = UIDownloaderExtensionPack::current())
+        statusBar()->addWidget(pDl->progressWidget(this), 0);
 }
 
 void UIMachineWindowNormal::sltUpdateIndicators()
@@ -229,33 +243,33 @@ void UIMachineWindowNormal::sltShowIndicatorsContextMenu(QIStateIndicator *pIndi
 {
     if (pIndicator == indicatorsPool()->indicator(UIIndicatorIndex_OpticalDisks))
     {
-        if (machineLogic()->actionsPool()->action(UIActionIndex_Menu_OpticalDevices)->isEnabled())
-            machineLogic()->actionsPool()->action(UIActionIndex_Menu_OpticalDevices)->menu()->exec(pEvent->globalPos());
+        if (gActionPool->action(UIActionIndexRuntime_Menu_OpticalDevices)->isEnabled())
+            gActionPool->action(UIActionIndexRuntime_Menu_OpticalDevices)->menu()->exec(pEvent->globalPos());
     }
     else if (pIndicator == indicatorsPool()->indicator(UIIndicatorIndex_FloppyDisks))
     {
-        if (machineLogic()->actionsPool()->action(UIActionIndex_Menu_FloppyDevices)->isEnabled())
-            machineLogic()->actionsPool()->action(UIActionIndex_Menu_FloppyDevices)->menu()->exec(pEvent->globalPos());
+        if (gActionPool->action(UIActionIndexRuntime_Menu_FloppyDevices)->isEnabled())
+            gActionPool->action(UIActionIndexRuntime_Menu_FloppyDevices)->menu()->exec(pEvent->globalPos());
     }
     else if (pIndicator == indicatorsPool()->indicator(UIIndicatorIndex_USBDevices))
     {
-        if (machineLogic()->actionsPool()->action(UIActionIndex_Menu_USBDevices)->isEnabled())
-            machineLogic()->actionsPool()->action(UIActionIndex_Menu_USBDevices)->menu()->exec(pEvent->globalPos());
+        if (gActionPool->action(UIActionIndexRuntime_Menu_USBDevices)->isEnabled())
+            gActionPool->action(UIActionIndexRuntime_Menu_USBDevices)->menu()->exec(pEvent->globalPos());
     }
     else if (pIndicator == indicatorsPool()->indicator(UIIndicatorIndex_NetworkAdapters))
     {
-        if (machineLogic()->actionsPool()->action(UIActionIndex_Menu_NetworkAdapters)->isEnabled())
-            machineLogic()->actionsPool()->action(UIActionIndex_Menu_NetworkAdapters)->menu()->exec(pEvent->globalPos());
+        if (gActionPool->action(UIActionIndexRuntime_Menu_NetworkAdapters)->isEnabled())
+            gActionPool->action(UIActionIndexRuntime_Menu_NetworkAdapters)->menu()->exec(pEvent->globalPos());
     }
     else if (pIndicator == indicatorsPool()->indicator(UIIndicatorIndex_SharedFolders))
     {
-        if (machineLogic()->actionsPool()->action(UIActionIndex_Menu_SharedFolders)->isEnabled())
-            machineLogic()->actionsPool()->action(UIActionIndex_Menu_SharedFolders)->menu()->exec(pEvent->globalPos());
+        if (gActionPool->action(UIActionIndexRuntime_Menu_SharedFolders)->isEnabled())
+            gActionPool->action(UIActionIndexRuntime_Menu_SharedFolders)->menu()->exec(pEvent->globalPos());
     }
     else if (pIndicator == indicatorsPool()->indicator(UIIndicatorIndex_Mouse))
     {
-        if (machineLogic()->actionsPool()->action(UIActionIndex_Menu_MouseIntegration)->isEnabled())
-            machineLogic()->actionsPool()->action(UIActionIndex_Menu_MouseIntegration)->menu()->exec(pEvent->globalPos());
+        if (gActionPool->action(UIActionIndexRuntime_Menu_MouseIntegration)->isEnabled())
+            gActionPool->action(UIActionIndexRuntime_Menu_MouseIntegration)->menu()->exec(pEvent->globalPos());
     }
 }
 
@@ -371,6 +385,11 @@ void UIMachineWindowNormal::prepareConsoleConnections()
     /* Shared folder change updater: */
     connect(machineLogic()->uisession(), SIGNAL(sigSharedFolderChange()),
             this, SLOT(sltSharedFolderChange()));
+
+    /* CPU execution cap change updater: */
+    connect(machineLogic()->uisession(), SIGNAL(sigCPUExecutionCapChange()),
+            this, SLOT(sltCPUExecutionCapChange()));
+
 }
 
 void UIMachineWindowNormal::prepareMenu()
@@ -449,11 +468,15 @@ void UIMachineWindowNormal::prepareStatusBar()
 
     /* Add the additions downloader progress bar to the status bar,
      * if a download is actually running: */
-    sltDownloaderAdditionsEmbed();
+    sltEmbedDownloaderForAdditions();
 
     /* Add the user manual progress bar to the status bar,
      * if a download is actually running: */
-    sltDownloaderUserManualEmbed();
+    sltEmbedDownloaderForUserManual();
+
+    /* Add the extension pack progress bar to the status bar,
+     * if a download is actually running: */
+    sltEmbedDownloaderForExtensionPack();
 
     /* Create & start timer to update LEDs: */
     m_pIdleTimer = new QTimer(this);
@@ -472,9 +495,11 @@ void UIMachineWindowNormal::prepareConnections()
     connect(&vboxGlobal().settings(), SIGNAL(propertyChanged(const char *, const char *)),
             this, SLOT(sltProcessGlobalSettingChange(const char *, const char *)));
     /* Setup additions downloader listener: */
-    connect(machineLogic(), SIGNAL(sigDownloaderAdditionsCreated()), this, SLOT(sltDownloaderAdditionsEmbed()));
+    connect(machineLogic(), SIGNAL(sigDownloaderAdditionsCreated()), this, SLOT(sltEmbedDownloaderForAdditions()));
     /* Setup user manual downloader listener: */
-    connect(&vboxProblem(), SIGNAL(sigDownloaderUserManualCreated()), this, SLOT(sltDownloaderUserManualEmbed()));
+    connect(&msgCenter(), SIGNAL(sigDownloaderUserManualCreated()), this, SLOT(sltEmbedDownloaderForUserManual()));
+    /* Setup extension pack downloader listener: */
+    connect(gUpdateManager, SIGNAL(sigDownloaderCreatedForExtensionPack()), this, SLOT(sltEmbedDownloaderForExtensionPack()));
 }
 
 void UIMachineWindowNormal::prepareMachineView()

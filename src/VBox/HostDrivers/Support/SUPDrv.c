@@ -54,13 +54,13 @@
 # include <iprt/rand.h>
 # include <iprt/path.h>
 #endif
+#include <iprt/x86.h>
 
 #include <VBox/param.h>
 #include <VBox/log.h>
 #include <VBox/err.h>
 #include <VBox/vmm/hwacc_svm.h>
 #include <VBox/vmm/hwacc_vmx.h>
-#include <VBox/x86.h>
 
 #ifdef VBOX_WITH_DTRACE
 # include "SUPDrv-dtrace.h"
@@ -336,6 +336,7 @@ static SUPFUNC g_aFunctions[] =
     { "RTR0AssertPanicSystem",                  (void *)RTR0AssertPanicSystem },
     { "RTAssertMsg1",                           (void *)RTAssertMsg1 },
     { "RTAssertMsg2V",                          (void *)RTAssertMsg2V },
+    { "RTAssertMsg2AddV",                       (void *)RTAssertMsg2AddV },
     { "RTAssertSetQuiet",                       (void *)RTAssertSetQuiet },
     { "RTAssertMayPanic",                       (void *)RTAssertMayPanic },
     { "RTAssertSetMayPanic",                    (void *)RTAssertSetMayPanic },
@@ -972,7 +973,9 @@ int VBOXCALL supdrvIOCtlFast(uintptr_t uIOCtl, VMCPUID idCpu, PSUPDRVDEVEXT pDev
     /*
      * We check the two prereqs after doing this only to allow the compiler to optimize things better.
      */
-    if (RT_LIKELY(pSession->pVM && pDevExt->pfnVMMR0EntryFast))
+    if (RT_LIKELY(   RT_VALID_PTR(pSession) 
+                  && pSession->pVM 
+                  && pDevExt->pfnVMMR0EntryFast))
     {
         switch (uIOCtl)
         {
@@ -1044,6 +1047,12 @@ int VBOXCALL supdrvIOCtl(uintptr_t uIOCtl, PSUPDRVDEVEXT pDevExt, PSUPDRVSESSION
     {
         OSDBGPRINT(("vboxdrv: Bad ioctl request header; cbIn=%#lx cbOut=%#lx fFlags=%#lx\n",
                     (long)pReqHdr->cbIn, (long)pReqHdr->cbOut, (long)pReqHdr->fFlags));
+        VBOXDRV_SUPDRV_IOCTL_RETURN(pSession, uIOCtl, pReqHdr, VERR_INVALID_PARAMETER, VINF_SUCCESS);
+        return VERR_INVALID_PARAMETER;
+    }
+    if (RT_UNLIKELY(!RT_VALID_PTR(pSession)))
+    {
+        OSDBGPRINT(("vboxdrv: Invalid pSession valud %p (ioctl=%p)\n", pSession, (void *)uIOCtl));
         VBOXDRV_SUPDRV_IOCTL_RETURN(pSession, uIOCtl, pReqHdr, VERR_INVALID_PARAMETER, VINF_SUCCESS);
         return VERR_INVALID_PARAMETER;
     }
@@ -1842,7 +1851,7 @@ int VBOXCALL supdrvIDC(uintptr_t uReq, PSUPDRVDEVEXT pDevExt, PSUPDRVSESSION pSe
              */
             if (pReq->Hdr.pSession != NULL)
             {
-                OSDBGPRINT(("SUPDRV_IDC_REQ_CONNECT: pSession=%p expected NULL!\n", pReq->Hdr.pSession));
+                OSDBGPRINT(("SUPDRV_IDC_REQ_CONNECT: Hdr.pSession=%p expected NULL!\n", pReq->Hdr.pSession));
                 return pReqHdr->rc = VERR_INVALID_PARAMETER;
             }
             if (pReq->u.In.u32MagicCookie != SUPDRVIDCREQ_CONNECT_MAGIC_COOKIE)
@@ -1856,6 +1865,11 @@ int VBOXCALL supdrvIDC(uintptr_t uReq, PSUPDRVDEVEXT pDevExt, PSUPDRVSESSION pSe
             {
                 OSDBGPRINT(("SUPDRV_IDC_REQ_CONNECT: uMinVersion=%#x uMaxVersion=%#x doesn't match!\n",
                             pReq->u.In.uMinVersion, pReq->u.In.uReqVersion));
+                return pReqHdr->rc = VERR_INVALID_PARAMETER;
+            }
+            if (pSession != NULL)
+            {
+                OSDBGPRINT(("SUPDRV_IDC_REQ_CONNECT: pSession=%p expected NULL!\n", pSession));
                 return pReqHdr->rc = VERR_INVALID_PARAMETER;
             }
 
@@ -1881,22 +1895,12 @@ int VBOXCALL supdrvIDC(uintptr_t uReq, PSUPDRVDEVEXT pDevExt, PSUPDRVSESSION pSe
             pReq->u.Out.uDriverVersion  = SUPDRV_IDC_VERSION;
             pReq->u.Out.uDriverRevision = VBOX_SVN_REV;
 
-            /*
-             * On NT we will already have a session associated with the
-             * client, just like with the SUP_IOCTL_COOKIE request, while
-             * the other doesn't.
-             */
-#ifdef RT_OS_WINDOWS
-            pReq->Hdr.rc = VINF_SUCCESS;
-#else
-            AssertReturn(!pSession, VERR_INTERNAL_ERROR);
             pReq->Hdr.rc = supdrvCreateSession(pDevExt, false /* fUser */, &pSession);
             if (RT_FAILURE(pReq->Hdr.rc))
             {
                 OSDBGPRINT(("SUPDRV_IDC_REQ_CONNECT: failed to create session, rc=%d\n", pReq->Hdr.rc));
                 return VINF_SUCCESS;
             }
-#endif
 
             pReq->u.Out.pSession = pSession;
             pReq->Hdr.pSession = pSession;
@@ -1908,11 +1912,7 @@ int VBOXCALL supdrvIDC(uintptr_t uReq, PSUPDRVDEVEXT pDevExt, PSUPDRVSESSION pSe
         {
             REQ_CHECK_IDC_SIZE(SUPDRV_IDC_REQ_DISCONNECT, sizeof(*pReqHdr));
 
-#ifdef RT_OS_WINDOWS
-            /* Windows will destroy the session when the file object is destroyed. */
-#else
             supdrvCloseSession(pDevExt, pSession);
-#endif
             return pReqHdr->rc = VINF_SUCCESS;
         }
 
@@ -4064,7 +4064,7 @@ static int supdrvIOCtl_LdrLoad(PSUPDRVDEVEXT pDevExt, PSUPDRVSESSION pSession, P
         pImage->pfnModuleTerm = pReq->u.In.pfnModuleTerm;
 
         if (pImage->fNative)
-            rc = supdrvOSLdrLoad(pDevExt, pImage, pReq->u.In.abImage);
+            rc = supdrvOSLdrLoad(pDevExt, pImage, pReq->u.In.abImage, pReq);
         else
             memcpy(pImage->pvImage, &pReq->u.In.abImage[0], pImage->cbImageBits);
     }
@@ -4276,16 +4276,18 @@ static int supdrvIOCtl_LdrGetSymbol(PSUPDRVDEVEXT pDevExt, PSUPDRVSESSION pSessi
 
     /*
      * Search the symbol strings.
+     *
+     * Note! The int32_t is for native loading on solaris where the data
+     *       and text segments are in very different places.
      */
     pchStrings = pImage->pachStrTab;
     paSyms     = pImage->paSymbols;
     for (i = 0; i < pImage->cSymbols; i++)
     {
-        if (    paSyms[i].offSymbol < pImage->cbImageBits /* paranoia */
-            &&  paSyms[i].offName + cbSymbol <= pImage->cbStrTab
+        if (    paSyms[i].offName + cbSymbol <= pImage->cbStrTab
             &&  !memcmp(pchStrings + paSyms[i].offName, pReq->u.In.szSymbol, cbSymbol))
         {
-            pvSymbol = (uint8_t *)pImage->pvImage + paSyms[i].offSymbol;
+            pvSymbol = (uint8_t *)pImage->pvImage + (int32_t)paSyms[i].offSymbol;
             rc = VINF_SUCCESS;
             break;
         }
@@ -4365,14 +4367,13 @@ static int supdrvIDC_LdrGetSymbol(PSUPDRVDEVEXT pDevExt, PSUPDRVSESSION pSession
             PCSUPLDRSYM paSyms     = pImage->paSymbols;
             for (i = 0; i < pImage->cSymbols; i++)
             {
-                if (    paSyms[i].offSymbol < pImage->cbImageBits /* paranoia */
-                    &&  paSyms[i].offName + cbSymbol <= pImage->cbStrTab
+                if (    paSyms[i].offName + cbSymbol <= pImage->cbStrTab
                     &&  !memcmp(pchStrings + paSyms[i].offName, pszSymbol, cbSymbol))
                 {
                     /*
                      * Found it! Calc the symbol address and add a reference to the module.
                      */
-                    pReq->u.Out.pfnSymbol = (PFNRT)((uint8_t *)pImage->pvImage + paSyms[i].offSymbol);
+                    pReq->u.Out.pfnSymbol = (PFNRT)((uint8_t *)pImage->pvImage + (int32_t)paSyms[i].offSymbol);
                     rc = supdrvLdrAddUsage(pSession, pImage);
                     break;
                 }
@@ -4991,36 +4992,36 @@ static DECLCALLBACK(void) supdrvGipAsyncTimer(PRTTIMER pTimer, void *pvUser, uin
 
 
 /**
- * Helper for finding the CPU index from the CPU Id.
- *
- * @param    pGip               The GIP.
- * @param    idCpu              The CPU ID.
+ * Finds our (@a idCpu) entry, or allocates a new one if not found.
  *
  * @returns Index of the CPU in the cache set.
+ * @param   pGip                The GIP.
+ * @param   idCpu               The CPU ID.
  */
-DECLINLINE(uint32_t) supdrvGipCpuIndexFromCpuId(PSUPGLOBALINFOPAGE pGip, RTCPUID idCpu)
+static uint32_t supdrvGipCpuIndexFromCpuId(PSUPGLOBALINFOPAGE pGip, RTCPUID idCpu)
 {
-    uint32_t i = 0;
+    uint32_t i, cTries;
 
     /*
-     * Find our entry, or allocate one if not found.
      * ASSUMES that CPU IDs are constant.
      */
     for (i = 0; i < pGip->cCpus; i++)
         if (pGip->aCPUs[i].idCpu == idCpu)
-            break;
+            return i;
 
-    if (i >= pGip->cCpus)
+    cTries = 0;
+    do
+    {
         for (i = 0; i < pGip->cCpus; i++)
         {
             bool fRc;
             ASMAtomicCmpXchgSize(&pGip->aCPUs[i].idCpu, idCpu, NIL_RTCPUID, fRc);
             if (fRc)
-                break;
+                return i;
         }
-
-    AssertRelease(i < pGip->cCpus);
-    return i;
+    } while (cTries++ < 32);
+    AssertReleaseFailed();
+    return i - 1;
 }
 
 
@@ -5054,11 +5055,10 @@ static void supdrvGipMpEventOnline(PSUPGLOBALINFOPAGE pGip, RTCPUID idCpu)
         RTCpuSetAddByIndex(&pGip->PresentCpuSet, iCpuSet);
     }
 
-    i = supdrvGipCpuIndexFromCpuId(pGip, idCpu);
-
     /*
      * Update the entry.
      */
+    i = supdrvGipCpuIndexFromCpuId(pGip, idCpu);
     idApic = ASMGetApicId();
     ASMAtomicUoWriteU16(&pGip->aCPUs[i].idApic,  idApic);
     ASMAtomicUoWriteS16(&pGip->aCPUs[i].iCpuSet, (int16_t)iCpuSet);
@@ -5070,6 +5070,7 @@ static void supdrvGipMpEventOnline(PSUPGLOBALINFOPAGE pGip, RTCPUID idCpu)
     ASMAtomicWriteU16(&pGip->aiCpuFromApicId[idApic],     i);
     ASMAtomicWriteU16(&pGip->aiCpuFromCpuSetIdx[iCpuSet], i);
 
+    /* commit it */
     ASMAtomicWriteSize(&pGip->aCPUs[i].enmState, SUPGIPCPUSTATE_ONLINE);
 }
 
@@ -5096,6 +5097,8 @@ static void supdrvGipMpEventOffline(PSUPGLOBALINFOPAGE pGip, RTCPUID idCpu)
 
     Assert(RTCpuSetIsMemberByIndex(&pGip->PossibleCpuSet, iCpuSet));
     RTCpuSetDelByIndex(&pGip->OnlineCpuSet, iCpuSet);
+
+    /* commit it */
     ASMAtomicWriteSize(&pGip->aCPUs[i].enmState, SUPGIPCPUSTATE_OFFLINE);
 }
 
@@ -5115,6 +5118,7 @@ static DECLCALLBACK(void) supdrvGipMpEvent(RTMPEVENT enmEvent, RTCPUID idCpu, vo
     PSUPDRVDEVEXT       pDevExt = (PSUPDRVDEVEXT)pvUser;
     PSUPGLOBALINFOPAGE  pGip    = pDevExt->pGip;
 
+    AssertRelease(idCpu == RTMpCpuId());
     AssertRelease(!RTThreadPreemptIsEnabled(NIL_RTTHREAD));
 
     /*
@@ -5139,8 +5143,7 @@ static DECLCALLBACK(void) supdrvGipMpEvent(RTMPEVENT enmEvent, RTCPUID idCpu, vo
      */
     if (enmEvent == RTMPEVENT_OFFLINE)
     {
-        RTCPUID idGipMaster;
-        ASMAtomicReadSize(&pDevExt->idGipMaster, &idGipMaster);
+        RTCPUID idGipMaster = ASMAtomicReadU32(&pDevExt->idGipMaster);
         if (idGipMaster == idCpu)
         {
             /*
@@ -5639,26 +5642,26 @@ static void supdrvGipUpdate(PSUPGLOBALINFOPAGE pGip, uint64_t u64NanoTS, uint64_
 static void supdrvGipUpdatePerCpu(PSUPGLOBALINFOPAGE pGip, uint64_t u64NanoTS, uint64_t u64TSC,
                                   RTCPUID idCpu, uint8_t idApic, uint64_t iTick)
 {
+    uint32_t iCpu;
+
     /*
-     * Avoid a potential race when a CPU online notification doesn't fire on the onlined CPU
-     * but the tick creeps in before the event notification is run.
+     * Avoid a potential race when a CPU online notification doesn't fire on
+     * the onlined CPU but the tick creeps in before the event notification is
+     * run.
      */
-    unsigned iCpu = 0;
-    if (iTick == 1)
+    if (RT_UNLIKELY(iTick == 1))
     {
-        uint32_t i = supdrvGipCpuIndexFromCpuId(pGip, idCpu);
-        if (pGip->aCPUs[i].enmState == SUPGIPCPUSTATE_OFFLINE)
+        iCpu = supdrvGipCpuIndexFromCpuId(pGip, idCpu);
+        if (pGip->aCPUs[iCpu].enmState == SUPGIPCPUSTATE_OFFLINE)
             supdrvGipMpEventOnline(pGip, idCpu);
     }
 
     iCpu = pGip->aiCpuFromApicId[idApic];
-
     if (RT_LIKELY(iCpu < pGip->cCpus))
     {
         PSUPGIPCPU pGipCpu = &pGip->aCPUs[iCpu];
         if (pGipCpu->idCpu == idCpu)
         {
-
             /*
              * Start update transaction.
              */
@@ -5682,3 +5685,4 @@ static void supdrvGipUpdatePerCpu(PSUPGLOBALINFOPAGE pGip, uint64_t u64NanoTS, u
         }
     }
 }
+

@@ -32,7 +32,31 @@
 #include <VBox/VBoxUhgsmi.h>
 
 /* One would increase this whenever definitions in this file are changed */
-#define VBOXVIDEOIF_VERSION 9
+#define VBOXVIDEOIF_VERSION 10
+
+#define VBOXWDDM_NODE_ID_SYSTEM           0
+#define VBOXWDDM_NODE_ID_3D               (VBOXWDDM_NODE_ID_SYSTEM)
+#define VBOXWDDM_NODE_ID_3D_KMT           (VBOXWDDM_NODE_ID_3D)
+#define VBOXWDDM_NODE_ID_2D_VIDEO         (VBOXWDDM_NODE_ID_3D_KMT+1)
+#define VBOXWDDM_NUM_NODES                (VBOXWDDM_NODE_ID_2D_VIDEO+1)
+
+#define VBOXWDDM_ENGINE_ID_SYSTEM         0
+#if (VBOXWDDM_NODE_ID_3D == VBOXWDDM_NODE_ID_SYSTEM)
+# define VBOXWDDM_ENGINE_ID_3D            (VBOXWDDM_ENGINE_ID_SYSTEM+1)
+#else
+# define VBOXWDDM_ENGINE_ID_3D            0
+#endif
+#if (VBOXWDDM_NODE_ID_3D_KMT == VBOXWDDM_NODE_ID_3D)
+# define VBOXWDDM_ENGINE_ID_3D_KMT     VBOXWDDM_ENGINE_ID_3D
+#else
+# define VBOXWDDM_ENGINE_ID_3D_KMT     0
+#endif
+#if (VBOXWDDM_NODE_ID_2D_VIDEO == VBOXWDDM_NODE_ID_3D)
+# define VBOXWDDM_ENGINE_ID_2D_VIDEO       VBOXWDDM_ENGINE_ID_3D
+#else
+# define VBOXWDDM_ENGINE_ID_2D_VIDEO       0
+#endif
+
 
 /* create allocation func */
 typedef enum
@@ -267,11 +291,20 @@ typedef struct VBOXWDDM_RECTS_INFO
 #define VBOXWDDM_RECTS_INFO_SIZE4CRECTS(_cRects) (RT_OFFSETOF(VBOXWDDM_RECTS_INFO, aRects[(_cRects)]))
 #define VBOXWDDM_RECTS_INFO_SIZE(_pRects) (VBOXVIDEOCM_CMD_RECTS_SIZE4CRECTS((_pRects)->cRects))
 
+typedef enum
+{
+    /* command to be post to user mode */
+    VBOXVIDEOCM_CMD_TYPE_UM = 0,
+    /* control command processed in kernel mode */
+    VBOXVIDEOCM_CMD_TYPE_CTL_KM,
+    VBOXVIDEOCM_CMD_DUMMY_32BIT = 0x7fffffff
+} VBOXVIDEOCM_CMD_TYPE;
+
 typedef struct VBOXVIDEOCM_CMD_HDR
 {
     uint64_t u64UmData;
     uint32_t cbCmd;
-    uint32_t u32CmdSpecific;
+    VBOXVIDEOCM_CMD_TYPE enmType;
 }VBOXVIDEOCM_CMD_HDR, *PVBOXVIDEOCM_CMD_HDR;
 
 AssertCompile((sizeof (VBOXVIDEOCM_CMD_HDR) & 7) == 0);
@@ -456,6 +489,13 @@ DECLINLINE(UINT) vboxWddmCalcBitsPerPixel(D3DDDIFORMAT format)
         case D3DDDIFMT_D32F_LOCKABLE:
             return 32;
         case D3DDDIFMT_S8_LOCKABLE:
+            return 8;
+        case D3DDDIFMT_DXT1:
+            return 4;
+        case D3DDDIFMT_DXT2:
+        case D3DDDIFMT_DXT3:
+        case D3DDDIFMT_DXT4:
+        case D3DDDIFMT_DXT5:
             return 8;
         default:
             AssertBreakpoint();

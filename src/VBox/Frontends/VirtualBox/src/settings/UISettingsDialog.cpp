@@ -28,7 +28,7 @@
 #include "UISettingsDialog.h"
 #include "VBoxWarningPane.h"
 #include "VBoxGlobal.h"
-#include "VBoxProblemReporter.h"
+#include "UIMessageCenter.h"
 #include "QIWidgetValidator.h"
 #include "VBoxSettingsSelector.h"
 #include "UISettingsPage.h"
@@ -138,7 +138,7 @@ UISettingsDialog::UISettingsDialog(QWidget *pParent)
 
     /* Setup connections: */
     connect(m_pSelector, SIGNAL(categoryChanged(int)), this, SLOT(sltCategoryChanged(int)));
-    connect(m_pButtonBox, SIGNAL(helpRequested()), &vboxProblem(), SLOT(showHelpHelpDialog()));
+    connect(m_pButtonBox, SIGNAL(helpRequested()), &msgCenter(), SLOT(sltShowHelpHelpDialog()));
 
     /* Translate UI: */
     retranslateUi();
@@ -173,12 +173,11 @@ void UISettingsDialog::sltRevalidate(QIWidgetValidator *pValidator)
     QString strWarning;
     QString strTitle = m_pSelector->itemTextByPage(pSettingsPage);
 
+    /* Recorrelate page with others before revalidation: */
+    recorrelate(pSettingsPage);
+
     /* Revalidate the page: */
     bool fValid = pSettingsPage->revalidate(strWarning, strTitle);
-
-    /* If revalidation is fully passed - recorrelate the pages: */
-    if (fValid && strWarning.isEmpty())
-        fValid = recorrelate(pSettingsPage, strWarning);
 
     /* Compose a message: */
     strWarning = strWarning.isEmpty() ? QString() :
@@ -267,6 +266,11 @@ void UISettingsDialog::retranslateUi()
         m_pWarningPane->setWarningText(m_strErrorHint);
     else if (!m_fSilent)
         m_pWarningPane->setWarningText(m_strWarningHint);
+
+#ifndef VBOX_GUI_WITH_TOOLBAR_SETTINGS
+    /* Retranslate current page headline: */
+    m_pLbTitle->setText(m_pSelector->itemText(m_pSelector->currentId()));
+#endif /* VBOX_GUI_WITH_TOOLBAR_SETTINGS */
 
     /* Get the list of validators: */
     QList<QIWidgetValidator*> validatorsList = findChildren<QIWidgetValidator*>();
@@ -369,11 +373,6 @@ void UISettingsDialog::addItem(const QString &strBigIcon,
     }
     if (pSettingsPage)
         assignValidator(pSettingsPage);
-}
-
-bool UISettingsDialog::recorrelate(QWidget * /* pPage */, QString & /* strWarning */)
-{
-    return true;
 }
 
 void UISettingsDialog::sltHandleValidityChanged(const QIWidgetValidator * /* pValidator */)

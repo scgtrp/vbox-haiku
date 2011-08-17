@@ -2446,6 +2446,14 @@ HRESULT ExtPackManager::refreshExtPack(const char *a_pszName, bool a_fUnusableIs
     else
     {
         /*
+         * Do this check here, otherwise VBoxExtPackCalcDir() will fail with a strange
+         * error.
+         */
+        bool fValid = VBoxExtPackIsValidName(a_pszName);
+        if (!fValid)
+            return setError(E_FAIL, "Invalid extension pack name specified");
+
+        /*
          * Does the dir exist?  Make some special effort to deal with case
          * sensitivie file systems (a_pszName is case insensitive and mangled).
          */
@@ -2480,7 +2488,7 @@ HRESULT ExtPackManager::refreshExtPack(const char *a_pszName, bool a_fUnusableIs
                          * Update the name and directory variables.
                          */
                         vrc = RTPathJoin(szDir, sizeof(szDir), m->strBaseDir.c_str(), Entry.szName); /* not really necessary */
-                        AssertLogRelRCReturnStmt(vrc, E_UNEXPECTED, RTDirClose(pDir));
+                        AssertLogRelRCReturnStmt(vrc, RTDirClose(pDir), E_UNEXPECTED);
                         a_pszName = Entry.szName;
                         fExists   = true;
                         break;
@@ -3021,6 +3029,47 @@ bool ExtPackManager::isExtPackUsable(const char *a_pszExtPack)
     ExtPack *pExtPack = findExtPack(a_pszExtPack);
     return pExtPack != NULL
         && pExtPack->m->fUsable;
+}
+
+/**
+ * Dumps all extension packs to the release log.
+ */
+void ExtPackManager::dumpAllToReleaseLog(void)
+{
+    AutoCaller autoCaller(this);
+    HRESULT hrc = autoCaller.rc();
+    if (FAILED(hrc))
+        return;
+    AutoReadLock autoLock(this COMMA_LOCKVAL_SRC_POS);
+
+    LogRel(("Installed Extension Packs:\n"));
+    for (ExtPackList::iterator it = m->llInstalledExtPacks.begin();
+         it != m->llInstalledExtPacks.end();
+         it++)
+    {
+        ExtPack::Data *pExtPackData = (*it)->m;
+        if (pExtPackData)
+        {
+            if (pExtPackData->fUsable)
+                LogRel(("  %s (Version: %s r%u; VRDE Module: %s)\n",
+                        pExtPackData->Desc.strName.c_str(),
+                        pExtPackData->Desc.strVersion.c_str(),
+                        pExtPackData->Desc.uRevision,
+                        pExtPackData->Desc.strVrdeModule.c_str() ));
+            else
+                LogRel(("  %s (Version: %s r%u; VRDE Module: %s unusable because of '%s')\n",
+                        pExtPackData->Desc.strName.c_str(),
+                        pExtPackData->Desc.strVersion.c_str(),
+                        pExtPackData->Desc.uRevision,
+                        pExtPackData->Desc.strVrdeModule.c_str(),
+                        pExtPackData->strWhyUnusable.c_str() ));
+        }
+        else
+            LogRel(("  pExtPackData is NULL\n"));
+    }
+
+    if (!m->llInstalledExtPacks.size())
+        LogRel(("  None installed!\n"));
 }
 
 /* vi: set tabstop=4 shiftwidth=4 expandtab: */

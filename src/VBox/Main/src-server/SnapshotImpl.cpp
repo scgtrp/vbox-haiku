@@ -449,6 +449,15 @@ STDMETHODIMP Snapshot::COMGETTER(Children)(ComSafeArrayOut(ISnapshot *, aChildre
     return S_OK;
 }
 
+STDMETHODIMP Snapshot::GetChildrenCount(ULONG* count)
+{
+    CheckComArgOutPointerValid(count);
+
+    *count = getChildrenCount();
+
+    return S_OK;
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 //
 // Snapshot public internal methods
@@ -1926,7 +1935,7 @@ void SessionMachine::restoreSnapshotHandler(RestoreSnapshotTask &aTask)
             throw rc;
         // unconditionally add the parent registry. We do similar in SessionMachine::EndTakingSnapshot
         // (mParent->saveSettings())
-        mParent->addGuidToListUniquely(llRegistriesThatNeedSaving, mParent->getGlobalRegistryId());
+        VirtualBox::addGuidToListUniquely(llRegistriesThatNeedSaving, mParent->getGlobalRegistryId());
 
         // let go of the locks while we're deleting image files below
         alock.leave();
@@ -2004,15 +2013,22 @@ void SessionMachine::restoreSnapshotHandler(RestoreSnapshotTask &aTask)
  * @note Locks mParent + this + children objects for writing!
  */
 STDMETHODIMP SessionMachine::DeleteSnapshot(IConsole *aInitiator,
-                                            IN_BSTR aId,
+                                            IN_BSTR aStartId,
+                                            IN_BSTR aEndId,
+                                            BOOL fDeleteAllChildren,
                                             MachineState_T *aMachineState,
                                             IProgress **aProgress)
 {
     LogFlowThisFuncEnter();
 
-    Guid id(aId);
-    AssertReturn(aInitiator && !id.isEmpty(), E_INVALIDARG);
+    Guid startId(aStartId);
+    Guid endId(aEndId);
+    AssertReturn(aInitiator && !startId.isEmpty() && !endId.isEmpty(), E_INVALIDARG);
     AssertReturn(aMachineState && aProgress, E_POINTER);
+
+    /** @todo implement the "and all children" and "range" variants */
+    if (fDeleteAllChildren || startId != endId)
+        ReturnComNotImplemented();
 
     AutoCaller autoCaller(this);
     AssertComRCReturn(autoCaller.rc(), autoCaller.rc());
@@ -2032,7 +2048,7 @@ STDMETHODIMP SessionMachine::DeleteSnapshot(IConsole *aInitiator,
                         Global::stringifyMachineState(mData->mMachineState));
 
     ComObjPtr<Snapshot> pSnapshot;
-    HRESULT rc = findSnapshotById(id, pSnapshot, true /* aSetError */);
+    HRESULT rc = findSnapshotById(startId, pSnapshot, true /* aSetError */);
     if (FAILED(rc)) return rc;
 
     AutoWriteLock snapshotLock(pSnapshot COMMA_LOCKVAL_SRC_POS);
@@ -2463,7 +2479,7 @@ void SessionMachine::deleteSnapshotHandler(DeleteSnapshotTask &aTask)
                 releaseSavedStateFile(stateFilePath, aTask.pSnapshot /* pSnapshotToIgnore */);
 
                 // machine will need saving now
-                mParent->addGuidToListUniquely(llRegistriesThatNeedSaving, getId());
+                VirtualBox::addGuidToListUniquely(llRegistriesThatNeedSaving, getId());
             }
         }
 
@@ -2638,7 +2654,7 @@ void SessionMachine::deleteSnapshotHandler(DeleteSnapshotTask &aTask)
                 it->mpSource->uninit();
 
             // One attachment is merged, must save the settings
-            mParent->addGuidToListUniquely(llRegistriesThatNeedSaving, getId());
+            VirtualBox::addGuidToListUniquely(llRegistriesThatNeedSaving, getId());
 
             // prevent calling cancelDeleteSnapshotMedium() for this attachment
             it = toDelete.erase(it);
@@ -2657,7 +2673,7 @@ void SessionMachine::deleteSnapshotHandler(DeleteSnapshotTask &aTask)
             aTask.pSnapshot->beginSnapshotDelete();
             aTask.pSnapshot->uninit();
 
-            mParent->addGuidToListUniquely(llRegistriesThatNeedSaving, getId());
+            VirtualBox::addGuidToListUniquely(llRegistriesThatNeedSaving, getId());
         }
     }
     catch (HRESULT aRC) { rc = aRC; }

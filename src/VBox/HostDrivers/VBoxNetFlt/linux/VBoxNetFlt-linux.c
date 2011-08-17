@@ -905,7 +905,10 @@ static int vboxNetFltLinuxStartXmitFilter(struct sk_buff *pSkb, struct net_devic
      */
     if (   !VALID_PTR(pOverride)
         || pOverride->u32Magic != VBOXNETDEVICEOPSOVERRIDE_MAGIC
-        || !VALID_PTR(pOverride->pOrgOps))
+# if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 29)
+        || !VALID_PTR(pOverride->pOrgOps)
+# endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 29) */
+        )
     {
         printk("vboxNetFltLinuxStartXmitFilter: bad override %p\n", pOverride);
         dev_kfree_skb(pSkb);
@@ -955,6 +958,9 @@ static void vboxNetFltLinuxHookDev(PVBOXNETFLTINS pThis, struct net_device *pDev
     PVBOXNETDEVICEOPSOVERRIDE   pOverride;
     RTSPINLOCKTMP               Tmp = RTSPINLOCKTMP_INITIALIZER;
 
+    /* Cancel override if ethtool_ops is missing (host-only case, #5712) */
+    if (!VALID_PTR(pDev->OVR_OPS))
+        return;
     pOverride = RTMemAlloc(sizeof(*pOverride));
     if (!pOverride)
         return;

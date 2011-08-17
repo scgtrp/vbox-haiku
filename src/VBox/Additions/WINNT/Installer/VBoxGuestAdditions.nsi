@@ -211,7 +211,7 @@ Var g_strAddVerBuild                    ; Installed Guest Additions: Build numbe
 Var g_strAddVerRev                      ; Installed Guest Additions: SVN revision
 Var g_strWinVersion                     ; Current Windows version we're running on
 Var g_bLogEnable                        ; Do logging when installing? "true" or "false"
-Var g_bWithWDDM                         ; Install the WDDM driver instead of the normal one
+Var g_bWithWDDM                         ; Install the WDDM driver instead of the XPDM one
 Var g_bCapWDDM                          ; Capability: Is the guest able to handle/use our WDDM driver?
 
 ; Command line parameters - these can be set/modified
@@ -803,11 +803,11 @@ Section /o $(VBOX_COMPONENT_D3D) SEC03
   !insertmacro InstallLib DLL NOTSHARED REBOOT_NOTPROTECTED "$%PATH_OUT%\bin\additions\d3d8.dll" "$g_strSystemDir\dllcache\d3d8.dll" "$TEMP"
   !insertmacro InstallLib DLL NOTSHARED REBOOT_NOTPROTECTED "$%PATH_OUT%\bin\additions\d3d9.dll" "$g_strSystemDir\dllcache\d3d9.dll" "$TEMP"
 
-  ; Save original DLLs ...
+  ; Save original DLLs (only if msd3d*.dll does not exist) ...
   SetOutPath $g_strSystemDir
   IfFileExists "$g_strSystemDir\msd3d8.dll" +1
     CopyFiles /SILENT "$g_strSystemDir\d3d8.dll" "$g_strSystemDir\msd3d8.dll"
-  IfFileExists "$g_strSystemDir\msd3d8.dll" +1
+  IfFileExists "$g_strSystemDir\msd3d9.dll" +1
     CopyFiles /SILENT "$g_strSystemDir\d3d9.dll" "$g_strSystemDir\msd3d9.dll"
 
   Push "$g_strSystemDir\d3d8.dll"
@@ -856,7 +856,7 @@ Section /o $(VBOX_COMPONENT_D3D) SEC03
     !insertmacro InstallLib DLL NOTSHARED REBOOT_NOTPROTECTED "$%VBOX_PATH_ADDITIONS_WIN_X86%\d3d8.dll" "$SYSDIR\dllcache\d3d8.dll" "$TEMP"
     !insertmacro InstallLib DLL NOTSHARED REBOOT_NOTPROTECTED "$%VBOX_PATH_ADDITIONS_WIN_X86%\d3d9.dll" "$SYSDIR\dllcache\d3d9.dll" "$TEMP"
 
-    ; Save original DLLs ...
+    ; Save original DLLs (only if msd3d*.dll does not exist) ...
     SetOutPath $SYSDIR
     IfFileExists "$SYSDIR\dllcache\msd3d8.dll" +1
       CopyFiles /SILENT "$SYSDIR\d3d8.dll" "$SYSDIR\msd3d8.dll"
@@ -964,9 +964,22 @@ Function .onSelChange
     ; If we're able to use the WDDM driver just use it instead of the replaced
     ; D3D components below
     ${If} $g_bCapWDDM == "true"
+      ;
+      ; Temporary solution: Since WDDM is marked as experimental yet we notify the user
+      ; that WDDM (Aero) support is available but not recommended for production use. He now
+      ; can opt-in for installing WDDM or still go for the old (XPDM) way -- safe mode still required!
+      ;
+      MessageBox MB_ICONQUESTION|MB_YESNO $(VBOX_COMPONENT_D3D_OR_WDDM) /SD IDNO IDYES d3d_install
+      ; Display an uncoditional hint about needed VRAM sizes
+      ; Note: We also could use the PCI configuration space (WMI: Win32_SystemSlot Class) for querying
+      ;       the current VRAM size, but let's keep it simple for now
+      MessageBox MB_ICONINFORMATION|MB_OK $(VBOX_COMPONENT_D3D_HINT_VRAM) /SD IDOK
       StrCpy $g_bWithWDDM "true"
       Goto exit
     ${EndIf}
+
+d3d_install:
+
 !endif
 
     ${If} $g_bForceInstall != "true"

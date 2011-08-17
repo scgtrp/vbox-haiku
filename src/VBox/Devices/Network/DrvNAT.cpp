@@ -4,7 +4,7 @@
  */
 
 /*
- * Copyright (C) 2006-2010 Oracle Corporation
+ * Copyright (C) 2006-2011 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;
@@ -27,12 +27,14 @@
 #include <VBox/vmm/pdmdrv.h>
 #include <VBox/vmm/pdmnetifs.h>
 #include <VBox/vmm/pdmnetinline.h>
+
 #include <iprt/assert.h>
-#include <iprt/file.h>
-#include <iprt/mem.h>
-#include <iprt/string.h>
 #include <iprt/critsect.h>
 #include <iprt/cidr.h>
+#include <iprt/file.h>
+#include <iprt/mem.h>
+#include <iprt/pipe.h>
+#include <iprt/string.h>
 #include <iprt/stream.h>
 #include <iprt/uuid.h>
 
@@ -162,9 +164,9 @@ typedef struct DRVNAT
 #endif
 #ifndef RT_OS_WINDOWS
     /** The write end of the control pipe. */
-    RTFILE                  PipeWrite;
+    RTPIPE                  hPipeWrite;
     /** The read end of the control pipe. */
-    RTFILE                  PipeRead;
+    RTPIPE                  hPipeRead;
 #else
     /** for external notification */
     HANDLE                  hWakeupEvent;
@@ -295,7 +297,6 @@ static DECLCALLBACK(void) drvNATRecvWorker(PDRVNAT pThis, uint8_t *pu8Buf, int c
     int rc;
     STAM_PROFILE_START(&pThis->StatNATRecv, a);
 
-    STAM_PROFILE_START(&pThis->StatNATRecvWait, b);
 
     while (ASMAtomicReadU32(&pThis->cUrgPkts) != 0)
     {
@@ -309,7 +310,10 @@ static DECLCALLBACK(void) drvNATRecvWorker(PDRVNAT pThis, uint8_t *pu8Buf, int c
     rc = RTCritSectEnter(&pThis->DevAccessLock);
     AssertRC(rc);
 
+    STAM_PROFILE_START(&pThis->StatNATRecvWait, b);
     rc = pThis->pIAboveNet->pfnWaitReceiveAvail(pThis->pIAboveNet, RT_INDEFINITE_WAIT);
+    STAM_PROFILE_STOP(&pThis->StatNATRecvWait, b);
+
     if (RT_SUCCESS(rc))
     {
         rc = pThis->pIAboveNet->pfnReceive(pThis->pIAboveNet, pu8Buf, cb);
@@ -330,7 +334,6 @@ done_unlocked:
 
     drvNATNotifyNATThread(pThis, "drvNATRecvWorker");
 
-    STAM_PROFILE_STOP(&pThis->StatNATRecvWait, b);
     STAM_PROFILE_STOP(&pThis->StatNATRecv, a);
 }
 
@@ -568,7 +571,8 @@ static void drvNATNotifyNATThread(PDRVNAT pThis, const char *pszWho)
     int rc;
 #ifndef RT_OS_WINDOWS
     /* kick poll() */
-    rc = RTFileWrite(pThis->PipeWrite, "", 1, NULL);
+    size_t cbIgnored;
+    rc = RTPipeWrite(pThis->hPipeWrite, "", 1, &cbIgnored);
 #else
     /* kick WSAWaitForMultipleEvents */
     rc = WSASetEvent(pThis->hWakeupEvent);
@@ -743,9 +747,9 @@ static DECLCALLBACK(int) drvNATAsyncIoThread(PPDMDRVINS pDrvIns, PPDMTHREAD pThr
         /* don't pass the management pipe */
         slirp_select_fill(pThis->pNATState, &nFDs, &polls[1]);
 
-        polls[0].fd = pThis->PipeRead;
+        polls[0].fd = RTPipeToNative(pThis->hPipeRead);
         /* POLLRDBAND usually doesn't used on Linux but seems used on Solaris */
-        polls[0].events = POLLRDNORM|POLLPRI|POLLRDBAND;
+        polls[0].events = POLLRDNORM | POLLPRI | POLLRDBAND;
         polls[0].revents = 0;
 
         int cChangedFDs = poll(polls, nFDs + 1, slirp_get_timeout_ms(pThis->pNATState));
@@ -769,23 +773,21 @@ static DECLCALLBACK(int) drvNATAsyncIoThread(PPDMDRVINS pDrvIns, PPDMTHREAD pThr
             slirp_select_poll(pThis->pNATState, &polls[1], nFDs);
             if (polls[0].revents & (POLLRDNORM|POLLPRI|POLLRDBAND))
             {
-                /* drain the pipe */
-                char ch[1];
-                size_t cbRead;
-                int counter = 0;
-                /*
-                 * drvNATSend decoupled so we don't know how many times
+                /* drain the pipe
+                 *
+                 * Note! drvNATSend decoupled so we don't know how many times
                  * device's thread sends before we've entered multiplex,
                  * so to avoid false alarm drain pipe here to the very end
                  *
                  * @todo: Probably we should counter drvNATSend to count how
                  * deep pipe has been filed before drain.
                  *
-                 * XXX:Make it reading exactly we need to drain the pipe.
                  */
-                /** @todo use RTPipeCreate + RTPipeRead(,biggerbuffer) here, it's
-                 *        non-blocking. */
-                RTFileRead(pThis->PipeRead, &ch, 1, &cbRead);
+                /** @todo XXX: Make it reading exactly we need to drain the
+                 * pipe.*/
+                char ch;
+                size_t cbRead;
+                RTPipeRead(pThis->hPipeRead, &ch, 1, &cbRead);
             }
         }
         /* process _all_ outstanding requests but don't wait */
@@ -1154,7 +1156,8 @@ static DECLCALLBACK(int) drvNATConstruct(PPDMDRVINS pDrvIns, PCFGMNODE pCfg, uin
                               "PassDomain\0TFTPPrefix\0BootFile\0Network"
                               "\0NextServer\0DNSProxy\0BindIP\0UseHostResolver\0"
                               "SlirpMTU\0AliasMode\0"
-                              "SockRcv\0SockSnd\0TcpRcv\0TcpSnd\0"))
+                              "SockRcv\0SockSnd\0TcpRcv\0TcpSnd\0"
+                              "SoMaxConnection\0"))
         return PDMDRV_SET_ERROR(pDrvIns, VERR_PDM_DRVINS_UNKNOWN_CFG_VALUES,
                                 N_("Unknown NAT configuration option, only supports PassDomain,"
                                 " TFTPPrefix, BootFile and Network"));
@@ -1211,6 +1214,8 @@ static DECLCALLBACK(int) drvNATConstruct(PPDMDRVINS pDrvIns, PCFGMNODE pCfg, uin
     i32AliasMode |= (i32MainAliasMode & 0x1 ? 0x1 : 0);
     i32AliasMode |= (i32MainAliasMode & 0x2 ? 0x40 : 0);
     i32AliasMode |= (i32MainAliasMode & 0x4 ? 0x4 : 0);
+    int i32SoMaxConn = 1;
+    GET_S32(rc, pThis, pCfg, "SoMaxConnection", i32SoMaxConn);
     /*
      * Query the network port interface.
      */
@@ -1253,6 +1258,7 @@ static DECLCALLBACK(int) drvNATConstruct(PPDMDRVINS pDrvIns, PCFGMNODE pCfg, uin
         slirp_set_dhcp_next_server(pThis->pNATState, pThis->pszNextServer);
         slirp_set_dhcp_dns_proxy(pThis->pNATState, !!fDNSProxy);
         slirp_set_mtu(pThis->pNATState, MTU);
+        slirp_set_somaxconn(pThis->pNATState, i32SoMaxConn);
         char *pszBindIP = NULL;
         GET_STRING_ALLOC(rc, pThis, pCfg, "BindIP", pszBindIP);
         rc = slirp_set_binding_address(pThis->pNATState, pszBindIP);
@@ -1344,15 +1350,8 @@ static DECLCALLBACK(int) drvNATConstruct(PPDMDRVINS pDrvIns, PCFGMNODE pCfg, uin
             /*
              * Create the control pipe.
              */
-            int fds[2];
-            if (pipe(&fds[0]) != 0) /** @todo RTPipeCreate() or something... */
-            {
-                rc = RTErrConvertFromErrno(errno);
-                AssertRC(rc);
-                return rc;
-            }
-            pThis->PipeRead = fds[0];
-            pThis->PipeWrite = fds[1];
+            rc = RTPipeCreate(&pThis->hPipeRead, &pThis->hPipeWrite, 0 /*fFlags*/);
+            AssertRCReturn(rc, rc);
 #else
             pThis->hWakeupEvent = CreateEvent(NULL, FALSE, FALSE, NULL); /* auto-reset event */
             slirp_register_external_event(pThis->pNATState, pThis->hWakeupEvent,
@@ -1361,12 +1360,12 @@ static DECLCALLBACK(int) drvNATConstruct(PPDMDRVINS pDrvIns, PCFGMNODE pCfg, uin
 
             rc = PDMDrvHlpThreadCreate(pDrvIns, &pThis->pSlirpThread, pThis, drvNATAsyncIoThread,
                                        drvNATAsyncIoWakeup, 128 * _1K, RTTHREADTYPE_IO, "NAT");
-            AssertRC(rc);
+            AssertRCReturn(rc, rc);
 
 #ifdef VBOX_WITH_SLIRP_MT
             rc = PDMDrvHlpThreadCreate(pDrvIns, &pThis->pGuestThread, pThis, drvNATAsyncIoGuest,
                                        drvNATAsyncIoGuestWakeup, 128 * _1K, RTTHREADTYPE_IO, "NATGUEST");
-            AssertRC(rc);
+            AssertRCReturn(rc, rc);
 #endif
 
             pThis->enmLinkState = pThis->enmLinkStateWant = PDMNETWORKLINKSTATE_UP;

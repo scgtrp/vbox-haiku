@@ -52,8 +52,9 @@ if1of ($(KBUILD_TARGET), freebsd haiku $(if $(defined VBOX_WITH_ADDITION_DRIVERS
  VBoxGuest_DEPS.haiku   += $(VBOX_SVN_REV_HEADER)
  VBoxGuest_DEFS          = VBGL_VBOXGUEST VBOX_WITH_HGCM
  VBoxGuest_INCS          = .
- VBoxGuest_INCS.freebsd  = $(PATH_VBoxGuest) $(PATH_INS)/gen-sys-hdrs
+ VBoxGuest_INCS.freebsd  = $(VBoxGuest_0_OUTDIR) $(PATH_STAGE)/gen-sys-hdrs
  VBoxGuest_INCS.linux    = ../../../Runtime/r0drv/linux
+ VBoxGuest_LDFLAGS.solaris += -N misc/ctf
  ifneq ($(KBUILD_TARGET),os2)
   ifeq ($(KBUILD_TARGET),win)
    VBoxGuest_LDFLAGS.x86 = -Entry:DriverEntry@8
@@ -86,9 +87,9 @@ if1of ($(KBUILD_TARGET), freebsd haiku $(if $(defined VBOX_WITH_ADDITION_DRIVERS
   	$(VBOX_LIB_VBGL_R0BASE) \
   	$(VBOX_LIB_IPRT_GUEST_R0)
   VBoxGuest_ORDERDEPS.freebsd = \
-  	$(PATH_INS)/gen-sys-hdrs/pci_if.h \
-  	$(PATH_INS)/gen-sys-hdrs/bus_if.h \
-  	$(PATH_INS)/gen-sys-hdrs/device_if.h
+  	$(PATH_STAGE)/gen-sys-hdrs/pci_if.h \
+  	$(PATH_STAGE)/gen-sys-hdrs/bus_if.h \
+  	$(PATH_STAGE)/gen-sys-hdrs/device_if.h
   
   ifeq ($(KBUILD_TARGET), haiku)
    # Haiku drivers cannot export symbols for other drivers, but modules can.
@@ -201,6 +202,7 @@ ifeq ($(KBUILD_TARGET),linux)
 		-e "s;_MODULE_;vboxguest;g" \
 		-e "s;_OLDMODULES_;vboxguest vboxadd vboxsf vboxvfs vboxvideo;g" \
 		--output $@ $<
+	$(QUIET)$(CHMOD) a+rx,u+w $@
 
  # scripts.
  INSTALLS += vboxguest-sh

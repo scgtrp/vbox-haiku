@@ -1,7 +1,7 @@
 /* $Id$ */
 /** @file
  *
- * VBox extension to Wine D3D
+ * VBox extension to Wine D3D - shared resource
  *
  * Copyright (C) 2010 Oracle Corporation
  *
@@ -18,12 +18,10 @@
 
 #define VBOXSHRC_F_SHARED              0x00000001 /* shared rc */
 #define VBOXSHRC_F_SHARED_OPENED       0x00000002 /* if set shared rc is opened, otherwise it is created */
-#define VBOXSHRC_F_INITIALIZED         0x00000004 /* set once shared rc is initialized */
 
 #define VBOXSHRC_GET_SHAREFLAFS(_o) ((_o)->resource.sharerc_flags)
-#define VBOXSHRC_GET_SHAREHANDLE(_o) ((_o)->resource.sharerc_handle)
-#define VBOXSHRC_SET_SHAREHANDLE(_o, _h) ((_o)->resource.sharerc_handle = (_h))
-#define VBOXSHRC_SET_INITIALIZED(_o) (VBOXSHRC_GET_SHAREFLAFS(_o) |= VBOXSHRC_F_INITIALIZED)
+#define VBOXSHRC_GET_SHAREHANDLE(_o) ((HANDLE)(_o)->resource.sharerc_handle)
+#define VBOXSHRC_SET_SHAREHANDLE(_o, _h) ((_o)->resource.sharerc_handle = (DWORD)(_h))
 #define VBOXSHRC_COPY_SHAREDATA(_oDst, _oSrc) do { \
         VBOXSHRC_GET_SHAREFLAFS(_oDst) = VBOXSHRC_GET_SHAREFLAFS(_oSrc); \
         VBOXSHRC_SET_SHAREHANDLE(_oDst, VBOXSHRC_GET_SHAREFLAFS(_oSrc)); \
@@ -32,21 +30,26 @@
 #define VBOXSHRC_SET_SHARED_OPENED(_o) (VBOXSHRC_GET_SHAREFLAFS(_o) |= VBOXSHRC_F_SHARED_OPENED)
 #define VBOXSHRC_IS_SHARED(_o) (!!(VBOXSHRC_GET_SHAREFLAFS(_o) & VBOXSHRC_F_SHARED))
 #define VBOXSHRC_IS_SHARED_OPENED(_o) (!!(VBOXSHRC_GET_SHAREFLAFS(_o) & VBOXSHRC_F_SHARED_OPENED))
-#define VBOXSHRC_IS_INITIALIZED(_o) (!!(VBOXSHRC_GET_SHAREFLAFS(_o) & VBOXSHRC_F_INITIALIZED))
+#define VBOXSHRC_IS_SHARED_UNLOCKED(_o) (VBOXSHRC_IS_SHARED(_o) && !VBOXSHRC_IS_LOCKED(_o))
 
-#ifdef DEBUG_misha
-/* just for simplicity */
-#ifdef RT_ARCH_X86
-#define AssertBreakpoint() do { __asm {int 3} } while (0)
-#else
-#define AssertBreakpoint() do { /* @todo */ } while (0)
-#endif
-#define Assert(_expr) do { \
-        if (!(_expr)) AssertBreakpoint(); \
+#define VBOXSHRC_LOCK(_o) do{ \
+        Assert(VBOXSHRC_IS_SHARED(_o)); \
+        ++(_o)->resource.sharerc_locks; \
     } while (0)
+#define VBOXSHRC_UNLOCK(_o) do{ \
+        Assert(VBOXSHRC_IS_SHARED(_o)); \
+        --(_o)->resource.sharerc_locks; \
+        Assert((_o)->resource.sharerc_locks < UINT32_MAX/2); \
+    } while (0)
+#define VBOXSHRC_IS_LOCKED(_o) ( \
+        !!((_o)->resource.sharerc_locks) \
+        )
+#ifdef VBOX_WINE_WITH_IPRT
+# include <iprt/assert.h>
 #else
-#define AssertBreakpoint() do { } while (0)
-#define Assert(_expr) do { } while (0)
+# define AssertBreakpoint() do { } while (0)
+# define Assert(_expr) do { } while (0)
 #endif
+
 
 #endif /* #ifndef ___vboxsharedrc_h___ */
