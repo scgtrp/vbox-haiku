@@ -68,8 +68,8 @@ static device_hooks g_VBoxGuestHaikuDeviceHooks =
  */
 static status_t VBoxGuestHaikuOpen(const char *name, uint32 flags, void **cookie)
 {
-    int                 rc;
-    PVBOXGUESTSESSION   pSession;
+    int rc;
+    PVBOXGUESTSESSION pSession;
 
     LogFlow((DRIVER_NAME ":VBoxGuestHaikuOpen\n"));
 
@@ -96,21 +96,21 @@ static status_t VBoxGuestHaikuOpen(const char *name, uint32 flags, void **cookie
 static status_t VBoxGuestHaikuClose(void *cookie)
 {
     PVBOXGUESTSESSION pSession = (PVBOXGUESTSESSION)cookie;
-	RTSPINLOCKTMP tmp;
+    RTSPINLOCKTMP tmp;
     Log(("VBoxGuestHaikuClose: pSession=%p\n", pSession));
 
-	RTSpinlockAcquireNoInts(g_DevExt.SessionSpinlock, &tmp);
-	
-	//XXX: we don't know if it belongs to this session !
+    RTSpinlockAcquireNoInts(g_DevExt.SessionSpinlock, &tmp);
+    
+    //XXX: we don't know if it belongs to this session !
     if (sState.selectSync) {
-    	//dprintf(DRIVER_NAME "close: unblocking select %p %x\n", sState.selectSync, sState.selectEvent);
-		notify_select_event(sState.selectSync, sState.selectEvent);
-		sState.selectEvent = (uint8_t)0;
-		sState.selectRef = (uint32_t)0;
-		sState.selectSync = (void *)NULL;
-	}
-	
-	RTSpinlockReleaseNoInts(g_DevExt.SessionSpinlock, &tmp);
+        //dprintf(DRIVER_NAME "close: unblocking select %p %x\n", sState.selectSync, sState.selectEvent);
+        notify_select_event(sState.selectSync, sState.selectEvent);
+        sState.selectEvent = (uint8_t)0;
+        sState.selectRef = (uint32_t)0;
+        sState.selectSync = (void *)NULL;
+    }
+    
+    RTSpinlockReleaseNoInts(g_DevExt.SessionSpinlock, &tmp);
 
     return 0;
 }
@@ -239,37 +239,37 @@ static status_t VBoxGuestHaikuIOCtl(void *cookie, uint32 op, void *data, size_t 
 static status_t VBoxGuestHaikuSelect (void *cookie, uint8 event, uint32 ref, selectsync *sync)
 {
     PVBOXGUESTSESSION pSession = (PVBOXGUESTSESSION)cookie;
-	RTSPINLOCKTMP tmp;
-	status_t err = B_OK;
-   	//dprintf(DRIVER_NAME "select(,%d,%p)\n", event, sync);
+    RTSPINLOCKTMP tmp;
+    status_t err = B_OK;
+    //dprintf(DRIVER_NAME "select(,%d,%p)\n", event, sync);
 
 
-	switch (event) {
-		case B_SELECT_READ:
-		//case B_SELECT_ERROR:
-			break;
-		default:
-			return EINVAL;
-	}
+    switch (event) {
+        case B_SELECT_READ:
+        //case B_SELECT_ERROR:
+            break;
+        default:
+            return EINVAL;
+    }
 
-	RTSpinlockAcquireNoInts(g_DevExt.SessionSpinlock, &tmp);
-	
+    RTSpinlockAcquireNoInts(g_DevExt.SessionSpinlock, &tmp);
+    
     uint32_t u32CurSeq = ASMAtomicUoReadU32(&g_DevExt.u32MousePosChangedSeq);
     if (pSession->u32MousePosChangedSeq != u32CurSeq) {
-    	//dprintf(DRIVER_NAME "select: notifying now: %p %x\n", sync, event);
+        //dprintf(DRIVER_NAME "select: notifying now: %p %x\n", sync, event);
         pSession->u32MousePosChangedSeq = u32CurSeq;
-		notify_select_event(sync, event);
+        notify_select_event(sync, event);
     } else if (sState.selectSync == NULL) {
-    	//dprintf(DRIVER_NAME "select: caching: %p %x\n", sync, event);
-		sState.selectEvent = (uint8_t)event;
-		sState.selectRef = (uint32_t)ref;
-		sState.selectSync = (void *)sync;
-	} else {
-    	//dprintf(DRIVER_NAME "select: dropping: %p %x\n", sync, event);
-		err = B_WOULD_BLOCK;
-	}
-	
-	RTSpinlockReleaseNoInts(g_DevExt.SessionSpinlock, &tmp);
+        //dprintf(DRIVER_NAME "select: caching: %p %x\n", sync, event);
+        sState.selectEvent = (uint8_t)event;
+        sState.selectRef = (uint32_t)ref;
+        sState.selectSync = (void *)sync;
+    } else {
+        //dprintf(DRIVER_NAME "select: dropping: %p %x\n", sync, event);
+        err = B_WOULD_BLOCK;
+    }
+    
+    RTSpinlockReleaseNoInts(g_DevExt.SessionSpinlock, &tmp);
 
     return err;
 #if 0
@@ -303,21 +303,21 @@ static status_t VBoxGuestHaikuSelect (void *cookie, uint8 event, uint32 ref, sel
 static status_t VBoxGuestHaikuDeselect (void *cookie, uint8 event, selectsync *sync)
 {
     PVBOXGUESTSESSION pSession = (PVBOXGUESTSESSION)cookie;
-	RTSPINLOCKTMP tmp;
-	status_t err = B_OK;
-   	//dprintf(DRIVER_NAME "deselect(,%d,%p)\n", event, sync);
+    RTSPINLOCKTMP tmp;
+    status_t err = B_OK;
+    //dprintf(DRIVER_NAME "deselect(,%d,%p)\n", event, sync);
 
-	RTSpinlockAcquireNoInts(g_DevExt.SessionSpinlock, &tmp);
-	
-	if (sState.selectSync == sync) {
-    	//dprintf(DRIVER_NAME "deselect: dropping: %p %x\n", sState.selectSync, sState.selectEvent);
-		sState.selectEvent = (uint8_t)0;
-		sState.selectRef = (uint32_t)0;
-		sState.selectSync = NULL;
-	} else
-		err = B_OK;
-	
-	RTSpinlockReleaseNoInts(g_DevExt.SessionSpinlock, &tmp);
+    RTSpinlockAcquireNoInts(g_DevExt.SessionSpinlock, &tmp);
+    
+    if (sState.selectSync == sync) {
+        //dprintf(DRIVER_NAME "deselect: dropping: %p %x\n", sState.selectSync, sState.selectEvent);
+        sState.selectEvent = (uint8_t)0;
+        sState.selectRef = (uint32_t)0;
+        sState.selectSync = NULL;
+    } else
+        err = B_OK;
+    
+    RTSpinlockReleaseNoInts(g_DevExt.SessionSpinlock, &tmp);
     return err;
 }
 
@@ -331,10 +331,10 @@ static status_t VBoxGuestHaikuRead (void *cookie, off_t position, void *data, si
 {
     PVBOXGUESTSESSION pSession = (PVBOXGUESTSESSION)cookie;
 
-   	//dprintf(DRIVER_NAME "read(,,%d)\n", *numBytes);
+    //dprintf(DRIVER_NAME "read(,,%d)\n", *numBytes);
 
     if (*numBytes == 0)
-    	return 0;
+        return 0;
 
     uint32_t u32CurSeq = ASMAtomicUoReadU32(&g_DevExt.u32MousePosChangedSeq);
     if (pSession->u32MousePosChangedSeq != u32CurSeq) {
@@ -345,38 +345,38 @@ static status_t VBoxGuestHaikuRead (void *cookie, off_t position, void *data, si
     }
 
     *numBytes = 0;
-	return 0;
+    return 0;
 }
 
 int32 api_version = B_CUR_DRIVER_API_VERSION;
 
 status_t init_hardware() {
-	return get_module(MODULE_NAME, (module_info **)&g_VBoxGuest);
+    return get_module(MODULE_NAME, (module_info **)&g_VBoxGuest);
 }
 
 status_t init_driver() {
-	return B_OK;
+    return B_OK;
 }
 
 device_hooks *find_device(const char* name) {
-	static device_hooks g_VBoxGuestHaikuDeviceHooks = {
-		VBoxGuestHaikuOpen,
-		VBoxGuestHaikuClose,
-		VBoxGuestHaikuFree,
-		VBoxGuestHaikuIOCtl,
-		VBoxGuestHaikuRead,
-		VBoxGuestHaikuWrite,
-		VBoxGuestHaikuSelect,
-		VBoxGuestHaikuDeselect
-	};
-	return &g_VBoxGuestHaikuDeviceHooks;
+    static device_hooks g_VBoxGuestHaikuDeviceHooks = {
+        VBoxGuestHaikuOpen,
+        VBoxGuestHaikuClose,
+        VBoxGuestHaikuFree,
+        VBoxGuestHaikuIOCtl,
+        VBoxGuestHaikuRead,
+        VBoxGuestHaikuWrite,
+        VBoxGuestHaikuSelect,
+        VBoxGuestHaikuDeselect
+    };
+    return &g_VBoxGuestHaikuDeviceHooks;
 }
 
 const char** publish_devices() {
-	static const char* devices[] = { DEVICE_NAME, NULL };
-	return devices;
+    static const char* devices[] = { DEVICE_NAME, NULL };
+    return devices;
 }
 
 void uninit_driver() {
-	put_module(MODULE_NAME);
+    put_module(MODULE_NAME);
 }

@@ -62,7 +62,7 @@ DECLVBGL(int)    VBoxGuestIDCCall(void *pvSession, unsigned iCmd, void *pvData, 
 
 static status_t std_ops(int32 op, ...);
 
-int32	api_version = B_CUR_DRIVER_API_VERSION;
+int32    api_version = B_CUR_DRIVER_API_VERSION;
 
 /** List of cloned device. Managed by the kernel. */
 //static struct clonedevs    *g_pVBoxGuestHaikuClones;
@@ -74,99 +74,99 @@ int32	api_version = B_CUR_DRIVER_API_VERSION;
 static pci_module_info *gPCI;
 
 static struct vboxguest_module_info g_VBoxGuest = {
-	{
-		MODULE_NAME,
-		0,
-		std_ops
-	},
-	{0},
-	{0},
-	0,
-	RTLogBackdoorPrintf,
-	RTLogBackdoorPrintfV,
-	RTLogSetDefaultInstanceThread,
-	RTMemAllocExTag,
-	RTMemContAlloc,
-	RTMemContFree,
-	RTMemFreeEx,
-	RTMpIsCpuPossible,
-	RTMpNotificationDeregister,
-	RTMpNotificationRegister,
-	RTMpOnAll,
-	RTMpOnOthers,
-	RTMpOnSpecific,
-	RTPowerNotificationDeregister,
-	RTPowerNotificationRegister,
-	RTPowerSignalEvent,
-	RTR0AssertPanicSystem,
-	RTR0Init,
-	RTR0MemObjAddress,
-	RTR0MemObjAddressR3,
-	RTR0MemObjAllocContTag,
-	RTR0MemObjAllocLowTag,
-	RTR0MemObjAllocPageTag,
-	RTR0MemObjAllocPhysExTag,
-	RTR0MemObjAllocPhysNCTag,
-	RTR0MemObjAllocPhysTag,
-	RTR0MemObjEnterPhysTag,
-	RTR0MemObjFree,
-	RTR0MemObjGetPagePhysAddr,
-	RTR0MemObjIsMapping,
-	RTR0MemObjLockKernelTag,
-	RTR0MemObjLockUserTag,
-	RTR0MemObjMapKernelExTag,
-	RTR0MemObjMapKernelTag,
-	RTR0MemObjMapUserTag,
-	RTR0MemObjProtect,
-	RTR0MemObjReserveKernelTag,
-	RTR0MemObjReserveUserTag,
-	RTR0MemObjSize,
-	RTR0ProcHandleSelf,
-	RTR0Term,
-	RTR0TermForced,
-	RTSemEventGetResolution,
-	RTSemEventMultiGetResolution,
-	RTSemEventMultiWaitEx,
-	RTSemEventMultiWaitExDebug,
-	RTSemEventWaitEx,
-	RTSemEventWaitExDebug,
-	RTThreadIsInInterrupt,
-	RTThreadPreemptDisable,
-	RTThreadPreemptIsEnabled,
-	RTThreadPreemptIsPending,
-	RTThreadPreemptIsPendingTrusty,
-	RTThreadPreemptIsPossible,
-	RTThreadPreemptRestore,
-	RTTimerGetSystemGranularity,
-	RTTimerReleaseSystemGranularity,
-	RTTimerRequestSystemGranularity,
-	RTSpinlockAcquireNoInts,
-	RTSpinlockReleaseNoInts,
-	RTMemTmpAllocTag,
-	RTMemTmpFree,
-	RTLogRelDefaultInstance,
-	RTErrConvertToErrno,
-	VBoxGuestCommonIOCtl,
-	VBoxGuestCreateUserSession,
-	VBoxGuestCloseSession,
-	VBoxGuestIDCOpen,
-	VBoxGuestIDCClose,
-	VBoxGuestIDCCall,
-	RTAssertMsg1Weak,
-	RTAssertMsg2Weak,
-	RTAssertMsg2WeakV,
-	RTAssertShouldPanic,
-	RTSemFastMutexCreate,
-	RTSemFastMutexDestroy,
-	RTSemFastMutexRelease,
-	RTSemFastMutexRequest,
-	RTHeapSimpleRelocate,
-	RTHeapOffsetInit,
-	RTHeapSimpleInit,
-	RTHeapOffsetAlloc,
-	RTHeapSimpleAlloc,
-	RTHeapOffsetFree,
-	RTHeapSimpleFree
+    {
+        MODULE_NAME,
+        0,
+        std_ops
+    },
+    {0},
+    {0},
+    0,
+    RTLogBackdoorPrintf,
+    RTLogBackdoorPrintfV,
+    RTLogSetDefaultInstanceThread,
+    RTMemAllocExTag,
+    RTMemContAlloc,
+    RTMemContFree,
+    RTMemFreeEx,
+    RTMpIsCpuPossible,
+    RTMpNotificationDeregister,
+    RTMpNotificationRegister,
+    RTMpOnAll,
+    RTMpOnOthers,
+    RTMpOnSpecific,
+    RTPowerNotificationDeregister,
+    RTPowerNotificationRegister,
+    RTPowerSignalEvent,
+    RTR0AssertPanicSystem,
+    RTR0Init,
+    RTR0MemObjAddress,
+    RTR0MemObjAddressR3,
+    RTR0MemObjAllocContTag,
+    RTR0MemObjAllocLowTag,
+    RTR0MemObjAllocPageTag,
+    RTR0MemObjAllocPhysExTag,
+    RTR0MemObjAllocPhysNCTag,
+    RTR0MemObjAllocPhysTag,
+    RTR0MemObjEnterPhysTag,
+    RTR0MemObjFree,
+    RTR0MemObjGetPagePhysAddr,
+    RTR0MemObjIsMapping,
+    RTR0MemObjLockKernelTag,
+    RTR0MemObjLockUserTag,
+    RTR0MemObjMapKernelExTag,
+    RTR0MemObjMapKernelTag,
+    RTR0MemObjMapUserTag,
+    RTR0MemObjProtect,
+    RTR0MemObjReserveKernelTag,
+    RTR0MemObjReserveUserTag,
+    RTR0MemObjSize,
+    RTR0ProcHandleSelf,
+    RTR0Term,
+    RTR0TermForced,
+    RTSemEventGetResolution,
+    RTSemEventMultiGetResolution,
+    RTSemEventMultiWaitEx,
+    RTSemEventMultiWaitExDebug,
+    RTSemEventWaitEx,
+    RTSemEventWaitExDebug,
+    RTThreadIsInInterrupt,
+    RTThreadPreemptDisable,
+    RTThreadPreemptIsEnabled,
+    RTThreadPreemptIsPending,
+    RTThreadPreemptIsPendingTrusty,
+    RTThreadPreemptIsPossible,
+    RTThreadPreemptRestore,
+    RTTimerGetSystemGranularity,
+    RTTimerReleaseSystemGranularity,
+    RTTimerRequestSystemGranularity,
+    RTSpinlockAcquireNoInts,
+    RTSpinlockReleaseNoInts,
+    RTMemTmpAllocTag,
+    RTMemTmpFree,
+    RTLogRelDefaultInstance,
+    RTErrConvertToErrno,
+    VBoxGuestCommonIOCtl,
+    VBoxGuestCreateUserSession,
+    VBoxGuestCloseSession,
+    VBoxGuestIDCOpen,
+    VBoxGuestIDCClose,
+    VBoxGuestIDCCall,
+    RTAssertMsg1Weak,
+    RTAssertMsg2Weak,
+    RTAssertMsg2WeakV,
+    RTAssertShouldPanic,
+    RTSemFastMutexCreate,
+    RTSemFastMutexDestroy,
+    RTSemFastMutexRelease,
+    RTSemFastMutexRequest,
+    RTHeapSimpleRelocate,
+    RTHeapOffsetInit,
+    RTHeapSimpleInit,
+    RTHeapOffsetAlloc,
+    RTHeapSimpleAlloc,
+    RTHeapOffsetFree,
+    RTHeapSimpleFree
 };
 
 #if 0
@@ -239,7 +239,7 @@ static status_t VBoxGuestHaikuDetach(void)
     VBoxGuestHaikuRemoveIRQ(pState);
 
     if (pState->iVMMDevMemAreaId)
-    	delete_area(pState->iVMMDevMemAreaId);
+        delete_area(pState->iVMMDevMemAreaId);
 
     VBoxGuestDeleteDevExt(&g_DevExt);
 
@@ -273,27 +273,27 @@ void VBoxGuestNativeISRMousePollEvent(PVBOXGUESTDEVEXT pDevExt)
 {
     LogFlow((MODULE_NAME "::NativeISRMousePollEvent:\n"));
 
-	RTSPINLOCKTMP tmp;
-	status_t err = B_OK;
-	//dprintf(MODULE_NAME ": isr mouse\n");
+    RTSPINLOCKTMP tmp;
+    status_t err = B_OK;
+    //dprintf(MODULE_NAME ": isr mouse\n");
 
     /*
      * Wake up poll waiters.
      */
     //selwakeup(&g_SelInfo);
     //XXX:notify_select_event();
-	RTSpinlockAcquire(g_DevExt.SessionSpinlock, &tmp);
-	
-	if (sState.selectSync) {
-		//dprintf(MODULE_NAME ": isr mouse: notify\n");
-		notify_select_event(sState.selectSync, sState.selectEvent);
-		sState.selectEvent = (uint8_t)0;
-		sState.selectRef = (uint32_t)0;
-		sState.selectSync = NULL;
-	} else
-		err = B_ERROR;
-	
-	RTSpinlockRelease(g_DevExt.SessionSpinlock, &tmp);
+    RTSpinlockAcquire(g_DevExt.SessionSpinlock, &tmp);
+    
+    if (sState.selectSync) {
+        //dprintf(MODULE_NAME ": isr mouse: notify\n");
+        notify_select_event(sState.selectSync, sState.selectEvent);
+        sState.selectEvent = (uint8_t)0;
+        sState.selectRef = (uint32_t)0;
+        sState.selectSync = NULL;
+    } else
+        err = B_ERROR;
+    
+    RTSpinlockRelease(g_DevExt.SessionSpinlock, &tmp);
 }
 
 /**
@@ -307,7 +307,7 @@ static int VBoxGuestHaikuAddIRQ(void *pvState)
     status_t status;
     struct VBoxGuestDeviceState *pState = (struct VBoxGuestDeviceState *)pvState;
 
-	status = install_io_interrupt_handler(pState->iIrqResId, VBoxGuestHaikuISR, pState,  0);
+    status = install_io_interrupt_handler(pState->iIrqResId, VBoxGuestHaikuISR, pState,  0);
 
     if (status != B_OK)
     {
@@ -369,8 +369,8 @@ dprintf(MODULE_NAME ": RTLogCreate: %d\n", rc);
         RTLogSetDefaultInstance(pRelLogger);//XXX
     }
 #endif
-	Log((MODULE_NAME ": plip!\n"));
-	LogAlways((MODULE_NAME ": plop!\n"));
+    Log((MODULE_NAME ": plip!\n"));
+    LogAlways((MODULE_NAME ": plop!\n"));
 
     /*
      * Allocate I/O port resource.
@@ -382,12 +382,12 @@ dprintf(MODULE_NAME ": RTLogCreate: %d\n", rc);
         /*
          * Map the MMIO region.
          */
-	    uint32 phys = pDevice->u.h0.base_registers[1];
+        uint32 phys = pDevice->u.h0.base_registers[1];
         //XXX check flags for mem ?
         pState->VMMDevMemSize    = pDevice->u.h0.base_register_sizes[1];
         pState->iVMMDevMemAreaId = map_physical_memory("VirtualBox Guest MMIO",
-        	phys, pState->VMMDevMemSize, B_ANY_KERNEL_BLOCK_ADDRESS,
-        	B_KERNEL_READ_AREA | B_KERNEL_WRITE_AREA, &pState->pMMIOBase);
+            phys, pState->VMMDevMemSize, B_ANY_KERNEL_BLOCK_ADDRESS,
+            B_KERNEL_READ_AREA | B_KERNEL_WRITE_AREA, &pState->pMMIOBase);
 
         if (pState->iVMMDevMemAreaId > 0 && pState->pMMIOBase)
         {
@@ -441,50 +441,50 @@ static status_t VBoxGuestHaikuProbe(pci_info *pDevice)
 
 status_t init_module(void)
 {
-	status_t status = B_ENTRY_NOT_FOUND;
-	pci_info info;
-	int ix = 0;
+    status_t status = B_ENTRY_NOT_FOUND;
+    pci_info info;
+    int ix = 0;
 
-	if (get_module(B_PCI_MODULE_NAME, (module_info **)&gPCI))
-		return ENOSYS;
+    if (get_module(B_PCI_MODULE_NAME, (module_info **)&gPCI))
+        return ENOSYS;
 
-	while ((*gPCI->get_nth_pci_info)(ix++, &info) == B_OK) {
-		if (VBoxGuestHaikuProbe(&info) == 0) {
-			// we found it
-			status = VBoxGuestHaikuAttach(&info);
-			break;
-		}
-	}
+    while ((*gPCI->get_nth_pci_info)(ix++, &info) == B_OK) {
+        if (VBoxGuestHaikuProbe(&info) == 0) {
+            // we found it
+            status = VBoxGuestHaikuAttach(&info);
+            break;
+        }
+    }
 
     return status;
 }
 
 void uninit_module(void)
 {
-	VBoxGuestHaikuDetach();
+    VBoxGuestHaikuDetach();
 
-	put_module(B_PCI_MODULE_NAME);
+    put_module(B_PCI_MODULE_NAME);
 }
 
 static status_t std_ops(int32 op, ...) {
-	switch(op) {
-	case B_MODULE_INIT:
-		dprintf(MODULE_NAME ": B_MODULE_INIT\n");
-		init_module();
-		break;
-	case B_MODULE_UNINIT:
-		dprintf(MODULE_NAME ": B_MODULE_UNINIT\n");
-		uninit_module();
-		break;
-	default:
-		return B_ERROR;
-	}
-	return B_OK;
+    switch(op) {
+    case B_MODULE_INIT:
+        dprintf(MODULE_NAME ": B_MODULE_INIT\n");
+        init_module();
+        break;
+    case B_MODULE_UNINIT:
+        dprintf(MODULE_NAME ": B_MODULE_UNINIT\n");
+        uninit_module();
+        break;
+    default:
+        return B_ERROR;
+    }
+    return B_OK;
 }
 
 _EXPORT module_info *modules[] = {
-	(module_info*) &g_VBoxGuest,
-	NULL
+    (module_info*) &g_VBoxGuest,
+    NULL
 };
 
 /* Common code that depend on g_DevExt. */
