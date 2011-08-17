@@ -26,6 +26,8 @@
 
 int32 api_version = B_CUR_DRIVER_API_VERSION; // revision of driver API we support
 
+extern "C" status_t vm_set_area_memory_type(area_id id, phys_addr_t physicalBase, uint32 type);
+
 struct Benaphore {
 	sem_id	sem;
 	int32	count;
@@ -157,8 +159,10 @@ status_t init_driver()
 			
 			gDeviceInfo.sharedInfo->framebufferArea =
 				map_physical_memory("vboxvideo framebuffer", (phys_addr_t)gDeviceInfo.pciInfo.u.h0.base_registers[0],
-					gDeviceInfo.pciInfo.u.h0.base_register_sizes[0], B_ANY_KERNEL_BLOCK_ADDRESS | B_MTR_WC,
-					B_READ_AREA + B_WRITE_AREA, &(gDeviceInfo.sharedInfo->framebuffer));
+					gDeviceInfo.pciInfo.u.h0.base_register_sizes[0], B_ANY_KERNEL_BLOCK_ADDRESS,
+					B_READ_AREA | B_WRITE_AREA, &(gDeviceInfo.sharedInfo->framebuffer));
+			vm_set_area_memory_type(gDeviceInfo.sharedInfo->framebufferArea,
+				(phys_addr_t)gDeviceInfo.pciInfo.u.h0.base_registers[0], B_MTR_WC);
 			
 			break;
 		}
