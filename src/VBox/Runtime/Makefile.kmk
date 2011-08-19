@@ -926,7 +926,6 @@ RuntimeR3_SOURCES.solaris.sparc64 = \
 	generic/RTSystemQueryDmiString-generic.cpp
 
 RuntimeR3_SOURCES.haiku = \
-\
 	generic/RTDirQueryInfo-generic.cpp \
 	generic/RTDirSetTimes-generic.cpp \
 	generic/RTFileMove-generic.cpp \
@@ -956,6 +955,7 @@ RuntimeR3_SOURCES.haiku = \
 	r3/posix/RTTimeNow-posix.cpp \
 	r3/posix/dir-posix.cpp \
 	r3/posix/env-posix.cpp \
+	r3/posix/errvars-posix.cpp \
 	r3/posix/fileio-posix.cpp \
 	r3/posix/fileio2-posix.cpp \
 	r3/posix/filelock-posix.cpp \

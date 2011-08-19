@@ -1,4 +1,4 @@
-# $Id: header.kmk 2413 2010-09-11 17:43:04Z bird $
+# $Id: header.kmk 2537 2011-08-02 19:44:43Z bird $
 ## @file
 # kBuild - File included at top of a makefile.
 #
@@ -70,8 +70,8 @@ ifneq ($(KBUILD_VERSION_MAJOR).$(KBUILD_VERSION_MINOR),0.1)
   $(warning kBuild: kmk minor version mismatch! Expected '1' but found '$(KBUILD_VERSION_MINOR)'!)
  endif
 else
- ifneq ($(int-ge $(KBUILD_VERSION_PATCH),4),1)
-  $(warning kBuild: kmk version mismatch! Expected 0.1.4 or later. Actual version is $(KBUILD_VERSION_MAJOR).$(KBUILD_VERSION_MINOR).$(KBUILD_VERSION_PATCH).)
+ if $(KBUILD_VERSION_PATCH) < 999
+  $(error kBuild: kmk version mismatch! Expected 0.1.999 or later. Actual version is $(KBUILD_VERSION).)
  endif
 endif
 
@@ -79,7 +79,7 @@ endif
 # The revision in which this file was last modified.
 # This can be useful when using development versions of kBuild.
 #
-KMK_REVISION := $(patsubst %:,,  $Rev: 2413 $  )
+KMK_REVISION := $(patsubst %:,,  $Rev: 2537 $  )
 
 
 #
@@ -158,6 +158,18 @@ DOLLAR := $$
 # Equal character.
 EQUAL := =
 
+##
+# Percent character.
+PERCENT := %
+
+##
+# Single quote character.
+SQUOTE := '
+
+##
+# Double quote character.
+DQUOTE := "
+
 
 #
 # The list of standard build types in kBuild.
@@ -176,7 +188,7 @@ KBUILD_BLD_TYPES := release profile debug
 # this keyword namespace is shared between OSes, architectures, cpus and
 # build types. (PORTME)
 #
-KBUILD_OSES   := darwin dos dragonfly freebsd haiku l4 linux netbsd nt openbsd os2 solaris win os-agnostic
+KBUILD_OSES   := darwin dos dragonfly freebsd l4 linux netbsd nt openbsd os2 solaris win os-agnostic haiku
 KBUILD_ARCHES := x86 amd64 sparc32 sparc64 s390 s390x ppc32 ppc64 mips32 mips64 ia64 hppa32 hppa64 arm alpha
 
 
@@ -389,6 +401,43 @@ else
  CURSUBDIR          := .
 endif
 
+# Install directory layout.  Relative to PATH_INS.
+KBUILD_INST_PATHS   := BIN DLL SYS LIB DOC DEBUG SBIN LIBEXEC SHARE
+INST_BIN             = bin/
+if1of ($(KBUILD_TARGET), win)
+INST_DLL             = bin/
+else
+INST_DLL             = lib/
+endif
+if1of ($(KBUILD_TARGET), os2 win)
+INST_SYS             = drivers/
+else
+INST_SYS             = kernel/
+endif
+INST_LIB             = lib/
+INST_DOC             = share/doc/
+INST_DEBUG           = debug/
+INST_SBIN            = sbin/
+INST_LIBEXEC         = libexec/
+INST_SHARE           = share/
+
+# Staging directory layout. Relative to PATH_STAGE.
+STAGE_BIN            = $(INST_BIN)
+STAGE_DLL            = $(INST_DLL)
+STAGE_SYS            = $(INST_SYS)
+STAGE_LIB            = $(INST_LIB)
+STAGE_DOC            = $(INST_DOC)
+STAGE_DEBUG          = $(INST_DEBUG)
+STAGE_SBIN           = $(INST_SBIN)
+STAGE_LIBEXEC        = $(INST_LIBEXEC)
+STAGE_SHARE          = $(INST_SHARE)
+
+# Install and staging directory paths.
+$(foreach path, $(KBUILD_INST_PATHS), \
+	$(eval PATH_STAGE_$(path) = $$(patsubst %/,%,$$(PATH_STAGE)/$$(STAGE_$(path)))) \
+	$(eval PATH_INST_$(path) = $$(patsubst %/,%,$$(PATH_INS)/$$(INST_$(path)))) \
+)
+
 # Output directories.
 ifndef PATH_OUT_BASE
  PATH_OUT_BASE      := $(PATH_ROOT)/out
@@ -403,12 +452,21 @@ endif # !define PATH_OUT
 PATH_OBJCACHE        = $(PATH_OUT_BASE)/kObjCache
 PATH_OBJ             = $(PATH_OUT)/obj
 PATH_TARGET          = $(PATH_OBJ)/$(CURSUBDIR)
-PATH_INS             = $(PATH_OUT)
-PATH_BIN             = $(PATH_INS)/bin
-PATH_DLL             = $(PATH_INS)/bin
-PATH_SYS             = $(PATH_INS)/bin
-PATH_LIB             = $(PATH_INS)/lib
-PATH_DOC             = $(PATH_INS)/doc
+PATH_STAGE           = $(PATH_OUT)/stage
+ifndef PATH_INS
+ ifdef DESTROOT
+PATH_INS             = $(DESTROOT)
+ else
+PATH_INS             = $(PATH_OUT)/dist
+ endif
+endif
+
+# Tripwire obsolete PATH defines.
+PATH_BIN = $(error kBuild: PATH_BIN is obsoleted in kBuild 0.1.2. Use PATH_STAGE_BIN or PATH_INST_BIN instead)
+PATH_DLL = $(error kBuild: PATH_LIB is obsoleted in kBuild 0.1.2. Use PATH_STAGE_DLL or PATH_INST_DLL instead)
+PATH_LIB = $(error kBuild: PATH_LIB is obsoleted in kBuild 0.1.2. Use PATH_STAGE_LIB or PATH_INST_LIB instead)
+PATH_SYS = $(error kBuild: PATH_SYS is obsoleted in kBuild 0.1.2. Use PATH_STAGE_SYS or PATH_INST_SYS instead)
+PATH_DOC = $(error kBuild: PATH_DOC is obsoleted in kBuild 0.1.2. Use PATH_STAGE_DOC or PATH_INST_DOC instead)
 
 # Development tool tree.
 KBUILD_DEVTOOLS      = $(if $(PATH_DEVTOOLS),$(PATH_DEVTOOLS),$(PATH_ROOT)/tools)
@@ -657,6 +715,13 @@ export SHELL MAKESHELL
 # Symlinking is problematic on some platforms...
 LN_SYMLINK  := $(LN) -s
 
+# When copying to the staging area, use hard links to save time and space.
+ifndef KBUILD_NO_HARD_LINKING
+ INSTALL_STAGING := $(INSTALL) --hard-link-files-when-possible
+else
+ INSTALL_STAGING := $(INSTALL)
+endif
+
 
 #
 # Some Functions.
@@ -694,6 +759,13 @@ no-drive    = $(word $(words $(subst :, ,$(1))),$(subst :, ,$(1)))
 ## Removes the root slash from a path (if it has one)
 # @param	$1 		the path
 no-root-slash = $(patsubst /%,%,$(1))
+
+##
+# Similar to firstword, except it returns the value of first defined variable.
+# @param        $1              list of variables to probe.
+define FIRST-DEFINED-VAR
+local .RETURN := $(strip $(firstdefined $1, value))
+endef
 
 ## Figure out where to put object files.
 # @param    $1      real target name.
@@ -763,6 +835,63 @@ local long_options := $(filter-out =delete=%,$(subst :, =delete=,$(subst =, =del
 local .RETURN := $(if-expr $(pos $1,$(short_options)) != 0 || "$(filter $2,$(long_options))" != "",$4,$5)
 endef
 
+##
+# Make an assignment to a deprecated variable.
+#
+# @param   $1   The variable name.
+# @param   $2   The value.
+# @param   $3   The variable to use instead.
+#
+ifdef KBUILD_WITH_DEPREATED_AS_ERROR
+ KB_FN_ASSIGN_DEPRECATED = $(eval $(subst :,$$(COLON),$1) = $2$$(error $1 is deprecated, use $3 instead))
+else
+ KB_FN_ASSIGN_DEPRECATED = $(eval $(subst :,$$(COLON),$1) = $2$$(warning $1 is deprecated, use $3 instead))
+endif
+
+##
+# Show an assertion message.
+#
+# @param   $1   The assertion name.
+# @param   $2   The details.
+#
+define KB_FN_ASSERT_MSG
+$(info !! kBuild $1 Assertion Failed !!)
+ifdef target
+ $(info !! target:   $(target))
+ local varloc := $(where $(target))
+ if "$(varloc)" == "undefined"
+  local varloc := $(where $(target)_TEMPLATE)
+ endif
+ if "$(varloc)" == "undefined"
+  local varloc := $(where $(target)_SOURCES)
+ endif
+ if "$(varloc)" == "undefined"
+  local varloc := $(where $(target)_EXTENDS)
+ endif
+ if "$(varloc)" == "undefined"
+  local varloc := $(where target)
+ endif
+ ifneq ($(varloc),)
+  $(info !! location: $(varloc))
+ else
+  $(info !! probable location: $($(target)_DEFPATH)/Makefile.kmk)
+ endif
+endif
+$(info !! $2)
+$(error fixme)
+endef
+
+##
+# Throw an error if the given path $1 isn't absolute and assertions are enabled.
+#
+# @param   $1   The name of the path variable to check.
+#
+ifdef KBUILD_INTERNAL_STRICT
+ KB_FN_ASSERT_ABSPATH = $(if-expr "$(abspath $($(strip $1)))" != "$(strip $($(strip $1)))",\
+ 	$(evalcall KB_FN_ASSERT_MSG,abspath,$1 is:$(NLTAB)'$($(strip $1))'$(NLTAB)expected:$(NLTAB)'$(abspath $($(strip $1)))'))
+else
+ KB_FN_ASSERT_ABSPATH :=
+endif
 
 
 #
@@ -827,20 +956,22 @@ PROPS_TOOLS := TOOL CTOOL CXXTOOL OBJCTOOL OBJCXXTOOL ASTOOL RCTOOL ARTOOL LDTOO
 # The list of non-accumulative target properties.
 # A Config.kmk file can add it's own properties to this list and kBuild
 # will do the necessary inheritance for templates, sdks, tools and targets.
-PROPS_SINGLE := $(PROPS_TOOLS) TEMPLATE INST NOINST BLD_TYPE BLD_TRG BLD_TRG_ARCH BLD_TRG_CPU FETCHDIR \
+PROPS_SINGLE := $(PROPS_TOOLS) TEMPLATE INSTTYPE INST STAGE NOINST BLD_TYPE BLD_TRG BLD_TRG_ARCH BLD_TRG_CPU FETCHDIR \
 	OBJSUFF COBJSUFF CXXOBJSUFF OBJCOBJSUFF OBJCXXOBJSUFF ASOBJSUFF RCOBJSUFF SYSSUFF BINSUFF EXESUFF DLLSUFF LIBSUFF ARLIBSUFF \
-	MODE UID GID
+	MODE UID GID LD_DEBUG DEBUG_INSTTYPE DEBUG_INST DEBUG_STAGE
 ## PROPS_SINGLE_LNK
 # Subset of PROPS_SINGLE which applies to all linkable targets.
 PROPS_SINGLE_LNK := TOOL TEMPLATE CTOOL CXXTOOL OBJCTOOL OBJCXXTOOL ASTOOL RCTOOL \
 	INST NOINST BLD_TYPE BLD_TRG BLD_TRG_ARCH BLD_TRG_CPU \
 	OBJSUFF COBJSUFF CXXOBJSUFF OBJCOBJSUFF OBJCXXOBJSUFF ASOBJSUFF RCOBJSUFF \
-	MODE UID GID
+	MODE UID GID LD_DEBUG DEBUG_INSTTYPE DEBUG_INST DEBUG_STAGE
 
 ## PROPS_DEFERRED
 # This list of non-accumulative target properties which are or may be
 # functions, and thus should not be expanded until the very last moment.
-PROPS_DEFERRED := INSTFUN INSTALLER PRE_CMDS POST_CMDS NAME SONAME
+PROPS_DEFERRED := INSTFUN INSTALLER PRE_CMDS POST_CMDS PRE_INST_CMDS POST_INST_CMDS \
+	PRE_FILE_CMDS POST_FILE_CMDS PRE_SYMLINK_CMDS POST_SYMLINK_CMDS PRE_DIRECTORY_CMDS POST_DIRECTORY_CMDS \
+	NAME SONAME
 
 ## PROPS_ACCUMULATE_R
 # The list of accumulative target properties where the right most value/flag
@@ -857,7 +988,7 @@ PROPS_ACCUMULATE_R := \
 	ASFLAGS ASDEFS \
 	RCFLAGS RCDEFS \
 	LDFLAGS \
-	IDFLAGS IFDLAGS ISFLAGS \
+	IDFLAGS IFFLAGS EXEC_IFFLAGS ISFLAGS \
 	FETCHFLAGS UNPACKFLAGS PATCHFLAGS
 ## PROPS_ACCUMULATE_R_LNK
 # Subset of PROPS_ACCUMULATE_R which applies to all linkable targets.
@@ -869,7 +1000,7 @@ PROPS_ACCUMULATE_R_LNK := \
 	OBJCXXFLAGS OBJCXXDEFS \
 	ASFLAGS ASDEFS \
 	RCFLAGS RCDEFS \
-	IDFLAGS IFDLAGS ISFLAGS
+	IDFLAGS IFFLAGS ISFLAGS
 
 ## PROPS_ACCUMULATE
 # The list of accumulative target properties where the left most value/flag
@@ -877,7 +1008,7 @@ PROPS_ACCUMULATE_R_LNK := \
 # A Config.kmk file can add it's own properties to this list and kBuild
 # will do the necessary inheritance from templates to targets.
 PROPS_ACCUMULATE_L := \
-	SDKS USES SOURCES SRC_HANDLERS INTERMEDIATES \
+	SDKS USES SOURCES EXEC_SOURCES SRC_HANDLERS INTERMEDIATES \
 	INCS CINCS CXXINCS OBJCINCS OBJCXXINCS ASINCS RCINCS \
 	LIBS LIBPATH \
 	DIRS BLDDIRS CLEAN
@@ -934,13 +1065,14 @@ PROPS_MISCBINS_ACCUMULATE_L  := $(PROPS_ACCUMULATE_L_LNK) LIBS LIBPATH
 
 ## @name Properties valid on installs (INSTALLS)
 ## @{
-PROPS_INSTALLS_SINGLE        := TOOL TEMPLATE INST NOINST
-PROPS_INSTALLS_DEFERRED      := INSTFUN INSTALLER
-PROPS_INSTALLS_ACCUMULATE_R  := DEPS ORDERDEPS
-PROPS_INSTALLS_ACCUMULATE_L  := SOURCES DIRS CLEAN
+PROPS_INSTALLS_SINGLE        := TOOL TEMPLATE INST NOINST BLD_TYPE BLD_TRG BLD_TRG_ARCH BLD_TRG_CPU MODE UID GID
+PROPS_INSTALLS_DEFERRED      := INSTFUN INSTALLER PRE_FILE_CMDS POST_FILE_CMDS PRE_SYMLINK_CMDS POST_SYMLINK_CMDS \
+	PRE_DIRECTORY_CMDS POST_DIRECTORY_CMDS
+PROPS_INSTALLS_ACCUMULATE_R  := DEPS ORDERDEPS GOALS INST_ONLY_GOALS STAGE_ONLY_GOALS IFFLAGS EXEC_IFFLAGS
+PROPS_INSTALLS_ACCUMULATE_L  := SOURCES EXEC_SOURCES DIRS CLEAN
 ## @}
 
-## @name Properties valid on fetches (INSTALLS)
+## @name Properties valid on fetches (FETCHES)
 ## @{
 PROPS_FETCHES_SINGLE         := TOOL TEMPLATE FETCHTOOL UNPACKTOOL PATCHTOOL INST FETCHDIR
 PROPS_FETCHES_DEFERRED       :=
@@ -1056,12 +1188,20 @@ PASS_OTHERS_trgs    :=
 PASS_OTHERS_vars    := _OTHERS
 PASS_OTHERS_pass    := others
 
-## PASS: install
+## PASS: staging
 # This pass installs the built entities to a sandbox area.
 ## @todo split this up into build install (to sandbox) and real installation.
+PASS_STAGING        := Staging
+PASS_STAGING_trgs   :=
+PASS_STAGING_vars   := _STAGE_DIRS _INSTALLS _STAGE_FILES _DEBUG_STAGE_DIRS _DEBUG_STAGE_FILES
+PASS_STAGING_pass   := staging
+
+## PASS: install
+# This pass installs the built entities to where they will be used (using
+# DESTROOT or PATH_INS to indicate where this is).
 PASS_INSTALLS       := Install
 PASS_INSTALLS_trgs  :=
-PASS_INSTALLS_vars  := _INSTALLS_DIRS _INSTALLS _INSTALLS_FILES
+PASS_INSTALLS_vars  := _INSTALLS_DIRS _INSTALLS_FILES _DEBUG_INSTALL_DIRS _DEBUG_INSTALL_FILES
 PASS_INSTALLS_pass  := installs
 
 ## PASS: testing
@@ -1094,12 +1234,12 @@ PASS_NOTHING_pass   := nothing
 
 ## DEFAULT_PASSES
 # The default passes and their order.
-DEFAULT_PASSES := BLDPROGS LIBRARIES DLLS BINARIES OTHERS INSTALLS
+DEFAULT_PASSES := BLDPROGS LIBRARIES DLLS BINARIES OTHERS STAGING
 
 ## PASSES
 # The passes that should be defined. This must include
 # all passes mentioned by DEFAULT_PASSES.
-PASSES := FETCHES PATCHES $(DEFAULT_PASSES) TESTING PACKING CLEAN NOTHING
+PASSES := FETCHES PATCHES $(DEFAULT_PASSES) INSTALLS TESTING PACKING CLEAN NOTHING
 
 
 #
@@ -1165,15 +1305,42 @@ endif
 # variables and uses relative paths or paths with incorrect case.
 #
 PATH_OUT_BASE := $(abspath $(PATH_OUT_BASE))
-PATH_OUT    := $(abspath $(PATH_OUT))
-PATH_OBJ    := $(abspath $(PATH_OBJ))
-PATH_TARGET := $(abspath $(PATH_TARGET))
-PATH_INS    := $(abspath $(PATH_INS))
-PATH_BIN    := $(abspath $(PATH_BIN))
-PATH_DLL    := $(abspath $(PATH_DLL))
-PATH_SYS    := $(abspath $(PATH_SYS))
-PATH_LIB    := $(abspath $(PATH_LIB))
-PATH_DOC    := $(abspath $(PATH_DOC))
+PATH_OUT      := $(abspath $(PATH_OUT))
+PATH_OBJ      := $(abspath $(PATH_OBJ))
+PATH_TARGET   := $(abspath $(PATH_TARGET))
+PATH_INS      := $(abspath $(PATH_INS))
+PATH_STAGE    := $(abspath $(PATH_STAGE))
+
+# Finalize the install and staging directory layouts.
+define def_kbuild_finalize_inst
+local val := $(strip $($(y)_$(x)))
+ifeq ($(val),)
+ $(error kBuild: '$(y)_$(x)' is set to an empty value.)
+endif
+ifneq ($(words $(val)),1)
+ $(error kBuild: The '$(y)_$(x)' value '$(val)' should not contain spaces.)
+endif
+ifneq ($(pos \,$(val)), 0)
+ $(error kBuild: The '$(y)_$(x)' value '$(val)' contains DOS slashes: not allowed.)
+endif
+ifneq ($(pos $(COLON),$(val)), 0)
+ $(error kBuild: The '$(y)_$(x)' value '$(val)' contains colon: not allowed.)
+endif
+ifneq ($(substr $(val),-1), /)
+ $(error kBuild: The '$(y)_$(x)' value '$(val)' has no trailing slash.)
+endif
+if $(pos /../,$(val)) != 0 || "$(substr $(val), 3)" == "../"
+ $(error kBuild: The '$(y)_$(x)' value '$(val)' contains dot-dot escape.)
+endif
+$($(y)_$(x) := $(val)
+
+local val := $(strip $(PATH_$(y)_$(x)))
+ifeq ($(val),)
+ $(error kBuild: 'PATH_$(y)_$(x)' is set to an empty value.)
+endif
+PATH_$(y)_$(x) := $(val)
+endef
+$(foreach y, INST STAGE, $(foreach x, $(KBUILD_INST_PATHS), $(evalcall def_kbuild_finalize_inst)))
 
 
 #
@@ -1346,4 +1513,5 @@ endif
 # end-of-file-content
 __header_kmk__ := 1
 endif # __header_kmk__
+
 

@@ -288,6 +288,9 @@ if test -z "$KBUILD_HOST"; then
             KBUILD_HOST=win
             ;;
 
+        Haiku)
+            KBUILD_HOST=haiku
+            ;;
         *)
             echo "$0: unknown os $KBUILD_HOST" 1>&${ERR_REDIR}
             sleep 1
@@ -322,7 +325,7 @@ if test -z "$KBUILD_HOST_ARCH"; then
         x86_64|AMD64|amd64|k8|k8l|k9|k10)
             KBUILD_HOST_ARCH='amd64'
             ;;
-        x86|i86pc|ia32|i[3456789]86)
+        x86|i86pc|ia32|i[3456789]86|BePC)
             KBUILD_HOST_ARCH='x86'
             ;;
         sparc32|sparc|sparcv8|sparcv7|sparcv8e)
@@ -364,7 +367,6 @@ if test -z "$KBUILD_HOST_ARCH"; then
         alpha)
             KBUILD_HOST_ARCH='alpha'
             ;;
-
         *)  echo "$0: unknown cpu/arch - $KBUILD_HOST_ARCH" 1>&${ERR_REDIR}
             sleep 1
             exit 1

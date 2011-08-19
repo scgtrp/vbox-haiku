@@ -155,14 +155,14 @@ RTR3DECL(int) RTFileSetTimes(RTFILE hFile, PCRTTIMESPEC pAccessTime, PCRTTIMESPE
     else
     {
         RTFSOBJINFO ObjInfo;
-        int rc = RTFileQueryInfo(File, &ObjInfo, RTFSOBJATTRADD_UNIX);
+        int rc = RTFileQueryInfo(hFile, &ObjInfo, RTFSOBJATTRADD_UNIX);
         if (RT_FAILURE(rc))
             return rc;
         memcpy(&aTimespecs[0], pAccessTime ? pAccessTime : &ObjInfo.AccessTime, sizeof(struct timespec));
         memcpy(&aTimespecs[1], pModificationTime ? pModificationTime : &ObjInfo.ModificationTime, sizeof(struct timespec));
     }
 
-    if (futimens((int)File, aTimespecs))
+    if (futimens((int)hFile, aTimespecs))
     {
         int rc = RTErrConvertFromErrno(errno);
         Log(("RTFileSetTimes(%RTfile,%p,%p,,): returns %Rrc\n", File, pAccessTime, pModificationTime, rc));

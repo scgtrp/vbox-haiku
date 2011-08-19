@@ -210,6 +210,7 @@ status_t VBoxGuestDeskbarView::_Init(BMessage *archive)
     if (RT_SUCCESS(rc)) {
         rc = VbglR3Init();
     }
+	printf("%d\n", rc);
 	if (RT_SUCCESS(rc)) {
 		fClipboardService = new VBoxClipboardService();
 		fDisplayService = new VBoxDisplayService();
