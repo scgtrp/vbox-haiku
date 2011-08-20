@@ -1285,10 +1285,11 @@ ifndef VBOX_GCC_TOOL
  else ifeq ($(KBUILD_TARGET),haiku)
    ifdef VBOX_USE_GCC4
     VBOX_GCC_TOOL = GXX3
+    TOOL_GXX3_LDFLAGS.sysmod ?= 
    else
     VBOX_GCC_TOOL = GXX2
+    TOOL_GXX2_LDFLAGS.sysmod ?= 
    endif
-  TOOL_GXX2_LDFLAGS.sysmod ?= 
  else
   VBOX_GCC_TOOL := GXX3
   ifeq ($(KBUILD_TARGET_ARCH).$(KBUILD_HOST_ARCH),x86.amd64) ## @todo mixing target/host here!

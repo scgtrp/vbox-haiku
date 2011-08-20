@@ -54,10 +54,7 @@ ifndef TOOL_GXX3_LDFLAGS.$(KBUILD_TARGET)
 else
  TOOL_GXX3_LDFLAGS.dll ?= $(TOOL_GXX3_LDFLAGS.$(KBUILD_TARGET))
 endif
-# haiku's modules use -shared instead
-ifneq ($(KBUILD_TARGET),haiku)
- TOOL_GXX3_LDFLAGS.sysmod ?= -r
-endif
+TOOL_GXX3_LDFLAGS.sysmod ?= -r
 TOOL_GXX3_LD_SONAME ?= -Wl,-soname=$(firstword $($(1)_SONAME.$(KBUILD_TARGET).$(KBUILD_TYPE)) $($(1)_SONAME.$(KBUILD_TARGET)) $($(1)_SONAME.$(KBUILD_TYPE)) $($(1)_SONAME) $(notdir $(2)))
 ifeq ($(KBUILD_TARGET),os2)
  TOOL_GXX3_LD_MAP ?= -Zmap=$(1)
