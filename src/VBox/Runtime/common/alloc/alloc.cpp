@@ -1,5 +1,3 @@
-<<<<<<< HEAD
-=======
 /* $Id$ */
 /** @file
  * IPRT - Memory Allocation.
@@ -62,5 +60,3 @@ RTDECL(void *) RTMemDupExTag(const void *pvSrc, size_t cbSrc, size_t cbExtra, co
     return pvDst;
 }
 RT_EXPORT_SYMBOL(RTMemDupExTag);
-
->>>>>>> dac2eb5322be55005427abdfa917fe4c7699e232

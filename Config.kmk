@@ -1283,8 +1283,12 @@ ifndef VBOX_GCC_TOOL
   VBOX_GCC32_TOOL := GXX3PLAIN
   TOOL_GXX3PLAIN_LD_SYSMOD ?= /usr/ccs/bin/ld
  else ifeq ($(KBUILD_TARGET),haiku)
-  VBOX_GCC_TOOL := GXX3
-  TOOL_GXX3_LDFLAGS.sysmod ?= 
+   ifdef VBOX_USE_GCC4
+    VBOX_GCC_TOOL = GXX3
+   else
+    VBOX_GCC_TOOL = GXX2
+   endif
+  TOOL_GXX2_LDFLAGS.sysmod ?= 
  else
   VBOX_GCC_TOOL := GXX3
   ifeq ($(KBUILD_TARGET_ARCH).$(KBUILD_HOST_ARCH),x86.amd64) ## @todo mixing target/host here!
@@ -1569,7 +1573,7 @@ if1of ($(KBUILD_HOST), freebsd linux l4 netbsd openbsd solaris)
  export LD_LIBRARY_PATH:=$(PATH_STAGE_BIN):$(PATH_STAGE_LIB):$(LD_LIBRARY_PATH)
 endif
 ifeq ($(KBUILD_HOST),haiku)
- export LIBRARY_PATH:=$(PATH_BIN):$(PATH_LIB):$(LIBRARY_PATH)
+ export LIBRARY_PATH:=$(PATH_STAGE_BIN):$(PATH_STAGE_LIB):$(LIBRARY_PATH)
 endif
 ifeq ($(KBUILD_HOST),os2)
  #fixme! export BEGINLIBPATH:=$(PATH_STAGE_BIN);$(PATH_STAGE_LIB);$(BEGINLIBPATH)
@@ -2437,16 +2441,14 @@ ifeq ($(KBUILD_HOST),haiku)
   # @param 1  The file to add resources to.
   # @param 2  The resource files.
   # @param 3  The target name.
+  # FIXME why doesn't this work without &&
 define VBOX_HAIKU_XRES_SETVER_FN
-	$(if $(2),$(call MSG_TOOL,HaikuAddResources,$(3),$(2))
-	$(QUIET)$(VBOX_HAIKU_XRESTOOL) -o $(1) $(2),)
-	$(call MSG_TOOL,HaikuSetVersion,$(3))
-	$(QUIET)$(VBOX_HAIKU_SETVERSIONTOOL) $(1) \
+	$(if $(2),$(VBOX_HAIKU_XRESTOOL) -o $(1) $(2) &&,) \
+		$(VBOX_HAIKU_SETVERSIONTOOL) $(1) \
 		-app $(VBOX_VERSION_MAJOR) $(VBOX_VERSION_MINOR) $(VBOX_VERSION_BUILD) d $(VBOX_SVN_REV) \
 		-short "$(VBOX_PRODUCT)" \
-		-long "$(VBOX_PRODUCT) $(VBOX_VERSION_STRING) $(shell /bin/echo -e '\xC2\xA9')2009-$(VBOX_C_YEAR) $(VBOX_VENDOR)"
-	$(call MSG_TOOL,HaikuMimeSet,$(3))
-	$(QUIET)$(VBOX_HAIKU_MIMESETTOOL) -f $(1)
+		-long "$(VBOX_PRODUCT) $(VBOX_VERSION_STRING) $(shell /bin/echo -e '\xC2\xA9')2009-$(VBOX_C_YEAR) $(VBOX_VENDOR)" && \
+		$(VBOX_HAIKU_MIMESETTOOL) -f $(1)
 endef
 
  VBOX_HAIKU_XRES_SETVER_CMDS  ?= $(if $(eq $(tool_do),LINK_PROGRAM),$(call VBOX_HAIKU_XRES_SETVER_FN,$(out),$($(target)_RSRCS),$(target)),)
@@ -3122,14 +3124,13 @@ TEMPLATE_VBOXR0DRV_LDFLAGS             = -shared -no-undefined -dc -dy -nostdlib
 TEMPLATE_VBOXR0DRV_CFLAGS              = -no-fpic \
 	$(VBOX_GCC_WARN) -Wstrict-prototypes $(VBOX_GCC_Wno-pointer-sign) -Wno-sign-compare \
 	$(VBOX_GCC_fno-stack-protector) $(VBOX_GCC_R0_OPT) $(VBOX_GCC_R0_FP) -fno-strict-aliasing -fno-common -Werror-implicit-function-declaration
-TEMPLATE_VBOXR0DRV_CFLAGS.x86          = -mno-sse -mno-mmx -mno-sse2 -mno-3dnow
+#TEMPLATE_VBOXR0DRV_CFLAGS.x86          = -mno-sse -mno-mmx -mno-sse2 -mno-3dnow
 #TEMPLATE_VBOXR0DRV_CFLAGS.x86          = -m32 -mno-sse -mno-mmx -mno-sse2 -mno-3dnow
 TEMPLATE_VBOXR0DRV_CFLAGS.amd64        = -m64 -mno-sse -mno-mmx -mno-sse2 -mno-3dnow \
 	-fno-reorder-blocks -ffreestanding -fno-asynchronous-unwind-tables -funit-at-a-time \
 	-Wno-sign-compare -Wdeclaration-after-statement
 TEMPLATE_VBOXR0DRV_CXXFLAGS           = -no-fpic -Wpointer-arith \
-	-Wshadow -Wuninitialized -Wunused-function -Wunused-label -Wunused-value -Wunused-variable \
-	-Wformat \
+	-Wshadow -Wuninitialized -Wformat \
 	-O2 -nodefaultlibs -fno-omit-frame-pointer -fno-strict-aliasing -fno-common -fno-exceptions -fno-rtti
 TEMPLATE_VBOXR0DRV_CXXFLAGS.x86       = $(TEMPLATE_VBOXR0DRV_CFLAGS.x86) -fno-exceptions -fno-rtti
 TEMPLATE_VBOXR0DRV_CXXFLAGS.amd64     = $(TEMPLATE_VBOXR0DRV_CFLAGS.amd64) -fno-exceptions -fno-rtti
@@ -3277,9 +3278,14 @@ TEMPLATE_VBOXR3EXE_OBJCXXFLAGS.darwin  = $(VBOX_DARWIN_DEF_SDK_OBJCXXFLAGS)
 TEMPLATE_VBOXR3EXE_LDFLAGS.darwin      = $(VBOX_DARWIN_DEF_SDK_LDFLAGS)
 TEMPLATE_VBOXR3EXE_LDFLAGS.darwin.x86  = -read_only_relocs suppress
  else ifeq ($(KBUILD_TARGET),haiku)
+  ifdef VBOX_USE_GCC4
 TEMPLATE_VBOXR3EXE_TOOL                = GXX3
-TEMPLATE_VBOXR3EXE_POST_CMDS          = $(VBOX_HAIKU_XRES_SETVER_CMDS)
 TEMPLATE_VBOXR3EXE_LIBS                = network iconv stdc++ supc++
+  else
+TEMPLATE_VBOXR3EXE_TOOL                = GXX2
+TEMPLATE_VBOXR3EXE_LIBS                = network iconv stdc++.r4
+  endif
+TEMPLATE_VBOXR3EXE_POST_CMDS          = $(VBOX_HAIKU_XRES_SETVER_CMDS)
 TEMPLATE_VBOXR3EXE_LIBPATH            += \
 	/boot/common/lib
 # Haiku uses PIC by default...
@@ -3787,7 +3793,7 @@ TEMPLATE_VBOXMAINEXE_LDFLAGS.darwin     += -bind_at_load
 TEMPLATE_VBOXMAINEXE_LDFLAGS            += $(VBOX_DARWIN_DEF_SDK_LDFLAGS) -framework Carbon
 TEMPLATE_VBOXMAINEXE_LIBS                = $(LIB_RUNTIME)
  else ifeq ($(KBUILD_TARGET),haiku)
-TEMPLATE_VBOXMAINEXE_TOOL                = GXX3
+TEMPLATE_VBOXMAINEXE_TOOL                = GXX2
 TEMPLATE_VBOXMAINEXE_LIBS                = $(LIB_RUNTIME) network stdc++ supc++
  else if1of ($(KBUILD_TARGET), freebsd netbsd openbsd)
 TEMPLATE_VBOXMAINEXE_TOOL                = GXX3
