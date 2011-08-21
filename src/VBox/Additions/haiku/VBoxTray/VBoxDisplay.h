@@ -26,6 +26,8 @@ public:
 	virtual ~VBoxDisplayService();
 	
 	void		Start();
+	
+	virtual	void		MessageReceived(BMessage* message);
 
 private:
 
@@ -34,7 +36,7 @@ static status_t	_ServiceThreadNub(void *_this);
 
 	uint32_t	fClientId;
 	thread_id	fServiceThreadID;
-	bool		fExiting;
+volatile bool	fExiting;
 	BScreen		fScreen;
 };
 

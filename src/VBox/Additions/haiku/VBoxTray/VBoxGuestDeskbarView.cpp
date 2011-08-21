@@ -25,7 +25,9 @@
 #include <Debug.h>
 #include <Deskbar.h>
 #include <File.h>
+#include <MenuItem.h>
 #include <Path.h>
+#include <PopUpMenu.h>
 #include <Resources.h>
 #include <String.h>
 #include <TranslationUtils.h>
@@ -109,6 +111,7 @@ void VBoxGuestDeskbarView::Draw(BRect rect)
 
 void VBoxGuestDeskbarView::AttachedToWindow()
 {
+	BView::AttachedToWindow();
 	if (Parent()) {
 		SetViewColor(Parent()->ViewColor());
 		SetLowColor(Parent()->LowColor());
@@ -126,10 +129,14 @@ void VBoxGuestDeskbarView::AttachedToWindow()
 
 void VBoxGuestDeskbarView::DetachedFromWindow()
 {
+	BMessage message(B_QUIT_REQUESTED);
+	fClipboardService->MessageReceived(&message);
+	fDisplayService->MessageReceived(&message);
 }
 
 void VBoxGuestDeskbarView::MouseDown(BPoint point)
 {
+	printf("MouseDown\n");
 	int32 buttons = B_PRIMARY_MOUSE_BUTTON;
 	if (Looper() != NULL && Looper()->CurrentMessage() != NULL)
 		Looper()->CurrentMessage()->FindInt32("buttons", &buttons);
@@ -137,9 +144,23 @@ void VBoxGuestDeskbarView::MouseDown(BPoint point)
 	BPoint where = ConvertToScreen(point);
 	
 	if ((buttons & B_SECONDARY_MOUSE_BUTTON) != 0) {
-	} else {
-		BMessenger(VBOX_GUEST_APP_SIG).SendMessage(B_ABOUT_REQUESTED);
+		BPopUpMenu* menu = new BPopUpMenu(B_EMPTY_STRING, false, false);
+		menu->SetAsyncAutoDestruct(true);
+		menu->SetFont(be_plain_font);
+		
+		menu->AddItem(new BMenuItem("Quit", new BMessage(B_QUIT_REQUESTED)));
+		menu->SetTargetForItems(this);
+		
+		menu->Go(where, true, true, true);
 	}
+}
+
+void VBoxGuestDeskbarView::MessageReceived(BMessage* message)
+{
+	if (message->what == B_QUIT_REQUESTED)
+		RemoveFromDeskbar();
+	else
+		BHandler::MessageReceived(message);
 }
 
 status_t VBoxGuestDeskbarView::AddToDeskbar(bool force)
@@ -172,7 +193,6 @@ status_t VBoxGuestDeskbarView::RemoveFromDeskbar()
 
 	return deskbar.RemoveItem(VIEWNAME);
 }
-
 
 status_t VBoxGuestDeskbarView::_Init(BMessage *archive)
 {

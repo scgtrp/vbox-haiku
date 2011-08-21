@@ -1,6 +1,6 @@
 /** @file
  *
- * VBoxClipboard - Shared clipboard
+ * VBoxDisplay - Display resizing
  *
  */
 
@@ -19,9 +19,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <new>
-#include <Bitmap.h>
-#include <BitmapStream.h>
-#include <Clipboard.h>
 #include <DataIO.h>
 #include <Message.h>
 #include <TranslationUtils.h>
@@ -35,8 +32,6 @@
 #include "../VBoxVideo/common/VBoxVideo_common.h"
 
 #include <iprt/mem.h>
-#include <VBox/GuestHost/clipboard-helper.h>
-#include <VBox/HostServices/VBoxClipboardSvc.h>
 #include <VBox/log.h>
 
 #undef Log
@@ -63,13 +58,21 @@ void VBoxDisplayService::Start()
 {
 	status_t err;
 	err = fServiceThreadID = spawn_thread(_ServiceThreadNub,
-		"VBoxClipboardService", B_NORMAL_PRIORITY, this);
+		"VBoxDisplayService", B_NORMAL_PRIORITY, this);
 
 	if (err >= B_OK) {
 		resume_thread(fServiceThreadID);
 	} else
 		LogRel(("VBoxDisplayService: Error starting service thread: %s\n", strerror(err)));
 
+}
+
+void VBoxDisplayService::MessageReceived(BMessage* message)
+{
+	if (message->what == B_QUIT_REQUESTED)
+		fExiting = true;
+	else
+		BHandler::MessageReceived(message);
 }
 
 status_t VBoxDisplayService::_ServiceThreadNub(void *_this)
@@ -88,9 +91,10 @@ status_t VBoxDisplayService::_ServiceThread()
     for (;;) {
 		uint32_t events;
 		
-		int rc = VbglR3WaitEvent(VMMDEV_EVENT_VALID_EVENT_MASK,
-			RT_INDEFINITE_WAIT, &events);
-		printf("rc=%d\n", rc);
+		int rc = VbglR3WaitEvent(VMMDEV_EVENT_DISPLAY_CHANGE_REQUEST, 5000, &events);
+		if (rc == -6) // timed out?
+			continue;
+		
 		if (RT_SUCCESS(rc)) {
 			uint32_t cx, cy, cBits, iDisplay;
             int rc2 = VbglR3GetDisplayChangeRequest(&cx, &cy, &cBits, &iDisplay, true);

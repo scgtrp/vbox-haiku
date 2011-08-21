@@ -32,6 +32,7 @@
 #include "VBoxClipboard.h"
 #include "VBoxDisplay.h"
 
+#define REMOVE_FROM_DESKBAR_MSG 'vbqr'
 
 class VBoxGuestDeskbarView : public BView {
 public:
@@ -46,6 +47,7 @@ public:
 			void		DetachedFromWindow();
 
 	virtual	void		MouseDown(BPoint point);
+	virtual void		MessageReceived(BMessage* message);
 
 	static status_t		AddToDeskbar(bool force=true);
 	static status_t		RemoveFromDeskbar();

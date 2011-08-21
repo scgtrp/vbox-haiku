@@ -64,7 +64,6 @@ status_t VBoxClipboardService::Connect()
 
     int rc = VbglR3ClipboardConnect(&fClientId);
     if (RT_SUCCESS (rc)) {
-
 		err = fServiceThreadID = spawn_thread(_ServiceThreadNub,
 			"VBoxClipboardService", B_NORMAL_PRIORITY, this);
 
@@ -103,7 +102,6 @@ status_t VBoxClipboardService::Disconnect()
 
 void VBoxClipboardService::MessageReceived(BMessage* message)
 {
-	printf("in ur MessageReceived receivin ur messages\n");
 	uint32_t formats = 0;
 	message->PrintToStream();
 	switch (message->what) {
@@ -294,6 +292,10 @@ void VBoxClipboardService::MessageReceived(BMessage* message)
 		    VbglR3ClipboardReportFormats(fClientId, formats);
 			break;
 		}
+		
+		case B_QUIT_REQUESTED:
+			fExiting = true;
+			break;
 
 		default:
 			BHandler::MessageReceived(message);
@@ -343,7 +345,7 @@ status_t VBoxClipboardService::_ServiceThread()
                 {
                     /* The host is terminating. */
                     LogRelFlowFunc(("VBOX_SHARED_CLIPBOARD_HOST_MSG_QUIT\n"));
-                    fExiting = true;
+					fExiting = true;
                     return VERR_INTERRUPTED;
                 }
 

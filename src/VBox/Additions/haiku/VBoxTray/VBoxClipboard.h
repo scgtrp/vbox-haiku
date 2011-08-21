@@ -27,7 +27,7 @@ public:
 	virtual status_t	Connect();
 	virtual status_t	Disconnect();
 
-	virtual	void			MessageReceived(BMessage* message);
+	virtual	void		MessageReceived(BMessage* message);
 
 private:
 
