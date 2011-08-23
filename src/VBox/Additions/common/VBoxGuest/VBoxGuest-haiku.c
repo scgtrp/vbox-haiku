@@ -470,16 +470,14 @@ static status_t std_ops(int32 op, ...) {
     switch(op) {
     case B_MODULE_INIT:
         dprintf(MODULE_NAME ": B_MODULE_INIT\n");
-        init_module();
-        break;
+        return init_module();
     case B_MODULE_UNINIT:
         dprintf(MODULE_NAME ": B_MODULE_UNINIT\n");
         uninit_module();
-        break;
+        return B_OK;
     default:
         return B_ERROR;
     }
-    return B_OK;
 }
 
 _EXPORT module_info *modules[] = {
