@@ -144,6 +144,10 @@ define TOOL_GCC2_COMPILE_C_CMDS
 	$(QUIET)$(TOOL_GCC2_CC) -c\
 		$(flags) $(addprefix -I, $(incs)) $(addprefix -D, $(defs))\
 		-Wp,-MD,$(dep) -Wp,-MP\
+		-o /dev/null\
+		$(abspath $(source))
+	$(QUIET)$(TOOL_GCC2_CC) -c\
+		$(flags) $(addprefix -I, $(incs)) $(addprefix -D, $(defs))\
 		-o $(obj)\
 		$(abspath $(source))
 	$(QUIET)$(APPEND) -n "$(dep)" "" "$(source):" ""
@@ -190,6 +194,10 @@ define TOOL_GCC2_COMPILE_CXX_CMDS
 	$(QUIET)$(TOOL_GCC2_CXX) -c\
 		$(flags) $(addprefix -I, $(incs)) $(addprefix -D, $(defs))\
 		-Wp,-MD,$(dep) -Wp,-MP\
+		-o /dev/null\
+		$(abspath $(source))
+	$(QUIET)$(TOOL_GCC2_CXX) -c\
+		$(flags) $(addprefix -I, $(incs)) $(addprefix -D, $(defs))\
 		-o $(obj)\
 		$(abspath $(source))
 	$(QUIET)$(APPEND) -n "$(dep)" "" "$(source):" ""
@@ -218,6 +226,10 @@ define TOOL_GCC2_COMPILE_AS_CMDS
 	$(QUIET)$(TOOL_GCC2_AS) -c\
 		$(flags) $(addprefix -I, $(incs)) $(addprefix -D, $(defs))\
 		-Wp,-MD,$(dep) -Wp,-MP\
+		-o /dev/null\
+		$(abspath $(source))
+	$(QUIET)$(TOOL_GCC2_AS) -c\
+		$(flags) $(addprefix -I, $(incs)) $(addprefix -D, $(defs))\
 		-o $(obj)\
 		$(abspath $(source))
 	$(QUIET)$(APPEND) -n "$(dep)" "" "$(source):" ""

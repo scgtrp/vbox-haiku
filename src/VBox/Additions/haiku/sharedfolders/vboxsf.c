@@ -7,11 +7,8 @@ VBSFCLIENT g_clientHandle;
 static fs_volume_ops vboxsf_volume_ops;
 static fs_vnode_ops vboxsf_vnode_ops;
 
-#define TRACE dprintf(FS_NAME ": trace: \e[1m%s\e[0m\n", __FUNCTION__);
-
 status_t init_module(void)
 {
-	TRACE
 	if (get_module(VBOXGUEST_MODULE_NAME, (module_info **)&g_VBoxGuest) != B_OK) {
 		dprintf("get_module(%s) failed\n", VBOXGUEST_MODULE_NAME);
 		return B_ERROR;
@@ -44,13 +41,11 @@ status_t init_module(void)
 
 void uninit_module(void)
 {
-	TRACE
 	mutex_destroy(&g_vnodeCacheLock);
 	put_module(VBOXGUEST_MODULE_NAME);
 }
 
 PSHFLSTRING make_shflstring(const char* const s) {
-	TRACE
 	int len = strlen(s);
 	if (len > 0xFFFE) {
 		dprintf(FS_NAME ": make_shflstring: string too long\n");
@@ -69,7 +64,6 @@ PSHFLSTRING make_shflstring(const char* const s) {
 }
 
 PSHFLSTRING clone_shflstring(PSHFLSTRING s) {
-	TRACE
 	PSHFLSTRING rv = malloc(sizeof(SHFLSTRING) + s->u16Length);
 	if (rv)
 		memcpy(rv, s, sizeof(SHFLSTRING) + s->u16Length);
@@ -77,7 +71,6 @@ PSHFLSTRING clone_shflstring(PSHFLSTRING s) {
 }
 
 PSHFLSTRING concat_shflstring_cstr(PSHFLSTRING s1, const char* const s2) {
-	TRACE
 	size_t s2len = strlen(s2);
 	PSHFLSTRING rv = malloc(sizeof(SHFLSTRING) + s1->u16Length + s2len);
 	if (rv) {
@@ -90,7 +83,6 @@ PSHFLSTRING concat_shflstring_cstr(PSHFLSTRING s1, const char* const s2) {
 }
 
 PSHFLSTRING concat_cstr_shflstring(const char* const s1, PSHFLSTRING s2) {
-	TRACE
 	size_t s1len = strlen(s1);
 	PSHFLSTRING rv = malloc(sizeof(SHFLSTRING) + s1len + s2->u16Length);
 	if (rv) {
@@ -103,7 +95,6 @@ PSHFLSTRING concat_cstr_shflstring(const char* const s1, PSHFLSTRING s2) {
 }
 
 PSHFLSTRING build_path(vboxsf_vnode* dir, const char* const name) {
-	TRACE
 	
 	dprintf("*** build_path(%p, %p)\n", dir, name);
 	if (!dir || !name)
@@ -123,7 +114,6 @@ PSHFLSTRING build_path(vboxsf_vnode* dir, const char* const name) {
 }
 
 status_t mount(fs_volume *volume, const char *device, uint32 flags, const char *args, ino_t *_rootVnodeID) {
-	TRACE
 	if (device) {
 		dprintf(FS_NAME ": trying to mount a real device as a vbox share is silly\n");
 		return B_BAD_TYPE;
@@ -169,14 +159,12 @@ status_t mount(fs_volume *volume, const char *device, uint32 flags, const char *
 }
 
 status_t unmount(fs_volume *volume) {
-	TRACE
 	dprintf(FS_NAME ": unmount\n");
 	vboxCallUnmapFolder(&g_clientHandle, volume->private_volume);
 	return B_OK;
 }
 
 status_t vboxsf_read_stat(fs_volume* _volume, fs_vnode* _vnode, struct stat* st) {
-	TRACE
 	vboxsf_vnode* vnode = _vnode->private_node;
 	vboxsf_volume* volume = _volume->private_volume;
 	SHFLCREATEPARMS params;
@@ -221,7 +209,6 @@ status_t vboxsf_read_stat(fs_volume* _volume, fs_vnode* _vnode, struct stat* st)
 }
 
 status_t vboxsf_open_dir(fs_volume* _volume, fs_vnode* _vnode, void** _cookie) {
-	TRACE
 	vboxsf_volume* volume = _volume->private_volume;
 	vboxsf_vnode* vnode = _vnode->private_node;
 	SHFLCREATEPARMS params;
@@ -257,7 +244,6 @@ status_t vboxsf_open_dir(fs_volume* _volume, fs_vnode* _vnode, void** _cookie) {
 /** read a single entry from a dir */
 status_t vboxsf_read_dir_1(vboxsf_volume* volume, vboxsf_vnode* vnode, vboxsf_dir_cookie* cookie,
 	struct dirent* buffer, size_t bufferSize) {
-	TRACE
 	dprintf("%p, %d, %p\n", cookie, cookie->has_more_files, cookie->buffer);
 	if (!cookie->has_more_files) {
 		return B_ENTRY_NOT_FOUND;
@@ -322,7 +308,6 @@ status_t vboxsf_read_dir_1(vboxsf_volume* volume, vboxsf_vnode* vnode, vboxsf_di
 
 status_t vboxsf_read_dir(fs_volume* _volume, fs_vnode* _vnode, void* _cookie,
 	struct dirent* buffer, size_t bufferSize, uint32* _num) {
-	TRACE
 	vboxsf_dir_cookie* cookie = _cookie;
 	vboxsf_volume* volume = _volume->private_volume;
 	vboxsf_vnode* vnode = _vnode->private_node;
@@ -345,7 +330,6 @@ status_t vboxsf_read_dir(fs_volume* _volume, fs_vnode* _vnode, void* _cookie,
 }
 
 status_t vboxsf_free_dir_cookie(fs_volume* _volume, fs_vnode* vnode, void* _cookie) {
-	TRACE
 	vboxsf_volume* volume = _volume->private_volume;
 	vboxsf_dir_cookie* cookie = _cookie;
 	
@@ -357,7 +341,6 @@ status_t vboxsf_free_dir_cookie(fs_volume* _volume, fs_vnode* vnode, void* _cook
 }
 
 status_t vboxsf_read_fs_info(fs_volume* _volume, struct fs_info* info) {
-	TRACE
 	vboxsf_volume* volume = _volume->private_volume;
 	
 	SHFLVOLINFO volume_info;
@@ -388,7 +371,6 @@ status_t vboxsf_read_fs_info(fs_volume* _volume, struct fs_info* info) {
 }
 
 status_t vboxsf_lookup(fs_volume* _volume, fs_vnode* dir, const char* name, ino_t* _id) {
-	TRACE
 	dprintf(FS_NAME ": lookup %s\n", name);
 	vboxsf_volume* volume = _volume->private_volume;
 	SHFLCREATEPARMS params;
@@ -473,7 +455,6 @@ mode_t mode_from_fmode(RTFMODE fMode) {
 }
 
 status_t vboxsf_open(fs_volume* _volume, fs_vnode* _vnode, int openMode, void** _cookie) {
-	TRACE
 	vboxsf_volume* volume = _volume->private_volume;
 	vboxsf_vnode* vnode = _vnode->private_node;
 	
@@ -532,7 +513,6 @@ status_t vboxsf_open(fs_volume* _volume, fs_vnode* _vnode, int openMode, void** 
 }
 
 status_t vboxsf_create(fs_volume* _volume, fs_vnode* _dir, const char *name, int openMode, int perms, void **_cookie, ino_t *_newVnodeID) {
-	TRACE
 	vboxsf_volume* volume = _volume->private_volume;
 	
 	SHFLCREATEPARMS params;
@@ -591,7 +571,6 @@ status_t vboxsf_create(fs_volume* _volume, fs_vnode* _dir, const char *name, int
 }
 
 status_t vboxsf_close(fs_volume* _volume, fs_vnode* _vnode, void* _cookie) {
-	TRACE
 	vboxsf_volume* volume = _volume->private_volume;
 	vboxsf_file_cookie* cookie = _cookie;
 	
@@ -601,26 +580,22 @@ status_t vboxsf_close(fs_volume* _volume, fs_vnode* _vnode, void* _cookie) {
 }
 
 status_t vboxsf_rewind_dir(fs_volume* _volume, fs_vnode* _vnode, void* _cookie) {
-	TRACE
 	vboxsf_dir_cookie* cookie = _cookie;
 	cookie->index = 0;
 	return B_OK;
 }
 
 status_t vboxsf_close_dir(fs_volume *volume, fs_vnode *vnode, void *cookie) {
-	TRACE
 	return B_OK;
 }
 
 status_t vboxsf_free_cookie(fs_volume *volume, fs_vnode *vnode, void *_cookie) {
-	TRACE
 	vboxsf_dir_cookie* cookie = _cookie;
 	free(cookie);
 	return B_OK;
 }
 
 status_t vboxsf_read(fs_volume* _volume, fs_vnode* _vnode, void* _cookie, off_t pos, void *buffer, size_t *length) {
-	TRACE
 	vboxsf_volume* volume = _volume->private_volume;
 	vboxsf_vnode* vnode = _vnode->private_node;
 	vboxsf_file_cookie* cookie = _cookie;
@@ -641,7 +616,6 @@ status_t vboxsf_read(fs_volume* _volume, fs_vnode* _vnode, void* _cookie, off_t 
 }
 
 status_t vboxsf_write(fs_volume* _volume, fs_vnode* _vnode, void* _cookie, off_t pos, const void *buffer, size_t *length) {
-	TRACE
 	vboxsf_volume* volume = _volume->private_volume;
 	vboxsf_vnode* vnode = _vnode->private_node;
 	vboxsf_file_cookie* cookie = _cookie;
@@ -661,13 +635,11 @@ status_t vboxsf_write(fs_volume* _volume, fs_vnode* _vnode, void* _cookie, off_t
 }
 
 status_t vboxsf_write_stat(fs_volume *volume, fs_vnode *vnode, const struct stat *stat, uint32 statMask) {
-	TRACE
 	// the host handles updating the stat info - in the guest, this is a no-op
 	return B_OK;
 }
 
 status_t vboxsf_create_dir(fs_volume *_volume, fs_vnode *parent, const char *name, int perms) {
-	TRACE
 	vboxsf_volume* volume = _volume->private_volume;
 	
 	SHFLCREATEPARMS params;
@@ -689,7 +661,6 @@ status_t vboxsf_create_dir(fs_volume *_volume, fs_vnode *parent, const char *nam
 }
 
 status_t vboxsf_remove_dir(fs_volume *_volume, fs_vnode *parent, const char *name) {
-	TRACE
 	vboxsf_volume* volume = _volume->private_volume;
 	
 	PSHFLSTRING path = build_path(parent->private_node, name);
@@ -700,7 +671,6 @@ status_t vboxsf_remove_dir(fs_volume *_volume, fs_vnode *parent, const char *nam
 }
 
 status_t vboxsf_unlink(fs_volume *_volume, fs_vnode *parent, const char *name) {
-	TRACE
 	vboxsf_volume* volume = _volume->private_volume;
 	
 	PSHFLSTRING path = build_path(parent->private_node, name);
@@ -711,12 +681,10 @@ status_t vboxsf_unlink(fs_volume *_volume, fs_vnode *parent, const char *name) {
 }
 
 status_t vboxsf_link(fs_volume *volume, fs_vnode *dir, const char *name, fs_vnode *vnode) {
-	TRACE
 	return B_UNSUPPORTED;
 }
 
 status_t vboxsf_rename(fs_volume* _volume, fs_vnode* fromDir, const char* fromName, fs_vnode* toDir, const char* toName) {
-	TRACE
 	vboxsf_volume* volume = _volume->private_volume;
 	
 	PSHFLSTRING oldpath = build_path(fromDir->private_node, fromName);
@@ -729,7 +697,6 @@ status_t vboxsf_rename(fs_volume* _volume, fs_vnode* fromDir, const char* fromNa
 }
 
 status_t vboxsf_create_symlink(fs_volume* _volume, fs_vnode* dir, const char* name, const char* path, int mode) {
-	TRACE
 	vboxsf_volume* volume = _volume->private_volume;
 	
 	PSHFLSTRING target = make_shflstring(path);
@@ -746,7 +713,6 @@ status_t vboxsf_create_symlink(fs_volume* _volume, fs_vnode* dir, const char* na
 }
 
 status_t vboxsf_read_symlink(fs_volume* _volume, fs_vnode* link, char* buffer, size_t* _bufferSize) {
-	TRACE
 	vboxsf_volume* volume = _volume->private_volume;
 	vboxsf_vnode* vnode = link->private_node;
 	
@@ -775,7 +741,6 @@ status_t vbox_err_to_haiku_err(int rc) {
 }
 
 static status_t std_ops(int32 op, ...) {
-	TRACE
 	switch(op) {
 	case B_MODULE_INIT:
 		dprintf(MODULE_NAME ": B_MODULE_INIT\n");

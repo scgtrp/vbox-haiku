@@ -7,11 +7,12 @@ of the guest additions before a proper package or installer has been created.
 == You will need: ==
 - The contents of this repository
 - A GCC4-based Haiku installation with development tools installed
+	(Partial GCC2/GCC2h support is present but not yet usable.)
 
 == To compile the guest additions: ==
 export PATH=$PATH:/path/to/vbox/source/kBuild/bin/haiku.x86
 ./configure --build-headless --disable-python --disable-java
-kmk VBOX_ONLY_ADDITIONS=1 VBOX_WITH_ADDITION_DRIVERS=1 all
+kmk VBOX_ONLY_ADDITIONS=1 VBOX_WITH_ADDITION_DRIVERS=1 VBOX_USE_GCC4=1 all
 
 If the build fails complaining about 'ev' being undefined, edit
 out/haiku.x86/release/revision.kmk and change 'ev' to 9001 - this is due to

@@ -1,6 +1,6 @@
 # $Id: GXX2.kmk 2541 2011-08-03 09:51:30Z bird $
 ## @file
-# kBuild Tool Config - Generic GCC v3.2.x using the system GCC and Binutils, for building C++ code.
+# kBuild Tool Config - Generic GCC v2.95.x using the system GCC and Binutils, for building C++ code.
 #
 
 #
@@ -31,10 +31,15 @@
 #
 #
 
-TOOL_GXX2 := Generic GCC v3.2.x or later using the system GCC and Binutils, for building C++ code.
+TOOL_GXX2 := Generic GCC v2.95.x or later using the system GCC and Binutils, for building C++ code.
 
 # Tool Specific Properties
-TOOL_GXX2_CC  ?= gcc$(HOSTSUFF_EXE)
+# use gcc4 on haiku, because newer standard
+ifeq ($(KBUILD_TARGET),haiku)
+ TOOL_GXX2_CC  ?= /boot/develop/abi/x86/gcc4/tools/current/bin/gcc$(HOSTSUFF_EXE)
+else
+ TOOL_GXX2_CC  ?= gcc$(HOSTSUFF_EXE)
+endif
 TOOL_GXX2_CXX ?= g++$(HOSTSUFF_EXE)
 TOOL_GXX2_AS  ?= gcc$(HOSTSUFF_EXE)
 ifeq ($(KBUILD_TARGET),solaris)
@@ -76,7 +81,7 @@ endif
 
 # General Properties used by kBuild
 TOOL_GXX2_COBJSUFF         ?= .o
-TOOL_GXX2_CFLAGS           ?=
+TOOL_GXX2_CFLAGS           ?= -std=gnu9x
 TOOL_GXX2_CFLAGS.debug     ?= -g
 TOOL_GXX2_CFLAGS.profile   ?= -O2 #-g -pg
 TOOL_GXX2_CFLAGS.release   ?= -O2
@@ -144,6 +149,10 @@ define TOOL_GXX2_COMPILE_C_CMDS
 	$(QUIET)$(TOOL_GXX2_CC) -c\
 		$(flags) $(addprefix -I, $(incs)) $(addprefix -D, $(defs))\
 		-Wp,-MD,$(dep) -Wp,-MP\
+		-o /dev/null\
+		$(abspath $(source))
+	$(QUIET)$(TOOL_GXX2_CC) -c\
+		$(flags) $(addprefix -I, $(incs)) $(addprefix -D, $(defs))\
 		-o $(obj)\
 		$(abspath $(source))
 	$(QUIET)$(APPEND) -n "$(dep)" "" "$(source):" ""
@@ -190,6 +199,10 @@ define TOOL_GXX2_COMPILE_CXX_CMDS
 	$(QUIET)$(TOOL_GXX2_CXX) -c\
 		$(flags) $(addprefix -I, $(incs)) $(addprefix -D, $(defs))\
 		-Wp,-MD,$(dep) -Wp,-MP\
+		-o /dev/null\
+		$(abspath $(source))
+	$(QUIET)$(TOOL_GXX2_CXX) -c\
+		$(flags) $(addprefix -I, $(incs)) $(addprefix -D, $(defs))\
 		-o $(obj)\
 		$(abspath $(source))
 	$(QUIET)$(APPEND) -n "$(dep)" "" "$(source):" ""
@@ -218,6 +231,10 @@ define TOOL_GXX2_COMPILE_AS_CMDS
 	$(QUIET)$(TOOL_GXX2_AS) -c\
 		$(flags) $(addprefix -I, $(incs)) $(addprefix -D, $(defs))\
 		-Wp,-MD,$(dep) -Wp,-MP\
+		-o /dev/null\
+		$(abspath $(source))
+	$(QUIET)$(TOOL_GXX2_AS) -c\
+		$(flags) $(addprefix -I, $(incs)) $(addprefix -D, $(defs))\
 		-o $(obj)\
 		$(abspath $(source))
 	$(QUIET)$(APPEND) -n "$(dep)" "" "$(source):" ""

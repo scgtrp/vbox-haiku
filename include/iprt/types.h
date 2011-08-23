@@ -165,7 +165,7 @@ RT_C_DECLS_END
  */
 #ifndef __cplusplus
 # if defined(__GNUC__)
-#  if defined(RT_OS_LINUX) && __GNUC__ < 3
+#  if (defined(RT_OS_LINUX) || defined(RT_OS_HAIKU)) && __GNUC__ < 3
 typedef uint8_t bool;
 #  else
 #   if (defined(RT_OS_DARWIN) || defined(RT_OS_HAIKU)) && defined(_STDBOOL_H)

@@ -101,6 +101,28 @@ ifeq ($(KBUILD_TARGET),darwin)
  INST_LIB             = lib/
  INST_ADDITIONS_LIB   = $(INST_LIB)additions/
 
+else ifeq ($(KBUILD_TARGET),haiku)
+
+ INST_BIN             = apps/VirtualBox/bin/
+ INST_DIST            = $(INST_BIN)
+ INST_SDK             = $(INST_BIN)sdk/
+
+ INST_VIRTUALBOX      = $(INST_BIN)
+ INST_VBOXDRV         = $(INST_BIN)
+ INST_VBOXNETFLT      = $(INST_BIN)
+ INST_VBOXNETADP      = $(INST_BIN)
+ INST_VBOXUSB         = $(INST_BIN)
+
+ INST_DLL             = $(INST_BIN)
+ INST_SYS             = $(INST_BIN)
+ INST_TESTCASE        = $(INST_BIN)testcase/
+ INST_ADDITIONS       = apps/VBoxAdditions/
+ INST_ADDITIONS_ISO   = $(INST_ADDITIONS)
+
+ INST_TESTSUITE       = testsuite/
+ INST_LIB             = lib/
+ INST_ADDITIONS_LIB   = $(INST_LIB)additions/
+
 else
 
  INST_BIN             = bin/

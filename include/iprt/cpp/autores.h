@@ -52,7 +52,7 @@ inline T RTAutoResNil(void)
 
 /** Specialisation of RTAutoResNil for RTFILE */
 template <>
-inline RTFILE RTAutoResNil(void)
+inline RTFILE RTAutoResNil<RTFILE>(void)
 {
     return NIL_RTFILE;
 }
