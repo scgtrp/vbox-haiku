@@ -1436,10 +1436,17 @@ HRESULT showVMInfo(ComPtr<IVirtualBox> virtualBox,
 
     if (console)
     {
-        ComPtr<IDisplay> display;
-        CHECK_ERROR_RET(console, COMGETTER(Display)(display.asOutParam()), rc);
         do
         {
+            ComPtr<IDisplay> display;
+            rc = console->COMGETTER(Display)(display.asOutParam());
+            if (rc == E_ACCESSDENIED)
+                break; /* VM not powered up */
+            if (FAILED(rc))
+            {
+                com::GlueHandleComError(console, "COMGETTER(Display)(display.asOutParam())", rc, __FILE__, __LINE__);
+                return rc;
+            }
             ULONG xRes, yRes, bpp;
             rc = display->GetScreenResolution(0, &xRes, &yRes, &bpp);
             if (rc == E_ACCESSDENIED)
@@ -1585,6 +1592,7 @@ HRESULT showVMInfo(ComPtr<IVirtualBox> virtualBox,
     if (SUCCEEDED(rc))
     {
         BOOL fEnabled;
+        BOOL fEhciEnabled;
         rc = USBCtl->COMGETTER(Enabled)(&fEnabled);
         if (FAILED(rc))
             fEnabled = false;
@@ -1592,6 +1600,14 @@ HRESULT showVMInfo(ComPtr<IVirtualBox> virtualBox,
             RTPrintf("usb=\"%s\"\n", fEnabled ? "on" : "off");
         else
             RTPrintf("USB:             %s\n", fEnabled ? "enabled" : "disabled");
+
+        rc = USBCtl->COMGETTER(EnabledEhci)(&fEhciEnabled);
+        if (FAILED(rc))
+            fEhciEnabled = false;
+        if (details == VMINFO_MACHINEREADABLE)
+            RTPrintf("ehci=\"%s\"\n", fEhciEnabled ? "on" : "off");
+        else
+            RTPrintf("EHCI:            %s\n", fEhciEnabled ? "enabled" : "disabled");
 
         SafeIfaceArray <IUSBDeviceFilter> Coll;
         rc = USBCtl->COMGETTER(DeviceFilters)(ComSafeArrayAsOutParam(Coll));

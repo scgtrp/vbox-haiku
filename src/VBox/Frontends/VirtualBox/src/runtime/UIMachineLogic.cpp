@@ -45,7 +45,6 @@
 
 /* Global includes */
 #include <iprt/path.h>
-#include <VBox/VMMDev.h>
 
 #ifdef VBOX_WITH_DEBUGGER_GUI
 # include <iprt/ldr.h>
@@ -890,7 +889,12 @@ void UIMachineLogic::sltTakeScreenshot()
     QStringList filters;
     /* Build a filters list out of it. */
     for (int i = 0; i < formats.size(); ++i)
-        filters << formats.at(i) + " (*." + formats.at(i).toLower() + ")";
+    {
+        const QString &s = formats.at(i) + " (*." + formats.at(i).toLower() + ")";
+        /* Check there isn't an entry already (even if it just uses another capitalization) */
+        if (filters.indexOf(QRegExp(QRegExp::escape(s), Qt::CaseInsensitive)) == -1)
+            filters << s;
+    }
     /* Try to select some common defaults. */
     QString strFilter;
     int i = filters.indexOf(QRegExp(".*png.*", Qt::CaseInsensitive));
@@ -1481,7 +1485,7 @@ void UIMachineLogic::sltInstallGuestAdditions()
 
     /* Check for the already registered image */
     CVirtualBox vbox = vboxGlobal().virtualBox();
-    QString name = QString("VBoxGuestAdditions_%1.iso").arg(vbox.GetVersion().remove("_OSE"));
+    const QString &name = QString("VBoxGuestAdditions_%1.iso").arg(vboxGlobal().vboxVersionStringNormalized());
 
     CMediumVector vec = vbox.GetDVDImages();
     for (CMediumVector::ConstIterator it = vec.begin(); it != vec.end(); ++ it)
@@ -1497,8 +1501,8 @@ void UIMachineLogic::sltInstallGuestAdditions()
     int result = msgCenter().cannotFindGuestAdditions(QDir::toNativeSeparators(strSrc1), QDir::toNativeSeparators(strSrc2));
     if (result == QIMessageBox::Yes)
     {
-        QString source = QString("http://download.virtualbox.org/virtualbox/%1/").arg(vbox.GetVersion().remove("_OSE")) + name;
-        QString target = QDir(vboxGlobal().virtualBox().GetHomeFolder()).absoluteFilePath(name);
+        const QString &source = QString("http://download.virtualbox.org/virtualbox/%1/").arg(vboxGlobal().vboxVersionStringNormalized()) + name;
+        const QString &target = QDir(vboxGlobal().virtualBox().GetHomeFolder()).absoluteFilePath(name);
 
         UIDownloaderAdditions *pDl = UIDownloaderAdditions::create();
         /* Configure the additions downloader. */

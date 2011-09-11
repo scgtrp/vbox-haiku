@@ -33,7 +33,7 @@ endif
 # Basic testcases for the VD code.
 #
 ifdef VBOX_WITH_TESTCASES
- PROGRAMS += tstVD tstVD-2 tstVDCopy tstVDSnap tstVDShareable vbox-img tstVDIo
+ PROGRAMS += tstVD tstVD-2 tstVDCopy tstVDSnap tstVDShareable vbox-img
 
  tstVD_TEMPLATE = VBOXR3TSTEXE
  tstVD_SOURCES = tstVD.cpp
@@ -47,12 +47,18 @@ ifdef VBOX_WITH_TESTCASES
  tstVDCopy_SOURCES  = tstVDCopy.cpp
  tstVDCopy_LIBS = $(LIB_DDU)
 
- tstVDIo_TEMPLATE = VBOXR3TSTEXE
- tstVDIo_SOURCES  = tstVDIo.cpp \
-	VDIoBackendMem.cpp \
-	VDMemDisk.cpp \
-	VDIoRnd.cpp
- tstVDIo_LIBS = $(LIB_DDU)
+ ifn1of ($(KBUILD_TARGET),win)
+  PROGRAMS += tstVDIo
+
+  tstVDIo_TEMPLATE = VBOXR3TSTEXE
+  tstVDIo_SOURCES  = tstVDIo.cpp \
+  	VDIoBackendMem.cpp \
+  	VDMemDisk.cpp \
+  	VDIoRnd.cpp
+  tstVDIo_LIBS = \
+  	$(LIB_DDU) \
+  	$(PATH_STAGE_LIB)/StorageDbgLib$(VBOX_SUFF_LIB)
+ endif
 
  tstVDSetUuid_TEMPLATE = VBOXR3TSTEXE
  tstVDSetUuid_LIBS = $(LIB_DDU)
@@ -81,6 +87,7 @@ ifdef VBOX_WITH_TESTCASES
 	$(VBOX_PATH_STORAGE_SRC)/ISCSI.cpp \
 	$(VBOX_PATH_STORAGE_SRC)/RAW.cpp \
 	$(VBOX_PATH_STORAGE_SRC)/QED.cpp \
+	$(VBOX_PATH_STORAGE_SRC)/QCOW.cpp \
 	$(VBOX_PATH_STORAGE_SRC)/VCICache.cpp
  vbox-img_LIBS = \
 	$(VBOX_LIB_RUNTIME_STATIC)

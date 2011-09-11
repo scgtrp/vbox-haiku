@@ -247,6 +247,11 @@ static int VBoxServiceControlExecProcHandleOutputEvent(RTPOLLSET hPollSet, uint3
         rc2 = RTPipeClose(*phPipeR);
         AssertRC(rc2);
         *phPipeR = NIL_RTPIPE;
+
+        /* Sinc some error occured (or because the pipe simply broke) we
+         * have to set our pipe buffer to disabled so that others don't wait
+         * for new data to arrive anymore. */
+        VBoxServicePipeBufSetStatus(pBuf, false);
     }
     return rc;
 }
@@ -608,6 +613,18 @@ static int VBoxServiceControlExecProcLoop(PVBOXSERVICECTRLTHREAD pThread,
                                                         cbOffset, &cbRead, &cbLeft))
                    && cbRead)
             {
+#ifdef DEBUG
+                rc2 = RTCritSectEnter(&g_csLog);
+                if (RT_SUCCESS(rc2))
+                {
+#endif
+                    RTStrmWriteEx(g_pStdOut, szBuf, cbRead, NULL /* No partial write. */);
+#ifdef DEBUG
+                    rc2 = RTCritSectLeave(&g_csLog);
+                    if (RT_SUCCESS(rc))
+                        rc = rc2;
+                }
+#endif
                 cbOffset += cbRead;
                 if (!cbLeft)
                     break;
@@ -887,10 +904,10 @@ static int VBoxServiceControlExecCreateProcess(const char *pszExec, const char *
             {
                 /* Process Main flag "ExecuteProcessFlag_Hidden". */
                 if (fFlags & RT_BIT(2))
-                    uProcFlags = RTPROC_FLAGS_HIDDEN;
+                    uProcFlags |= RTPROC_FLAGS_HIDDEN;
                 /* Process Main flag "ExecuteProcessFlag_NoProfile". */
                 if (fFlags & RT_BIT(3))
-                    uProcFlags = RTPROC_FLAGS_NO_PROFILE;
+                    uProcFlags |= RTPROC_FLAGS_NO_PROFILE;
             }
 
             /* If no user name specified run with current credentials (e.g.
@@ -1407,7 +1424,6 @@ int VBoxServiceControlExecHandleCmdGetOutput(uint32_t u32ClientId, uint32_t uNum
             else
                 VBoxServiceError("ControlExec: [PID %u]: Failed to retrieve output, CID=%u, uHandle=%u, rc=%Rrc\n",
                                  uPID, uContextID, uHandleID, rc);
-
             /* Note: Since the context ID is unique the request *has* to be completed here,
              *       regardless whether we got data or not! Otherwise the progress object
              *       on the host never will get completed! */

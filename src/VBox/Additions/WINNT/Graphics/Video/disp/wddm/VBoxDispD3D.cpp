@@ -2398,6 +2398,10 @@ static HRESULT vboxWddmSwapchainChkCreateIf(PVBOXWDDMDISP_DEVICE pDevice, PVBOXW
                     }
                 }
 
+                /* re-use swapchain window
+                 * this will invalidate the previusly used swapchain */
+                Params.hDeviceWindow = pSwapchain->hWnd;
+
                 hr = pDevice->pDevice9If->CreateAdditionalSwapChain(&Params, &pNewIf);
                 Assert(hr == S_OK);
                 if (hr == S_OK)
@@ -2826,7 +2830,7 @@ BOOL WINAPI DllMain(HINSTANCE hInstance,
 #ifdef VBOXWDDMDISP_DEBUG_VEHANDLER
             vboxVDbgVEHandlerRegister();
 #endif
-            int rc = RTR3Init();
+            int rc = RTR3InitDll(0);
             AssertRC(rc);
             if (RT_SUCCESS(rc))
             {

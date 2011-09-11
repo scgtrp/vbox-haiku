@@ -684,6 +684,65 @@ static DECLCALLBACK(int) RTLDRELF_NAME(GetSymbolEx)(PRTLDRMODINTERNAL pMod, cons
 }
 
 
+/** @copydoc RTLDROPS::pfnEnumDbgInfo */
+static DECLCALLBACK(int) RTLDRELF_NAME(EnumDbgInfo)(PRTLDRMODINTERNAL pMod, const void *pvBits,
+                                                    PFNRTLDRENUMDBG pfnCallback, void *pvUser)
+{
+    PRTLDRMODELF pModElf = (PRTLDRMODELF)pMod;
+    NOREF(pvBits);
+
+    return VERR_NOT_IMPLEMENTED;
+}
+
+
+/** @copydoc RTLDROPS::pfnEnumSegments. */
+static DECLCALLBACK(int) RTLDRELF_NAME(EnumSegments)(PRTLDRMODINTERNAL pMod, PFNRTLDRENUMSEGS pfnCallback, void *pvUser)
+{
+    PRTLDRMODELF pModElf = (PRTLDRMODELF)pMod;
+
+    return VERR_NOT_IMPLEMENTED;
+}
+
+
+/** @copydoc RTLDROPS::pfnLinkAddressToSegOffset. */
+static DECLCALLBACK(int) RTLDRELF_NAME(LinkAddressToSegOffset)(PRTLDRMODINTERNAL pMod, RTLDRADDR LinkAddress,
+                                                               uint32_t *piSeg, PRTLDRADDR poffSeg)
+{
+    PRTLDRMODELF pModElf = (PRTLDRMODELF)pMod;
+
+    return VERR_NOT_IMPLEMENTED;
+}
+
+
+/** @copydoc RTLDROPS::pfnLinkAddressToRva. */
+static DECLCALLBACK(int) RTLDRELF_NAME(LinkAddressToRva)(PRTLDRMODINTERNAL pMod, RTLDRADDR LinkAddress, PRTLDRADDR pRva)
+{
+    PRTLDRMODELF pModElf = (PRTLDRMODELF)pMod;
+
+    return VERR_NOT_IMPLEMENTED;
+}
+
+
+/** @copydoc RTLDROPS::pfnSegOffsetToRva. */
+static DECLCALLBACK(int) RTLDRELF_NAME(SegOffsetToRva)(PRTLDRMODINTERNAL pMod, uint32_t iSeg, RTLDRADDR offSeg,
+                                                       PRTLDRADDR pRva)
+{
+    PRTLDRMODELF pModElf = (PRTLDRMODELF)pMod;
+
+    return VERR_NOT_IMPLEMENTED;
+}
+
+
+/** @copydoc RTLDROPS::pfnRvaToSegOffset. */
+static DECLCALLBACK(int) RTLDRELF_NAME(RvaToSegOffset)(PRTLDRMODINTERNAL pMod, RTLDRADDR Rva,
+                                                       uint32_t *piSeg, PRTLDRADDR poffSeg)
+{
+    PRTLDRMODELF pModElf = (PRTLDRMODELF)pMod;
+
+    return VERR_NOT_IMPLEMENTED;
+}
+
+
 
 /**
  * The ELF module operations.
@@ -704,7 +763,13 @@ static RTLDROPS RTLDRELF_MID(s_rtldrElf,Ops) =
     RTLDRELF_NAME(GetBits),
     RTLDRELF_NAME(Relocate),
     RTLDRELF_NAME(GetSymbolEx),
-    0
+    RTLDRELF_NAME(EnumDbgInfo),
+    RTLDRELF_NAME(EnumSegments),
+    RTLDRELF_NAME(LinkAddressToSegOffset),
+    RTLDRELF_NAME(LinkAddressToRva),
+    RTLDRELF_NAME(SegOffsetToRva),
+    RTLDRELF_NAME(RvaToSegOffset),
+    42
 };
 
 

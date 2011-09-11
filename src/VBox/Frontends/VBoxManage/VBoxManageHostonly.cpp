@@ -65,16 +65,7 @@ static int handleCreate(HandlerArg *a, int iStart, int *pcProcessed)
 
     rc = showProgress(progress);
     *pcProcessed = index - iStart;
-    if (FAILED(rc))
-    {
-        com::ProgressErrorInfo info(progress);
-        if (info.isBasicAvailable())
-            RTMsgError("Failed to create the host-only adapter. Error message: %lS", info.getText().raw());
-        else
-            RTMsgError("Failed to create the host-only adapter. No error message available, code: %Rhrc", rc);
-
-        return 1;
-    }
+    CHECK_PROGRESS_ERROR_RET(progress, ("Failed to create the host-only adapter"), 1);
 
     Bstr name;
     CHECK_ERROR(hif, COMGETTER(Name) (name.asOutParam()));
@@ -87,7 +78,10 @@ static int handleCreate(HandlerArg *a, int iStart, int *pcProcessed)
 static int handleRemove(HandlerArg *a, int iStart, int *pcProcessed)
 {
     if (a->argc - iStart < 1)
+    {
+        *pcProcessed = 0;
         return errorSyntax(USAGE_HOSTONLYIFS, "Not enough parameters");
+    }
 
     int index = iStart;
     HRESULT rc;
@@ -109,16 +103,7 @@ static int handleRemove(HandlerArg *a, int iStart, int *pcProcessed)
 
     rc = showProgress(progress);
     *pcProcessed = index - iStart;
-    if (FAILED(rc))
-    {
-        com::ProgressErrorInfo info(progress);
-        if (info.isBasicAvailable())
-            RTMsgError("Failed to remove the host-only adapter. Error message: %lS", info.getText().raw());
-        else
-            RTMsgError("Failed to remove the host-only adapter. No error message available, code: %Rhrc", rc);
-
-        return 1;
-    }
+    CHECK_PROGRESS_ERROR_RET(progress, ("Failed to remove the host-only adapter"), 1);
 
     return 0;
 }

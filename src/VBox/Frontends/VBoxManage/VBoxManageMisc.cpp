@@ -163,13 +163,9 @@ int handleUnregisterVM(HandlerArg *a)
         ComPtr<IProgress> pProgress;
         CHECK_ERROR_RET(machine, Delete(ComSafeArrayAsInParam(aMedia), pProgress.asOutParam()),
                         RTEXITCODE_FAILURE);
+
         rc = showProgress(pProgress);
-        if (FAILED(rc))
-        {
-            com::ProgressErrorInfo ErrInfo(pProgress);
-            com::GluePrintErrorInfo(ErrInfo);
-            return RTEXITCODE_FAILURE;
-        }
+        CHECK_PROGRESS_ERROR_RET(pProgress, ("Machine delete failed"), RTEXITCODE_FAILURE);
     }
     return RTEXITCODE_SUCCESS;
 }
@@ -445,12 +441,7 @@ int handleCloneVM(HandlerArg *a)
                                         progress.asOutParam()),
                     RTEXITCODE_FAILURE);
     rc = showProgress(progress);
-    if (FAILED(rc))
-    {
-        com::ProgressErrorInfo ErrInfo(progress);
-        com::GluePrintErrorInfo(ErrInfo);
-        return RTEXITCODE_FAILURE;
-    }
+    CHECK_PROGRESS_ERROR_RET(progress, ("Clone VM failed"), RTEXITCODE_FAILURE);
 
     if (fRegister)
         CHECK_ERROR_RET(a->virtualBox, RegisterMachine(trgMachine), RTEXITCODE_FAILURE);
@@ -1070,9 +1061,9 @@ int handleExtPack(HandlerArg *a)
             return errorSyntax(USAGE_EXTPACK, "No extension pack name was given to \"extpack install\"");
 
         char szPath[RTPATH_MAX];
-        int vrc = RTPathAbs(a->argv[1], szPath, sizeof(szPath));
+        int vrc = RTPathAbs(pszName, szPath, sizeof(szPath));
         if (RT_FAILURE(vrc))
-            return RTMsgErrorExit(RTEXITCODE_FAILURE, "RTPathAbs(%s,,) failed with rc=%Rrc", a->argv[1], vrc);
+            return RTMsgErrorExit(RTEXITCODE_FAILURE, "RTPathAbs(%s,,) failed with rc=%Rrc", pszName, vrc);
 
         Bstr bstrTarball(szPath);
         Bstr bstrName;
@@ -1082,15 +1073,8 @@ int handleExtPack(HandlerArg *a)
         ComPtr<IProgress> ptrProgress;
         CHECK_ERROR2_RET(ptrExtPackFile, Install(fReplace, NULL, ptrProgress.asOutParam()), RTEXITCODE_FAILURE);
         hrc = showProgress(ptrProgress);
-        if (FAILED(hrc))
-        {
-            com::ProgressErrorInfo ErrInfo(ptrProgress);
-            if (ErrInfo.isBasicAvailable())
-                RTMsgError("Failed to install \"%s\": %lS", szPath, ErrInfo.getText().raw());
-            else
-                RTMsgError("Failed to install \"%s\": No error message available!", szPath);
-            return RTEXITCODE_FAILURE;
-        }
+        CHECK_PROGRESS_ERROR_RET(ptrProgress, ("Failed to install \"%s\"", szPath), RTEXITCODE_FAILURE);
+
         RTPrintf("Successfully installed \"%lS\".\n", bstrName.raw());
     }
     else if (!strcmp(a->argv[0], "uninstall"))
@@ -1129,15 +1113,8 @@ int handleExtPack(HandlerArg *a)
         ComPtr<IProgress> ptrProgress;
         CHECK_ERROR2_RET(ptrExtPackMgr, Uninstall(bstrName.raw(), fForced, NULL, ptrProgress.asOutParam()), RTEXITCODE_FAILURE);
         hrc = showProgress(ptrProgress);
-        if (FAILED(hrc))
-        {
-            com::ProgressErrorInfo ErrInfo(ptrProgress);
-            if (ErrInfo.isBasicAvailable())
-                RTMsgError("Failed to uninstall \"%s\": %lS", pszName, ErrInfo.getText().raw());
-            else
-                RTMsgError("Failed to uninstall \"%s\": No error message available!", pszName);
-            return RTEXITCODE_FAILURE;
-        }
+        CHECK_PROGRESS_ERROR_RET(ptrProgress, ("Failed to uninstall \"%s\"", pszName), RTEXITCODE_FAILURE);
+
         RTPrintf("Successfully uninstalled \"%s\".\n", pszName);
     }
     else if (!strcmp(a->argv[0], "cleanup"))

@@ -1,10 +1,10 @@
 /* $Id$ */
 /** @file
- * HWACCM VT-x - Internal header file.
+ * HM VMX (VT-x) - Internal header file.
  */
 
 /*
- * Copyright (C) 2006-2007 Oracle Corporation
+ * Copyright (C) 2006-2011 Oracle Corporation
  *
  * This file is part of VirtualBox Open Source Edition (OSE), as
  * available from http://www.virtualbox.org. This file is free software;

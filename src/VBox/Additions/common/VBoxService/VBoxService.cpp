@@ -217,19 +217,18 @@ RTEXITCODE VBoxServiceError(const char *pszFormat, ...)
  * Displays a verbose message.
  *
  * @returns 1
+ * @param   iLevel      Minimum log level required to display this message.
  * @param   pszFormat   The message text.
  * @param   ...         Format arguments.
  */
 void VBoxServiceVerbose(int iLevel, const char *pszFormat, ...)
 {
-#ifdef DEBUG
-    int rc = RTCritSectEnter(&g_csLog);
-    if (RT_SUCCESS(rc))
+    if (iLevel <= g_cVerbosity)
     {
-#endif
-        if (iLevel <= g_cVerbosity)
-        {
 #ifdef DEBUG
+        int rc = RTCritSectEnter(&g_csLog);
+        if (RT_SUCCESS(rc))
+        {
             const char *pszThreadName = RTThreadSelfName();
             AssertPtr(pszThreadName);
             RTStrmPrintf(g_pStdOut, "%s [%s]: ",
@@ -244,13 +243,11 @@ void VBoxServiceVerbose(int iLevel, const char *pszFormat, ...)
             va_start(va, pszFormat);
             LogRel(("%s: %N", g_pszProgName, pszFormat, &va));
             va_end(va);
-        }
 #ifdef DEBUG
-        int rc2 = RTCritSectLeave(&g_csLog);
-        if (RT_SUCCESS(rc))
-            rc = rc2;
-    }
+            RTCritSectLeave(&g_csLog);
+        }
 #endif
+    }
 }
 
 
@@ -599,7 +596,7 @@ int main(int argc, char **argv)
     /*
      * Init globals and such.
      */
-    int rc = RTR3Init();
+    int rc = RTR3InitExe(argc, &argv, 0);
     if (RT_FAILURE(rc))
         return RTMsgInitFailure(rc);
     g_pszProgName = RTPathFilename(argv[0]);

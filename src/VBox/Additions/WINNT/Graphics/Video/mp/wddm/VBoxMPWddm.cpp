@@ -516,7 +516,7 @@ static NTSTATUS vboxWddmChildStatusReportReconnected(PVBOXMP_DEVEXT pDevExt, D3D
 static NTSTATUS vboxWddmChildStatusCheck(PVBOXMP_DEVEXT pDevExt, PVBOXWDDM_VIDEOMODES_INFO paInfos)
 {
     NTSTATUS Status = STATUS_SUCCESS;
-    bool bChanged[VBOX_VIDEO_MAX_SCREENS] = {};
+    bool bChanged[VBOX_VIDEO_MAX_SCREENS] = {0};
     int i;
 
     Assert(!bChanged[0]);
@@ -3732,7 +3732,7 @@ DxgkDdiEscape(
                     PVBOXDISPIFESCAPE_DBGPRINT pDbgPrint = (PVBOXDISPIFESCAPE_DBGPRINT)pEscapeHdr;
                     /* ensure the last char is \0*/
                     *((uint8_t*)pDbgPrint + pEscape->PrivateDriverDataSize - 1) = '\0';
-#ifdef DEBUG_misha
+#if defined(DEBUG_misha) || defined(DEBUG_leo)
                     DbgPrint("%s", pDbgPrint->aStringBuf);
 #else
                     LOGREL(("%s", pDbgPrint->aStringBuf));

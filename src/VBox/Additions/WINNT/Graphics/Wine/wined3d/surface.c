@@ -3190,15 +3190,19 @@ static HRESULT WINAPI IWineD3DSurfaceImpl_Flip(IWineD3DSurface *iface, IWineD3DS
     /* Flipping a OpenGL surface -> Use WineD3DDevice::Present */
     hr = IWineD3DSwapChain_Present((IWineD3DSwapChain *)swapchain,
             NULL, NULL, swapchain->win_handle, NULL, 0);
+
     IWineD3DSwapChain_Release((IWineD3DSwapChain *) swapchain);
     return hr;
 }
 
+#ifdef VBOX_WITH_WDDM
+# define VBOX_WINE_TEXDIRECT_USE_RESOURCELOAD
+#endif
 /* Does a direct frame buffer -> texture copy. Stretching is done
  * with single pixel copy calls
  */
-static inline void fb_copy_to_texture_direct(IWineD3DSurfaceImpl *This, IWineD3DSurface *SrcSurface,
-        const RECT *src_rect, const RECT *dst_rect_in, WINED3DTEXTUREFILTERTYPE Filter, BOOL doit)
+static inline BOOL fb_copy_to_texture_direct(IWineD3DSurfaceImpl *This, IWineD3DSurface *SrcSurface,
+        const RECT *src_rect, const RECT *dst_rect_in, WINED3DTEXTUREFILTERTYPE Filter, BOOL fFastOnly)
 {
     IWineD3DDeviceImpl *myDevice = This->resource.device;
     float xrel, yrel;
@@ -3206,6 +3210,8 @@ static inline void fb_copy_to_texture_direct(IWineD3DSurfaceImpl *This, IWineD3D
     IWineD3DSurfaceImpl *Src = (IWineD3DSurfaceImpl *) SrcSurface;
     struct wined3d_context *context;
     BOOL upsidedown = FALSE;
+    BOOL isSrcOffscreen = surface_is_offscreen(SrcSurface);
+    BOOL fNoStretching = TRUE;
     RECT dst_rect = *dst_rect_in;
 
     /* Make sure that the top pixel is always above the bottom pixel, and keep a separate upside down flag
@@ -3213,28 +3219,18 @@ static inline void fb_copy_to_texture_direct(IWineD3DSurfaceImpl *This, IWineD3D
      */
     if(dst_rect.top > dst_rect.bottom) {
         UINT tmp = dst_rect.bottom;
+#ifdef DEBUG_misha
+        ERR("validate this path!");
+#endif
         dst_rect.bottom = dst_rect.top;
         dst_rect.top = tmp;
         upsidedown = TRUE;
     }
 
-    context = context_acquire(myDevice, SrcSurface, CTXUSAGE_BLIT);
-    surface_internal_preload((IWineD3DSurface *) This, SRGB_RGB);
-    ENTER_GL();
-
-    /* Bind the target texture */
-    glBindTexture(This->texture_target, This->texture_name);
-    checkGLcall("glBindTexture");
-    if(surface_is_offscreen(SrcSurface)) {
-        TRACE("Reading from an offscreen target\n");
-        upsidedown = !upsidedown;
-        glReadBuffer(myDevice->offscreenBuffer);
-    }
-    else
+    if (isSrcOffscreen)
     {
-        glReadBuffer(surface_get_gl_buffer(SrcSurface));
+        upsidedown = !upsidedown;
     }
-    checkGLcall("glReadBuffer");
 
     xrel = (float) (src_rect->right - src_rect->left) / (float) (dst_rect.right - dst_rect.left);
     yrel = (float) (src_rect->bottom - src_rect->top) / (float) (dst_rect.bottom - dst_rect.top);
@@ -3253,9 +3249,53 @@ static inline void fb_copy_to_texture_direct(IWineD3DSurfaceImpl *This, IWineD3D
         ERR("Texture filtering not supported in direct blit\n");
     }
 
-    if (upsidedown
-            && !((xrel - 1.0f < -eps) || (xrel - 1.0f > eps))
-            && !((yrel - 1.0f < -eps) || (yrel - 1.0f > eps)))
+    fNoStretching = !((xrel - 1.0f < -eps) || (xrel - 1.0f > eps))
+            && !((yrel - 1.0f < -eps) || (yrel - 1.0f > eps));
+
+    if (fFastOnly && (!upsidedown || !fNoStretching))
+    {
+        return FALSE;
+    }
+
+#ifdef VBOX_WINE_TEXDIRECT_USE_RESOURCELOAD
+    if (isSrcOffscreen) context = context_acquire(myDevice, SrcSurface, CTXUSAGE_RESOURCELOAD);
+    else if (!surface_is_offscreen((IWineD3DSurface*)This)) context = context_acquire(myDevice, (IWineD3DSurface *) This, CTXUSAGE_RESOURCELOAD);
+    else context = context_acquire(myDevice, NULL, CTXUSAGE_RESOURCELOAD);
+
+    surface_internal_preload(SrcSurface, SRGB_RGB);
+#else
+    context = context_acquire(myDevice, SrcSurface, CTXUSAGE_BLIT);
+#endif
+
+    surface_internal_preload((IWineD3DSurface *) This, SRGB_RGB);
+    ENTER_GL();
+
+    /* Bind the target texture */
+    glBindTexture(This->texture_target, This->texture_name);
+    checkGLcall("glBindTexture");
+    if(isSrcOffscreen) {
+        TRACE("Reading from an offscreen target\n");
+#ifdef VBOX_WINE_TEXDIRECT_USE_RESOURCELOAD
+        context_bind_fbo(context, GL_READ_FRAMEBUFFER, &context->src_fbo);
+        context_attach_surface_fbo(context, GL_READ_FRAMEBUFFER, 0, (IWineD3DSurfaceImpl *)SrcSurface);
+#endif
+        glReadBuffer(myDevice->offscreenBuffer);
+        checkGLcall("glReadBuffer()");
+#ifdef VBOX_WINE_TEXDIRECT_USE_RESOURCELOAD
+        context_attach_depth_stencil_fbo(context, GL_READ_FRAMEBUFFER, NULL, FALSE);
+#endif
+    }
+    else
+    {
+#ifdef VBOX_WINE_TEXDIRECT_USE_RESOURCELOAD
+        context_bind_fbo(context, GL_READ_FRAMEBUFFER, NULL);
+#endif
+        glReadBuffer(surface_get_gl_buffer(SrcSurface));
+        checkGLcall("glReadBuffer()");
+    }
+    checkGLcall("glReadBuffer");
+
+    if (upsidedown && fNoStretching)
     {
         /* Upside down copy without stretching is nice, one glCopyTexSubImage call will do */
 
@@ -3272,18 +3312,14 @@ static inline void fb_copy_to_texture_direct(IWineD3DSurfaceImpl *This, IWineD3D
          * However, stretching in x direction can be avoided if not necessary
          */
 
-        if (!((xrel - 1.0f < -eps) || (xrel - 1.0f > eps))
-            && !((yrel - 1.0f < -eps) || (yrel - 1.0f > eps)))
+        if (fNoStretching)
         {
             /* No stretching involved, so just pass negative height and let host side take care of inverting */
 
-            if (doit)
-            {
-                glCopyTexSubImage2D(This->texture_target, This->texture_level,
+            glCopyTexSubImage2D(This->texture_target, This->texture_level,
                     dst_rect.left /*xoffset */, dst_rect.top /* y offset */,
                     src_rect->left, Src->currentDesc.Height - src_rect->bottom,
                     dst_rect.right - dst_rect.left, -(dst_rect.bottom-dst_rect.top));
-            }
         }
         else
         {
@@ -3317,6 +3353,8 @@ static inline void fb_copy_to_texture_direct(IWineD3DSurfaceImpl *This, IWineD3D
      * path is never entered
      */
     IWineD3DSurface_ModifyLocation((IWineD3DSurface *) This, SFLAG_INTEXTURE, TRUE);
+
+    return TRUE;
 }
 
 /* Uses the hardware to stretch and flip the image */
@@ -3497,11 +3535,11 @@ static inline void fb_copy_to_texture_hwstretch(IWineD3DSurfaceImpl *This, IWine
 
         /* top left */
         glTexCoord2f(left, top);
-        glVertex2i(0, fbheight - dst_rect.bottom - dst_rect.top);
+        glVertex2i(0, fbheight - (dst_rect.bottom - dst_rect.top));
 
         /* top right */
         glTexCoord2f(right, top);
-        glVertex2i(dst_rect.right - dst_rect.left, fbheight - dst_rect.bottom - dst_rect.top);
+        glVertex2i(dst_rect.right - dst_rect.left, fbheight - (dst_rect.bottom - dst_rect.top));
 
         /* bottom right */
         glTexCoord2f(right, bottom);
@@ -3646,6 +3684,9 @@ static HRESULT IWineD3DSurfaceImpl_BltOverride(IWineD3DSurfaceImpl *This, const 
     /* The only case where both surfaces on a swapchain are supported is a back buffer -> front buffer blit on the same swapchain */
     if(dstSwapchain && dstSwapchain == srcSwapchain && dstSwapchain->backBuffer &&
        ((IWineD3DSurface *) This == dstSwapchain->frontBuffer) && SrcSurface == dstSwapchain->backBuffer[0]) {
+#ifdef VBOX_WITH_WDDM
+        ERR("should never be here!!");
+#endif
         /* Half-life does a Blt from the back buffer to the front buffer,
          * Full surface size, no flags... Use present instead
          *
@@ -3802,12 +3843,17 @@ static HRESULT IWineD3DSurfaceImpl_BltOverride(IWineD3DSurfaceImpl *This, const 
                )
            )
         {
-            stretch_rect_fbo((IWineD3DDevice *)myDevice, SrcSurface, &src_rect,
-                    (IWineD3DSurface *)This, &dst_rect, Filter);
+            /* blit framebuffer might be buggy for some GPUs, try if fb_copy_to_texture_direct can do it quickly */
+            if (!fb_copy_to_texture_direct(This, SrcSurface, &src_rect, &dst_rect, Filter, TRUE /* fals only */))
+            {
+                TRACE("fb_copy_to_texture_direct can not do it fast, use stretch_rect_fbo\n");
+                stretch_rect_fbo((IWineD3DDevice *)myDevice, SrcSurface, &src_rect,
+                        (IWineD3DSurface *)This, &dst_rect, Filter);
+            }
         } else if((!stretchx) || dst_rect.right - dst_rect.left > Src->currentDesc.Width ||
                                     dst_rect.bottom - dst_rect.top > Src->currentDesc.Height) {
             TRACE("No stretching in x direction, using direct framebuffer -> texture copy\n");
-            fb_copy_to_texture_direct(This, SrcSurface, &src_rect, &dst_rect, Filter, TRUE);
+            fb_copy_to_texture_direct(This, SrcSurface, &src_rect, &dst_rect, Filter, FALSE /* do it alwais */);
         } else {
             TRACE("Using hardware stretching to flip / stretch the texture\n");
             fb_copy_to_texture_hwstretch(This, SrcSurface, &src_rect, &dst_rect, Filter);
@@ -3888,6 +3934,7 @@ static HRESULT IWineD3DSurfaceImpl_BltOverride(IWineD3DSurfaceImpl *This, const 
          * whereas the real gl drawable size is the size of the window.
          */
         if (dstSwapchain && (IWineD3DSurface *)This == dstSwapchain->frontBuffer) {
+#ifndef VBOX_WITH_WDDM
             RECT windowsize;
             POINT offset = {0,0};
             UINT h;
@@ -3903,6 +3950,7 @@ static HRESULT IWineD3DSurfaceImpl_BltOverride(IWineD3DSurfaceImpl *This, const 
             dst_rect.left -= offset.x; dst_rect.right -=offset.x;
             dst_rect.top -= offset.y; dst_rect.bottom -=offset.y;
             dst_rect.top += This->currentDesc.Height - h; dst_rect.bottom += This->currentDesc.Height - h;
+#endif
         }
         else if (surface_is_offscreen((IWineD3DSurface *)This))
         {

@@ -2662,14 +2662,14 @@ static int intnetR0TrunkIfSendGsoFallback(PINTNETTRUNKIF pThis, PINTNETIF pIfSen
     uint32_t const cSegs = PDMNetGsoCalcSegmentCount(&pSG->GsoCtx, pSG->cbTotal);
     for (uint32_t iSeg = 0; iSeg < cSegs; iSeg++)
     {
-        uint32_t cbSegPayload;
+        uint32_t cbSegPayload, cbSegHdrs;
         uint32_t offSegPayload = PDMNetGsoCarveSegment(&pSG->GsoCtx, (uint8_t *)pSG->aSegs[0].pv, pSG->cbTotal, iSeg, cSegs,
-                                                       pIfSender->abGsoHdrs, &cbSegPayload);
+                                                       pIfSender->abGsoHdrs, &cbSegHdrs, &cbSegPayload);
 
-        IntNetSgInitTempSegs(&u.SG, pSG->GsoCtx.cbHdrs + cbSegPayload, 2, 2);
+        IntNetSgInitTempSegs(&u.SG, cbSegHdrs + cbSegPayload, 2, 2);
         u.SG.aSegs[0].Phys = NIL_RTHCPHYS;
         u.SG.aSegs[0].pv   = pIfSender->abGsoHdrs;
-        u.SG.aSegs[0].cb   = pSG->GsoCtx.cbHdrs;
+        u.SG.aSegs[0].cb   = cbSegHdrs;
         u.SG.aSegs[1].Phys = NIL_RTHCPHYS;
         u.SG.aSegs[1].pv   = (uint8_t *)pSG->aSegs[0].pv + offSegPayload;
         u.SG.aSegs[1].cb   = (uint32_t)cbSegPayload;
@@ -5624,15 +5624,18 @@ static int intnetR0CreateNetwork(PINTNET pIntNet, PSUPDRVSESSION pSession, const
                 | INTNET_OPEN_FLAGS_IF_PROMISC_NO_TRUNK
                 | INTNET_OPEN_FLAGS_REQUIRE_AS_RESTRICTIVE_POLICIES
                 | INTNET_OPEN_FLAGS_REQUIRE_EXACT);
-    uint32_t const  fDefFlags = INTNET_OPEN_FLAGS_ACCESS_RESTRICTED
-                              | INTNET_OPEN_FLAGS_PROMISC_ALLOW_CLIENTS
-                              | INTNET_OPEN_FLAGS_PROMISC_ALLOW_TRUNK_HOST
-                              | INTNET_OPEN_FLAGS_PROMISC_ALLOW_TRUNK_WIRE
-                              | INTNET_OPEN_FLAGS_TRUNK_HOST_ENABLED
-                              | INTNET_OPEN_FLAGS_TRUNK_HOST_CHASTE_MODE
-                              | INTNET_OPEN_FLAGS_TRUNK_WIRE_ENABLED
-                              | INTNET_OPEN_FLAGS_TRUNK_WIRE_CHASTE_MODE
-                              ;
+    uint32_t fDefFlags = INTNET_OPEN_FLAGS_PROMISC_ALLOW_CLIENTS
+                       | INTNET_OPEN_FLAGS_PROMISC_ALLOW_TRUNK_HOST
+                       | INTNET_OPEN_FLAGS_PROMISC_ALLOW_TRUNK_WIRE
+                       | INTNET_OPEN_FLAGS_TRUNK_HOST_ENABLED
+                       | INTNET_OPEN_FLAGS_TRUNK_HOST_CHASTE_MODE
+                       | INTNET_OPEN_FLAGS_TRUNK_WIRE_ENABLED
+                       | INTNET_OPEN_FLAGS_TRUNK_WIRE_CHASTE_MODE;
+    if (   enmTrunkType == kIntNetTrunkType_WhateverNone
+        || enmTrunkType == kIntNetTrunkType_None)
+        fDefFlags |= INTNET_OPEN_FLAGS_ACCESS_RESTRICTED;
+    else
+        fDefFlags |= INTNET_OPEN_FLAGS_ACCESS_PUBLIC;
     for (uint32_t i = 0; i < RT_ELEMENTS(g_afIntNetOpenNetworkNetFlags); i++)
         if (!(fFlags & g_afIntNetOpenNetworkNetFlags[i].fPair))
             fFlags |= g_afIntNetOpenNetworkNetFlags[i].fPair & fDefFlags;
